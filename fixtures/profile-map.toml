@@ -1,0 +1,25 @@
+[gfm]
+include = ["gfm/**/*.json"]
+exclude = [
+  "gfm/autolink-extension/**/*",
+  "gfm/delete/**/*",
+  "gfm/list-item/task list items\\(extension\\)/**/*",
+  "gfm/table/**/*",
+]
+
+[gfm_ex]
+include = ["gfm/**/*.json"]
+exclude = ["gfm/**/#616.json", "gfm/**/#619.json", "gfm/**/#620.json"]
+
+[yozora]
+include = ["local/**/*.json", "custom/**/*.json", "gfm/**/*.json"]
+exclude = [
+  "custom/inline-math/backtick-required/**/*",
+  "gfm/**/#616.json",
+  "gfm/**/#619.json",
+  "gfm/**/#620.json",
+]
+
+[yozora_inline_math_backtick_required]
+include = ["custom/inline-math/backtick-required/**/*.json"]
+exclude = []

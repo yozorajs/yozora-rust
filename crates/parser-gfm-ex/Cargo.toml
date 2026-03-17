@@ -1,0 +1,39 @@
+[package]
+name = "yozora-parser-gfm-ex"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+yozora-core-parser = { path = "../core-parser" }
+yozora-ast = { path = "../ast" }
+yozora-core-tokenizer = { path = "../core-tokenizer" }
+yozora-tokenizer-autolink = { path = "../tokenizer-autolink" }
+yozora-tokenizer-autolink-extension = { path = "../tokenizer-autolink-extension" }
+yozora-tokenizer-blockquote = { path = "../tokenizer-blockquote" }
+yozora-tokenizer-backslash-escape = { path = "../tokenizer-backslash-escape" }
+yozora-tokenizer-break = { path = "../tokenizer-break" }
+yozora-tokenizer-definition = { path = "../tokenizer-definition" }
+yozora-tokenizer-delete = { path = "../tokenizer-delete" }
+yozora-tokenizer-emphasis = { path = "../tokenizer-emphasis" }
+yozora-tokenizer-fenced-code = { path = "../tokenizer-fenced-code" }
+yozora-tokenizer-heading = { path = "../tokenizer-heading" }
+yozora-tokenizer-html-block = { path = "../tokenizer-html-block" }
+yozora-tokenizer-html-inline = { path = "../tokenizer-html-inline" }
+yozora-tokenizer-image = { path = "../tokenizer-image" }
+yozora-tokenizer-image-reference = { path = "../tokenizer-image-reference" }
+yozora-tokenizer-indented-code = { path = "../tokenizer-indented-code" }
+yozora-tokenizer-inline-code = { path = "../tokenizer-inline-code" }
+yozora-tokenizer-link = { path = "../tokenizer-link" }
+yozora-tokenizer-link-reference = { path = "../tokenizer-link-reference" }
+yozora-tokenizer-list = { path = "../tokenizer-list" }
+yozora-tokenizer-paragraph = { path = "../tokenizer-paragraph" }
+yozora-tokenizer-setext-heading = { path = "../tokenizer-setext-heading" }
+yozora-tokenizer-soft-break = { path = "../tokenizer-soft-break" }
+yozora-tokenizer-table = { path = "../tokenizer-table" }
+yozora-tokenizer-text = { path = "../tokenizer-text" }
+yozora-tokenizer-thematic-break = { path = "../tokenizer-thematic-break" }
+
+[lib]
+path = "src/lib.rs"

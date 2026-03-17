@@ -1,0 +1,13 @@
+[package]
+name = "yozora-tokenizer-inline-code"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+yozora-core-tokenizer = { path = "../core-tokenizer" }
+yozora-ast = { path = "../ast" }
+
+[lib]
+path = "src/lib.rs"

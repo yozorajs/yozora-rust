@@ -1,0 +1,58 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/ast",
+  "crates/ast-util",
+  "crates/character",
+  "crates/core-parser",
+  "crates/core-tokenizer",
+  "crates/parser",
+  "crates/parser-gfm",
+  "crates/parser-gfm-ex",
+  "crates/test-util",
+  "crates/tokenizer-admonition",
+  "crates/tokenizer-autolink",
+  "crates/tokenizer-autolink-extension",
+  "crates/tokenizer-blockquote",
+  "crates/tokenizer-backslash-escape",
+  "crates/tokenizer-break",
+  "crates/tokenizer-definition",
+  "crates/tokenizer-delete",
+  "crates/tokenizer-ecma-import",
+  "crates/tokenizer-emphasis",
+  "crates/tokenizer-fenced-block",
+  "crates/tokenizer-fenced-code",
+  "crates/tokenizer-footnote",
+  "crates/tokenizer-footnote-definition",
+  "crates/tokenizer-footnote-reference",
+  "crates/tokenizer-heading",
+  "crates/tokenizer-html-block",
+  "crates/tokenizer-html-inline",
+  "crates/tokenizer-image",
+  "crates/tokenizer-image-reference",
+  "crates/tokenizer-indented-code",
+  "crates/tokenizer-inline-code",
+  "crates/tokenizer-inline-math",
+  "crates/tokenizer-link",
+  "crates/tokenizer-link-reference",
+  "crates/tokenizer-list",
+  "crates/tokenizer-math",
+  "crates/tokenizer-paragraph",
+  "crates/tokenizer-setext-heading",
+  "crates/tokenizer-soft-break",
+  "crates/tokenizer-table",
+  "crates/tokenizer-text",
+  "crates/tokenizer-thematic-break",
+]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+version = "0.1.0"
+authors = ["yozora-rust"]
+repository = "https://github.com/yozorajs/yozora"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"

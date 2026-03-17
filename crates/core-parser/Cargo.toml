@@ -1,0 +1,14 @@
+[package]
+name = "yozora-core-parser"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+yozora-ast = { path = "../ast" }
+yozora-character = { path = "../character" }
+yozora-core-tokenizer = { path = "../core-tokenizer" }
+
+[lib]
+path = "src/lib.rs"

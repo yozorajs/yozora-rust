@@ -1,0 +1,12 @@
+[package]
+name = "yozora-ast-util"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+yozora-ast = { path = "../ast" }
+
+[lib]
+path = "src/lib.rs"

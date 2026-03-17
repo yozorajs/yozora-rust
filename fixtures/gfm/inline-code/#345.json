@@ -1,0 +1,61 @@
+{
+  "title": "GFM#345 https://github.github.com/gfm/#example-345",
+  "cases": [
+    {
+      "description": "Line endings are treated like spaces",
+      "input": "``\nfoo\nbar  \nbaz\n``",
+      "markupAnswer": "`foo bar   baz`",
+      "htmlAnswer": "<p><code>foo bar   baz</code></p>",
+      "parseAnswer": {
+        "type": "root",
+        "position": {
+          "start": {
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "end": {
+            "line": 5,
+            "column": 3,
+            "offset": 19
+          }
+        },
+        "children": [
+          {
+            "type": "paragraph",
+            "position": {
+              "start": {
+                "line": 1,
+                "column": 1,
+                "offset": 0
+              },
+              "end": {
+                "line": 5,
+                "column": 3,
+                "offset": 19
+              }
+            },
+            "children": [
+              {
+                "type": "inlineCode",
+                "position": {
+                  "start": {
+                    "line": 1,
+                    "column": 1,
+                    "offset": 0
+                  },
+                  "end": {
+                    "line": 5,
+                    "column": 3,
+                    "offset": 19
+                  }
+                },
+                "value": "foo bar   baz"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

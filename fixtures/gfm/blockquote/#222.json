@@ -1,0 +1,111 @@
+{
+  "title": "GFM#222 https://github.github.com/gfm/#example-222",
+  "cases": [
+    {
+      "description": "To get a block quote with two paragraphs, use",
+      "input": "> foo\n>\n> bar",
+      "markupAnswer": "> foo\n> \n> bar",
+      "htmlAnswer": "<blockquote>\n<p>foo</p>\n<p>bar</p>\n</blockquote>",
+      "parseAnswer": {
+        "type": "root",
+        "position": {
+          "start": {
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "end": {
+            "line": 3,
+            "column": 6,
+            "offset": 13
+          }
+        },
+        "children": [
+          {
+            "type": "blockquote",
+            "position": {
+              "start": {
+                "line": 1,
+                "column": 1,
+                "offset": 0
+              },
+              "end": {
+                "line": 3,
+                "column": 6,
+                "offset": 13
+              }
+            },
+            "children": [
+              {
+                "type": "paragraph",
+                "position": {
+                  "start": {
+                    "line": 1,
+                    "column": 3,
+                    "offset": 2
+                  },
+                  "end": {
+                    "line": 1,
+                    "column": 7,
+                    "offset": 6
+                  }
+                },
+                "children": [
+                  {
+                    "type": "text",
+                    "position": {
+                      "start": {
+                        "line": 1,
+                        "column": 3,
+                        "offset": 2
+                      },
+                      "end": {
+                        "line": 1,
+                        "column": 6,
+                        "offset": 5
+                      }
+                    },
+                    "value": "foo"
+                  }
+                ]
+              },
+              {
+                "type": "paragraph",
+                "position": {
+                  "start": {
+                    "line": 3,
+                    "column": 3,
+                    "offset": 10
+                  },
+                  "end": {
+                    "line": 3,
+                    "column": 6,
+                    "offset": 13
+                  }
+                },
+                "children": [
+                  {
+                    "type": "text",
+                    "position": {
+                      "start": {
+                        "line": 3,
+                        "column": 3,
+                        "offset": 10
+                      },
+                      "end": {
+                        "line": 3,
+                        "column": 6,
+                        "offset": 13
+                      }
+                    },
+                    "value": "bar"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

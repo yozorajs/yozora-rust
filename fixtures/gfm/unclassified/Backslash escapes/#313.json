@@ -1,0 +1,61 @@
+{
+  "title": "GFM#313 https://github.github.com/gfm/#example-313",
+  "cases": [
+    {
+      "description": "Backslash escapes do not work in code blocks, code spans, autolinks, or raw HTML",
+      "input": "`` \\[\\` ``",
+      "markupAnswer": "`` \\[\\` ``",
+      "htmlAnswer": "<p><code>\\[\\`</code></p>",
+      "parseAnswer": {
+        "type": "root",
+        "position": {
+          "start": {
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "end": {
+            "line": 1,
+            "column": 11,
+            "offset": 10
+          }
+        },
+        "children": [
+          {
+            "type": "paragraph",
+            "position": {
+              "start": {
+                "line": 1,
+                "column": 1,
+                "offset": 0
+              },
+              "end": {
+                "line": 1,
+                "column": 11,
+                "offset": 10
+              }
+            },
+            "children": [
+              {
+                "type": "inlineCode",
+                "position": {
+                  "start": {
+                    "line": 1,
+                    "column": 1,
+                    "offset": 0
+                  },
+                  "end": {
+                    "line": 1,
+                    "column": 11,
+                    "offset": 10
+                  }
+                },
+                "value": "\\[\\`"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

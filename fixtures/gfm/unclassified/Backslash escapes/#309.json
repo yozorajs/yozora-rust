@@ -1,0 +1,61 @@
+{
+  "title": "GFM#309 https://github.github.com/gfm/#example-309",
+  "cases": [
+    {
+      "description": "Backslashes before other characters are treated as literal backslashes",
+      "input": "\\\t\\A\\a\\ \\3\\φ\\«",
+      "markupAnswer": "\\\t\\A\\a\\ \\3\\φ\\«",
+      "htmlAnswer": "<p>\\\t\\A\\a\\ \\3\\φ\\«</p>",
+      "parseAnswer": {
+        "type": "root",
+        "position": {
+          "start": {
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "end": {
+            "line": 1,
+            "column": 15,
+            "offset": 14
+          }
+        },
+        "children": [
+          {
+            "type": "paragraph",
+            "position": {
+              "start": {
+                "line": 1,
+                "column": 1,
+                "offset": 0
+              },
+              "end": {
+                "line": 1,
+                "column": 15,
+                "offset": 14
+              }
+            },
+            "children": [
+              {
+                "type": "text",
+                "position": {
+                  "start": {
+                    "line": 1,
+                    "column": 1,
+                    "offset": 0
+                  },
+                  "end": {
+                    "line": 1,
+                    "column": 15,
+                    "offset": 14
+                  }
+                },
+                "value": "\\\t\\A\\a\\ \\3\\φ\\«"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

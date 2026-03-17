@@ -1,0 +1,61 @@
+{
+  "title": "GFM#346 https://github.github.com/gfm/#example-346",
+  "cases": [
+    {
+      "description": "Line endings are treated like spaces",
+      "input": "``\nfoo \n``",
+      "markupAnswer": "`foo `",
+      "htmlAnswer": "<p><code>foo </code></p>",
+      "parseAnswer": {
+        "type": "root",
+        "position": {
+          "start": {
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "end": {
+            "line": 3,
+            "column": 3,
+            "offset": 10
+          }
+        },
+        "children": [
+          {
+            "type": "paragraph",
+            "position": {
+              "start": {
+                "line": 1,
+                "column": 1,
+                "offset": 0
+              },
+              "end": {
+                "line": 3,
+                "column": 3,
+                "offset": 10
+              }
+            },
+            "children": [
+              {
+                "type": "inlineCode",
+                "position": {
+                  "start": {
+                    "line": 1,
+                    "column": 1,
+                    "offset": 0
+                  },
+                  "end": {
+                    "line": 3,
+                    "column": 3,
+                    "offset": 10
+                  }
+                },
+                "value": "foo "
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

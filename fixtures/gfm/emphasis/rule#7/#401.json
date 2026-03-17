@@ -1,0 +1,61 @@
+{
+  "title": "GFM#401 https://github.github.com/gfm/#example-401",
+  "cases": [
+    {
+      "description": "This is not strong emphasis, because the second ** is preceded by punctuation and followed by an alphanumeric",
+      "input": "**(**foo)",
+      "markupAnswer": "**(**foo)",
+      "htmlAnswer": "<p>**(**foo)</p>",
+      "parseAnswer": {
+        "type": "root",
+        "position": {
+          "start": {
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "end": {
+            "line": 1,
+            "column": 10,
+            "offset": 9
+          }
+        },
+        "children": [
+          {
+            "type": "paragraph",
+            "position": {
+              "start": {
+                "line": 1,
+                "column": 1,
+                "offset": 0
+              },
+              "end": {
+                "line": 1,
+                "column": 10,
+                "offset": 9
+              }
+            },
+            "children": [
+              {
+                "type": "text",
+                "position": {
+                  "start": {
+                    "line": 1,
+                    "column": 1,
+                    "offset": 0
+                  },
+                  "end": {
+                    "line": 1,
+                    "column": 10,
+                    "offset": 9
+                  }
+                },
+                "value": "**(**foo)"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

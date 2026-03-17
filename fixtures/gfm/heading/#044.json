@@ -1,0 +1,62 @@
+{
+  "title": "GFM#44 https://github.github.com/gfm/#example-44",
+  "cases": [
+    {
+      "description": "A sequence of # characters with anything but spaces following it is not a closing sequence, but counts as part of the contents of the heading",
+      "input": "### foo ### b",
+      "markupAnswer": "### foo ### b",
+      "htmlAnswer": "<h3>foo ### b</h3>",
+      "parseAnswer": {
+        "type": "root",
+        "position": {
+          "start": {
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "end": {
+            "line": 1,
+            "column": 14,
+            "offset": 13
+          }
+        },
+        "children": [
+          {
+            "type": "heading",
+            "position": {
+              "start": {
+                "line": 1,
+                "column": 1,
+                "offset": 0
+              },
+              "end": {
+                "line": 1,
+                "column": 14,
+                "offset": 13
+              }
+            },
+            "depth": 3,
+            "children": [
+              {
+                "type": "text",
+                "position": {
+                  "start": {
+                    "line": 1,
+                    "column": 5,
+                    "offset": 4
+                  },
+                  "end": {
+                    "line": 1,
+                    "column": 14,
+                    "offset": 13
+                  }
+                },
+                "value": "foo ### b"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

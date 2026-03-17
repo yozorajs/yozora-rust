@@ -1,0 +1,77 @@
+{
+  "title": "GFM#139 https://github.github.com/gfm/#example-139",
+  "cases": [
+    {
+      "description": "A pre tag (type 1)",
+      "input": "<pre language=\"haskell\"><code>\nimport Text.HTML.TagSoup\n\nmain :: IO ()\nmain = print $ parseTags tags\n</code></pre>\nokay",
+      "markupAnswer": "<pre language=\"haskell\"><code>\nimport Text.HTML.TagSoup\n\nmain :: IO ()\nmain = print $ parseTags tags\n</code></pre>\n\nokay",
+      "htmlAnswer": "<pre language=\"haskell\"><code>\nimport Text.HTML.TagSoup\n\nmain :: IO ()\nmain = print $ parseTags tags\n</code></pre>\n<p>okay</p>",
+      "parseAnswer": {
+        "type": "root",
+        "position": {
+          "start": {
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "end": {
+            "line": 7,
+            "column": 5,
+            "offset": 119
+          }
+        },
+        "children": [
+          {
+            "type": "html",
+            "position": {
+              "start": {
+                "line": 1,
+                "column": 1,
+                "offset": 0
+              },
+              "end": {
+                "line": 6,
+                "column": 15,
+                "offset": 115
+              }
+            },
+            "value": "<pre language=\"haskell\"><code>\nimport Text.HTML.TagSoup\n\nmain :: IO ()\nmain = print $ parseTags tags\n</code></pre>\n"
+          },
+          {
+            "type": "paragraph",
+            "position": {
+              "start": {
+                "line": 7,
+                "column": 1,
+                "offset": 115
+              },
+              "end": {
+                "line": 7,
+                "column": 5,
+                "offset": 119
+              }
+            },
+            "children": [
+              {
+                "type": "text",
+                "position": {
+                  "start": {
+                    "line": 7,
+                    "column": 1,
+                    "offset": 115
+                  },
+                  "end": {
+                    "line": 7,
+                    "column": 5,
+                    "offset": 119
+                  }
+                },
+                "value": "okay"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

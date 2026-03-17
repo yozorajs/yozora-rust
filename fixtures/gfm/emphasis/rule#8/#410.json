@@ -1,0 +1,61 @@
+{
+  "title": "GFM#410 https://github.github.com/gfm/#example-410",
+  "cases": [
+    {
+      "description": "Intraword strong emphasis is forbidden with __",
+      "input": "__пристаням__стремятся",
+      "markupAnswer": "__пристаням__стремятся",
+      "htmlAnswer": "<p>__пристаням__стремятся</p>",
+      "parseAnswer": {
+        "type": "root",
+        "position": {
+          "start": {
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "end": {
+            "line": 1,
+            "column": 23,
+            "offset": 22
+          }
+        },
+        "children": [
+          {
+            "type": "paragraph",
+            "position": {
+              "start": {
+                "line": 1,
+                "column": 1,
+                "offset": 0
+              },
+              "end": {
+                "line": 1,
+                "column": 23,
+                "offset": 22
+              }
+            },
+            "children": [
+              {
+                "type": "text",
+                "position": {
+                  "start": {
+                    "line": 1,
+                    "column": 1,
+                    "offset": 0
+                  },
+                  "end": {
+                    "line": 1,
+                    "column": 23,
+                    "offset": 22
+                  }
+                },
+                "value": "__пристаням__стремятся"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

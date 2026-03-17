@@ -1,0 +1,44 @@
+{
+  "title": "GFM#150 https://github.github.com/gfm/#example-150",
+  "cases": [
+    {
+      "description": "A declaration (type 4)",
+      "input": "<!DOCTYPE html>",
+      "markupAnswer": "<!DOCTYPE html>",
+      "htmlAnswer": "<!DOCTYPE html>",
+      "parseAnswer": {
+        "type": "root",
+        "position": {
+          "start": {
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "end": {
+            "line": 1,
+            "column": 16,
+            "offset": 15
+          }
+        },
+        "children": [
+          {
+            "type": "html",
+            "position": {
+              "start": {
+                "line": 1,
+                "column": 1,
+                "offset": 0
+              },
+              "end": {
+                "line": 1,
+                "column": 16,
+                "offset": 15
+              }
+            },
+            "value": "<!DOCTYPE html>"
+          }
+        ]
+      }
+    }
+  ]
+}

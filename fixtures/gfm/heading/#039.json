@@ -1,0 +1,46 @@
+{
+  "title": "GFM#39 https://github.github.com/gfm/#example-39",
+  "cases": [
+    {
+      "description": "Four spaces are too much",
+      "input": "    # foo",
+      "markupAnswer": "```\n# foo\n```",
+      "htmlAnswer": "<pre><code># foo\n</code></pre>",
+      "parseAnswer": {
+        "type": "root",
+        "position": {
+          "start": {
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "end": {
+            "line": 1,
+            "column": 10,
+            "offset": 9
+          }
+        },
+        "children": [
+          {
+            "type": "code",
+            "position": {
+              "start": {
+                "line": 1,
+                "column": 1,
+                "offset": 0
+              },
+              "end": {
+                "line": 1,
+                "column": 10,
+                "offset": 9
+              }
+            },
+            "lang": null,
+            "meta": null,
+            "value": "# foo\n"
+          }
+        ]
+      }
+    }
+  ]
+}

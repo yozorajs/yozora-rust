@@ -1,0 +1,43 @@
+{
+  "title": "GFM#24 https://github.github.com/gfm/#example-24",
+  "cases": [
+    {
+      "description": "Spaces are allowed at the end",
+      "input": "- - - -    ",
+      "markupAnswer": "---",
+      "htmlAnswer": "<hr />",
+      "parseAnswer": {
+        "type": "root",
+        "position": {
+          "start": {
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "end": {
+            "line": 1,
+            "column": 12,
+            "offset": 11
+          }
+        },
+        "children": [
+          {
+            "type": "thematicBreak",
+            "position": {
+              "start": {
+                "line": 1,
+                "column": 1,
+                "offset": 0
+              },
+              "end": {
+                "line": 1,
+                "column": 12,
+                "offset": 11
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

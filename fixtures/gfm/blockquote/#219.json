@@ -1,0 +1,78 @@
+{
+  "title": "GFM#219 https://github.github.com/gfm/#example-219",
+  "cases": [
+    {
+      "description": "A block quote can have initial or final blank lines",
+      "input": ">\n> foo\n>  ",
+      "markupAnswer": "> foo",
+      "htmlAnswer": "<blockquote>\n<p>foo</p>\n</blockquote>",
+      "parseAnswer": {
+        "type": "root",
+        "position": {
+          "start": {
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "end": {
+            "line": 3,
+            "column": 3,
+            "offset": 10
+          }
+        },
+        "children": [
+          {
+            "type": "blockquote",
+            "position": {
+              "start": {
+                "line": 1,
+                "column": 1,
+                "offset": 0
+              },
+              "end": {
+                "line": 3,
+                "column": 3,
+                "offset": 10
+              }
+            },
+            "children": [
+              {
+                "type": "paragraph",
+                "position": {
+                  "start": {
+                    "line": 2,
+                    "column": 3,
+                    "offset": 4
+                  },
+                  "end": {
+                    "line": 2,
+                    "column": 7,
+                    "offset": 8
+                  }
+                },
+                "children": [
+                  {
+                    "type": "text",
+                    "position": {
+                      "start": {
+                        "line": 2,
+                        "column": 3,
+                        "offset": 4
+                      },
+                      "end": {
+                        "line": 2,
+                        "column": 6,
+                        "offset": 7
+                      }
+                    },
+                    "value": "foo"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

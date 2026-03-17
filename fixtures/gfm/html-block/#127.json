@@ -1,0 +1,44 @@
+{
+  "title": "GFM#127 https://github.github.com/gfm/#example-127",
+  "cases": [
+    {
+      "description": "A partial tag need not even be completed (garbage in, garbage out)",
+      "input": "<div class\nfoo",
+      "markupAnswer": "<div class\nfoo",
+      "htmlAnswer": "<div class\nfoo",
+      "parseAnswer": {
+        "type": "root",
+        "position": {
+          "start": {
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "end": {
+            "line": 2,
+            "column": 4,
+            "offset": 14
+          }
+        },
+        "children": [
+          {
+            "type": "html",
+            "position": {
+              "start": {
+                "line": 1,
+                "column": 1,
+                "offset": 0
+              },
+              "end": {
+                "line": 2,
+                "column": 4,
+                "offset": 14
+              }
+            },
+            "value": "<div class\nfoo"
+          }
+        ]
+      }
+    }
+  ]
+}

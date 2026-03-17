@@ -1,0 +1,44 @@
+{
+  "title": "GFM#217 https://github.github.com/gfm/#example-217",
+  "cases": [
+    {
+      "description": "A block quote can be empty",
+      "input": ">",
+      "markupAnswer": "> ",
+      "htmlAnswer": "<blockquote>\n</blockquote>",
+      "parseAnswer": {
+        "type": "root",
+        "position": {
+          "start": {
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "end": {
+            "line": 1,
+            "column": 2,
+            "offset": 1
+          }
+        },
+        "children": [
+          {
+            "type": "blockquote",
+            "position": {
+              "start": {
+                "line": 1,
+                "column": 1,
+                "offset": 0
+              },
+              "end": {
+                "line": 1,
+                "column": 2,
+                "offset": 1
+              }
+            },
+            "children": []
+          }
+        ]
+      }
+    }
+  ]
+}

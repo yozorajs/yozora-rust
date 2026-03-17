@@ -1,0 +1,45 @@
+{
+  "title": "Condition2",
+  "cases": [
+    {
+      "description": "basic",
+      "input": "import Parser from '@yozora/parser'",
+      "markupAnswer": "import Parser from \"@yozora/parser\";",
+      "parseAnswer": {
+        "type": "root",
+        "position": {
+          "start": {
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "end": {
+            "line": 1,
+            "column": 36,
+            "offset": 35
+          }
+        },
+        "children": [
+          {
+            "type": "ecmaImport",
+            "position": {
+              "start": {
+                "line": 1,
+                "column": 1,
+                "offset": 0
+              },
+              "end": {
+                "line": 1,
+                "column": 36,
+                "offset": 35
+              }
+            },
+            "moduleName": "@yozora/parser",
+            "defaultImport": "Parser",
+            "namedImports": []
+          }
+        ]
+      }
+    }
+  ]
+}

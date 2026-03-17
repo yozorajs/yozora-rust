@@ -1,0 +1,61 @@
+{
+  "title": "GFM#400 https://github.github.com/gfm/#example-400",
+  "cases": [
+    {
+      "description": "This is not strong emphasis, because the closing delimiter is preceded by whitespace",
+      "input": "**foo bar **",
+      "markupAnswer": "**foo bar **",
+      "htmlAnswer": "<p>**foo bar **</p>",
+      "parseAnswer": {
+        "type": "root",
+        "position": {
+          "start": {
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "end": {
+            "line": 1,
+            "column": 13,
+            "offset": 12
+          }
+        },
+        "children": [
+          {
+            "type": "paragraph",
+            "position": {
+              "start": {
+                "line": 1,
+                "column": 1,
+                "offset": 0
+              },
+              "end": {
+                "line": 1,
+                "column": 13,
+                "offset": 12
+              }
+            },
+            "children": [
+              {
+                "type": "text",
+                "position": {
+                  "start": {
+                    "line": 1,
+                    "column": 1,
+                    "offset": 0
+                  },
+                  "end": {
+                    "line": 1,
+                    "column": 13,
+                    "offset": 12
+                  }
+                },
+                "value": "**foo bar **"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

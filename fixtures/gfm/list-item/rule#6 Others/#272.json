@@ -1,0 +1,240 @@
+{
+  "title": "GFM#272 https://github.github.com/gfm/#example-272",
+  "cases": [
+    {
+      "description": "So, in this case we need two spaces indent",
+      "input": "- foo\n  - bar\n    - baz\n      - boo",
+      "markupAnswer": "- foo\n  - bar\n    - baz\n      - boo",
+      "htmlAnswer": "<ul>\n<li>foo\n<ul>\n<li>bar\n<ul>\n<li>baz\n<ul>\n<li>boo</li>\n</ul>\n</li>\n</ul>\n</li>\n</ul>\n</li>\n</ul>",
+      "parseAnswer": {
+        "type": "root",
+        "position": {
+          "start": {
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "end": {
+            "line": 4,
+            "column": 12,
+            "offset": 35
+          }
+        },
+        "children": [
+          {
+            "type": "list",
+            "position": {
+              "start": {
+                "line": 1,
+                "column": 1,
+                "offset": 0
+              },
+              "end": {
+                "line": 4,
+                "column": 12,
+                "offset": 35
+              }
+            },
+            "ordered": false,
+            "marker": 45,
+            "spread": false,
+            "children": [
+              {
+                "type": "listItem",
+                "position": {
+                  "start": {
+                    "line": 1,
+                    "column": 1,
+                    "offset": 0
+                  },
+                  "end": {
+                    "line": 4,
+                    "column": 12,
+                    "offset": 35
+                  }
+                },
+                "children": [
+                  {
+                    "type": "text",
+                    "position": {
+                      "start": {
+                        "line": 1,
+                        "column": 3,
+                        "offset": 2
+                      },
+                      "end": {
+                        "line": 1,
+                        "column": 6,
+                        "offset": 5
+                      }
+                    },
+                    "value": "foo"
+                  },
+                  {
+                    "type": "list",
+                    "position": {
+                      "start": {
+                        "line": 2,
+                        "column": 3,
+                        "offset": 8
+                      },
+                      "end": {
+                        "line": 4,
+                        "column": 12,
+                        "offset": 35
+                      }
+                    },
+                    "ordered": false,
+                    "marker": 45,
+                    "spread": false,
+                    "children": [
+                      {
+                        "type": "listItem",
+                        "position": {
+                          "start": {
+                            "line": 2,
+                            "column": 3,
+                            "offset": 8
+                          },
+                          "end": {
+                            "line": 4,
+                            "column": 12,
+                            "offset": 35
+                          }
+                        },
+                        "children": [
+                          {
+                            "type": "text",
+                            "position": {
+                              "start": {
+                                "line": 2,
+                                "column": 5,
+                                "offset": 10
+                              },
+                              "end": {
+                                "line": 2,
+                                "column": 8,
+                                "offset": 13
+                              }
+                            },
+                            "value": "bar"
+                          },
+                          {
+                            "type": "list",
+                            "position": {
+                              "start": {
+                                "line": 3,
+                                "column": 5,
+                                "offset": 18
+                              },
+                              "end": {
+                                "line": 4,
+                                "column": 12,
+                                "offset": 35
+                              }
+                            },
+                            "ordered": false,
+                            "marker": 45,
+                            "spread": false,
+                            "children": [
+                              {
+                                "type": "listItem",
+                                "position": {
+                                  "start": {
+                                    "line": 3,
+                                    "column": 5,
+                                    "offset": 18
+                                  },
+                                  "end": {
+                                    "line": 4,
+                                    "column": 12,
+                                    "offset": 35
+                                  }
+                                },
+                                "children": [
+                                  {
+                                    "type": "text",
+                                    "position": {
+                                      "start": {
+                                        "line": 3,
+                                        "column": 7,
+                                        "offset": 20
+                                      },
+                                      "end": {
+                                        "line": 3,
+                                        "column": 10,
+                                        "offset": 23
+                                      }
+                                    },
+                                    "value": "baz"
+                                  },
+                                  {
+                                    "type": "list",
+                                    "position": {
+                                      "start": {
+                                        "line": 4,
+                                        "column": 7,
+                                        "offset": 30
+                                      },
+                                      "end": {
+                                        "line": 4,
+                                        "column": 12,
+                                        "offset": 35
+                                      }
+                                    },
+                                    "ordered": false,
+                                    "marker": 45,
+                                    "spread": false,
+                                    "children": [
+                                      {
+                                        "type": "listItem",
+                                        "position": {
+                                          "start": {
+                                            "line": 4,
+                                            "column": 7,
+                                            "offset": 30
+                                          },
+                                          "end": {
+                                            "line": 4,
+                                            "column": 12,
+                                            "offset": 35
+                                          }
+                                        },
+                                        "children": [
+                                          {
+                                            "type": "text",
+                                            "position": {
+                                              "start": {
+                                                "line": 4,
+                                                "column": 9,
+                                                "offset": 32
+                                              },
+                                              "end": {
+                                                "line": 4,
+                                                "column": 12,
+                                                "offset": 35
+                                              }
+                                            },
+                                            "value": "boo"
+                                          }
+                                        ]
+                                      }
+                                    ]
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

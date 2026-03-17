@@ -1,0 +1,60 @@
+{
+  "title": "basic.1",
+  "cases": [
+    {
+      "description": "case#0",
+      "input": "``$",
+      "markupAnswer": "``$",
+      "parseAnswer": {
+        "type": "root",
+        "position": {
+          "start": {
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "end": {
+            "line": 1,
+            "column": 4,
+            "offset": 3
+          }
+        },
+        "children": [
+          {
+            "type": "paragraph",
+            "position": {
+              "start": {
+                "line": 1,
+                "column": 1,
+                "offset": 0
+              },
+              "end": {
+                "line": 1,
+                "column": 4,
+                "offset": 3
+              }
+            },
+            "children": [
+              {
+                "type": "text",
+                "position": {
+                  "start": {
+                    "line": 1,
+                    "column": 1,
+                    "offset": 0
+                  },
+                  "end": {
+                    "line": 1,
+                    "column": 4,
+                    "offset": 3
+                  }
+                },
+                "value": "``$"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

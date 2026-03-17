@@ -1,0 +1,46 @@
+{
+  "title": "GFM#104 https://github.github.com/gfm/#example-104",
+  "cases": [
+    {
+      "description": "Four spaces indentation produces an indented code block",
+      "input": "    ```\n    aaa\n    ```",
+      "markupAnswer": "````\n```\naaa\n```\n````",
+      "htmlAnswer": "<pre><code>```\naaa\n```\n</code></pre>",
+      "parseAnswer": {
+        "type": "root",
+        "position": {
+          "start": {
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "end": {
+            "line": 3,
+            "column": 8,
+            "offset": 23
+          }
+        },
+        "children": [
+          {
+            "type": "code",
+            "position": {
+              "start": {
+                "line": 1,
+                "column": 1,
+                "offset": 0
+              },
+              "end": {
+                "line": 3,
+                "column": 8,
+                "offset": 23
+              }
+            },
+            "lang": null,
+            "meta": null,
+            "value": "```\naaa\n```\n"
+          }
+        ]
+      }
+    }
+  ]
+}

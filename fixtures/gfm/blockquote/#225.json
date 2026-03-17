@@ -1,0 +1,78 @@
+{
+  "title": "GFM#225 https://github.github.com/gfm/#example-225",
+  "cases": [
+    {
+      "description": "However, because of laziness, a blank line is needed between a block quote and a following paragraph",
+      "input": "> bar\nbaz",
+      "markupAnswer": "> bar\n> baz",
+      "htmlAnswer": "<blockquote>\n<p>bar\nbaz</p>\n</blockquote>",
+      "parseAnswer": {
+        "type": "root",
+        "position": {
+          "start": {
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "end": {
+            "line": 2,
+            "column": 4,
+            "offset": 9
+          }
+        },
+        "children": [
+          {
+            "type": "blockquote",
+            "position": {
+              "start": {
+                "line": 1,
+                "column": 1,
+                "offset": 0
+              },
+              "end": {
+                "line": 2,
+                "column": 4,
+                "offset": 9
+              }
+            },
+            "children": [
+              {
+                "type": "paragraph",
+                "position": {
+                  "start": {
+                    "line": 1,
+                    "column": 3,
+                    "offset": 2
+                  },
+                  "end": {
+                    "line": 2,
+                    "column": 4,
+                    "offset": 9
+                  }
+                },
+                "children": [
+                  {
+                    "type": "text",
+                    "position": {
+                      "start": {
+                        "line": 1,
+                        "column": 3,
+                        "offset": 2
+                      },
+                      "end": {
+                        "line": 2,
+                        "column": 4,
+                        "offset": 9
+                      }
+                    },
+                    "value": "bar\nbaz"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

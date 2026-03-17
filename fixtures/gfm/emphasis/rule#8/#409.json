@@ -1,0 +1,61 @@
+{
+  "title": "GFM#409 https://github.github.com/gfm/#example-409",
+  "cases": [
+    {
+      "description": "Intraword strong emphasis is forbidden with __",
+      "input": "__foo__bar",
+      "markupAnswer": "__foo__bar",
+      "htmlAnswer": "<p>__foo__bar</p>",
+      "parseAnswer": {
+        "type": "root",
+        "position": {
+          "start": {
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "end": {
+            "line": 1,
+            "column": 11,
+            "offset": 10
+          }
+        },
+        "children": [
+          {
+            "type": "paragraph",
+            "position": {
+              "start": {
+                "line": 1,
+                "column": 1,
+                "offset": 0
+              },
+              "end": {
+                "line": 1,
+                "column": 11,
+                "offset": 10
+              }
+            },
+            "children": [
+              {
+                "type": "text",
+                "position": {
+                  "start": {
+                    "line": 1,
+                    "column": 1,
+                    "offset": 0
+                  },
+                  "end": {
+                    "line": 1,
+                    "column": 11,
+                    "offset": 10
+                  }
+                },
+                "value": "__foo__bar"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

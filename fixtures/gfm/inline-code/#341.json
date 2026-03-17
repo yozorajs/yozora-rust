@@ -1,0 +1,61 @@
+{
+  "title": "GFM#341 https://github.github.com/gfm/#example-341",
+  "cases": [
+    {
+      "description": "Note that only one space is stripped",
+      "input": "`  ``  `",
+      "markupAnswer": "```  ``  ```",
+      "htmlAnswer": "<p><code> `` </code></p>",
+      "parseAnswer": {
+        "type": "root",
+        "position": {
+          "start": {
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "end": {
+            "line": 1,
+            "column": 9,
+            "offset": 8
+          }
+        },
+        "children": [
+          {
+            "type": "paragraph",
+            "position": {
+              "start": {
+                "line": 1,
+                "column": 1,
+                "offset": 0
+              },
+              "end": {
+                "line": 1,
+                "column": 9,
+                "offset": 8
+              }
+            },
+            "children": [
+              {
+                "type": "inlineCode",
+                "position": {
+                  "start": {
+                    "line": 1,
+                    "column": 1,
+                    "offset": 0
+                  },
+                  "end": {
+                    "line": 1,
+                    "column": 9,
+                    "offset": 8
+                  }
+                },
+                "value": " `` "
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,148 @@
+{
+  "title": "GFM#238 https://github.github.com/gfm/#example-238",
+  "cases": [
+    {
+      "description": "The converse is also possible. In the following example, the word two occurs far to the right of the initial text of the list item, one, but it is not considered part of the list item, because it is not indented far enough past the blockquote marker",
+      "input": ">>- one\n>>\n  >  > two",
+      "markupAnswer": "> > - one\n> > \n> > two",
+      "htmlAnswer": "<blockquote>\n<blockquote>\n<ul>\n<li>one</li>\n</ul>\n<p>two</p>\n</blockquote>\n</blockquote>",
+      "parseAnswer": {
+        "type": "root",
+        "position": {
+          "start": {
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "end": {
+            "line": 3,
+            "column": 11,
+            "offset": 21
+          }
+        },
+        "children": [
+          {
+            "type": "blockquote",
+            "position": {
+              "start": {
+                "line": 1,
+                "column": 1,
+                "offset": 0
+              },
+              "end": {
+                "line": 3,
+                "column": 11,
+                "offset": 21
+              }
+            },
+            "children": [
+              {
+                "type": "blockquote",
+                "position": {
+                  "start": {
+                    "line": 1,
+                    "column": 2,
+                    "offset": 1
+                  },
+                  "end": {
+                    "line": 3,
+                    "column": 11,
+                    "offset": 21
+                  }
+                },
+                "children": [
+                  {
+                    "type": "list",
+                    "position": {
+                      "start": {
+                        "line": 1,
+                        "column": 3,
+                        "offset": 2
+                      },
+                      "end": {
+                        "line": 2,
+                        "column": 3,
+                        "offset": 10
+                      }
+                    },
+                    "ordered": false,
+                    "marker": 45,
+                    "spread": false,
+                    "children": [
+                      {
+                        "type": "listItem",
+                        "position": {
+                          "start": {
+                            "line": 1,
+                            "column": 3,
+                            "offset": 2
+                          },
+                          "end": {
+                            "line": 2,
+                            "column": 3,
+                            "offset": 10
+                          }
+                        },
+                        "children": [
+                          {
+                            "type": "text",
+                            "position": {
+                              "start": {
+                                "line": 1,
+                                "column": 5,
+                                "offset": 4
+                              },
+                              "end": {
+                                "line": 1,
+                                "column": 8,
+                                "offset": 7
+                              }
+                            },
+                            "value": "one"
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "type": "paragraph",
+                    "position": {
+                      "start": {
+                        "line": 3,
+                        "column": 8,
+                        "offset": 18
+                      },
+                      "end": {
+                        "line": 3,
+                        "column": 11,
+                        "offset": 21
+                      }
+                    },
+                    "children": [
+                      {
+                        "type": "text",
+                        "position": {
+                          "start": {
+                            "line": 3,
+                            "column": 8,
+                            "offset": 18
+                          },
+                          "end": {
+                            "line": 3,
+                            "column": 11,
+                            "offset": 21
+                          }
+                        },
+                        "value": "two"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

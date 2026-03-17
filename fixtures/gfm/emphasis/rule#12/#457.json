@@ -1,0 +1,61 @@
+{
+  "title": "GFM#457 https://github.github.com/gfm/#example-457",
+  "cases": [
+    {
+      "description": "Rule 12",
+      "input": "foo ___",
+      "markupAnswer": "foo ___",
+      "htmlAnswer": "<p>foo ___</p>",
+      "parseAnswer": {
+        "type": "root",
+        "position": {
+          "start": {
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "end": {
+            "line": 1,
+            "column": 8,
+            "offset": 7
+          }
+        },
+        "children": [
+          {
+            "type": "paragraph",
+            "position": {
+              "start": {
+                "line": 1,
+                "column": 1,
+                "offset": 0
+              },
+              "end": {
+                "line": 1,
+                "column": 8,
+                "offset": 7
+              }
+            },
+            "children": [
+              {
+                "type": "text",
+                "position": {
+                  "start": {
+                    "line": 1,
+                    "column": 1,
+                    "offset": 0
+                  },
+                  "end": {
+                    "line": 1,
+                    "column": 8,
+                    "offset": 7
+                  }
+                },
+                "value": "foo ___"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,78 @@
+{
+  "title": "GFM#63 https://github.github.com/gfm/#example-63",
+  "cases": [
+    {
+      "description": "The setext heading underline cannot be a lazy continuation line in a list item or block quote",
+      "input": "> foo\nbar\n===",
+      "markupAnswer": "> foo\n> bar\n> \\===",
+      "htmlAnswer": "<blockquote>\n<p>foo\nbar\n===</p>\n</blockquote>",
+      "parseAnswer": {
+        "type": "root",
+        "position": {
+          "start": {
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "end": {
+            "line": 3,
+            "column": 4,
+            "offset": 13
+          }
+        },
+        "children": [
+          {
+            "type": "blockquote",
+            "position": {
+              "start": {
+                "line": 1,
+                "column": 1,
+                "offset": 0
+              },
+              "end": {
+                "line": 3,
+                "column": 4,
+                "offset": 13
+              }
+            },
+            "children": [
+              {
+                "type": "paragraph",
+                "position": {
+                  "start": {
+                    "line": 1,
+                    "column": 3,
+                    "offset": 2
+                  },
+                  "end": {
+                    "line": 3,
+                    "column": 4,
+                    "offset": 13
+                  }
+                },
+                "children": [
+                  {
+                    "type": "text",
+                    "position": {
+                      "start": {
+                        "line": 1,
+                        "column": 3,
+                        "offset": 2
+                      },
+                      "end": {
+                        "line": 3,
+                        "column": 4,
+                        "offset": 13
+                      }
+                    },
+                    "value": "foo\nbar\n==="
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

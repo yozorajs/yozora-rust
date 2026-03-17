@@ -1,0 +1,61 @@
+{
+  "title": "GFM#343 https://github.github.com/gfm/#example-343",
+  "cases": [
+    {
+      "description": "Only spaces, and not unicode whitespace in general, are stripped in this way",
+      "input": "` b `",
+      "markupAnswer": "` b `",
+      "htmlAnswer": "<p><code> b </code></p>",
+      "parseAnswer": {
+        "type": "root",
+        "position": {
+          "start": {
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "end": {
+            "line": 1,
+            "column": 6,
+            "offset": 5
+          }
+        },
+        "children": [
+          {
+            "type": "paragraph",
+            "position": {
+              "start": {
+                "line": 1,
+                "column": 1,
+                "offset": 0
+              },
+              "end": {
+                "line": 1,
+                "column": 6,
+                "offset": 5
+              }
+            },
+            "children": [
+              {
+                "type": "inlineCode",
+                "position": {
+                  "start": {
+                    "line": 1,
+                    "column": 1,
+                    "offset": 0
+                  },
+                  "end": {
+                    "line": 1,
+                    "column": 6,
+                    "offset": 5
+                  }
+                },
+                "value": " b "
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

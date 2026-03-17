@@ -1,0 +1,61 @@
+{
+  "title": "GFM#323 https://github.github.com/gfm/#example-323",
+  "cases": [
+    {
+      "description": "Hexadecimal numeric character references consist of &# + either X or x + a string of 1-6 hexadecimal digits + ;. They too are parsed as the corresponding Unicode character (this time specified with a hexadecimal numeral instead of decimal).",
+      "input": "&#X22; &#XD06; &#xcab;",
+      "markupAnswer": "\" ആ ಫ",
+      "htmlAnswer": "<p>&quot; ആ ಫ</p>",
+      "parseAnswer": {
+        "type": "root",
+        "position": {
+          "start": {
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "end": {
+            "line": 1,
+            "column": 23,
+            "offset": 22
+          }
+        },
+        "children": [
+          {
+            "type": "paragraph",
+            "position": {
+              "start": {
+                "line": 1,
+                "column": 1,
+                "offset": 0
+              },
+              "end": {
+                "line": 1,
+                "column": 23,
+                "offset": 22
+              }
+            },
+            "children": [
+              {
+                "type": "text",
+                "position": {
+                  "start": {
+                    "line": 1,
+                    "column": 1,
+                    "offset": 0
+                  },
+                  "end": {
+                    "line": 1,
+                    "column": 23,
+                    "offset": 22
+                  }
+                },
+                "value": "\" ആ ಫ"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

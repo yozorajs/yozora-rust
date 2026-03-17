@@ -1,0 +1,77 @@
+{
+  "title": "GFM#348 https://github.github.com/gfm/#example-348",
+  "cases": [
+    {
+      "description": "Note that backslash escapes do not work in code spans. All backslashes are treated literally",
+      "input": "`foo\\`bar`",
+      "markupAnswer": "`foo\\`bar`",
+      "htmlAnswer": "<p><code>foo\\</code>bar`</p>",
+      "parseAnswer": {
+        "type": "root",
+        "position": {
+          "start": {
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "end": {
+            "line": 1,
+            "column": 11,
+            "offset": 10
+          }
+        },
+        "children": [
+          {
+            "type": "paragraph",
+            "position": {
+              "start": {
+                "line": 1,
+                "column": 1,
+                "offset": 0
+              },
+              "end": {
+                "line": 1,
+                "column": 11,
+                "offset": 10
+              }
+            },
+            "children": [
+              {
+                "type": "inlineCode",
+                "position": {
+                  "start": {
+                    "line": 1,
+                    "column": 1,
+                    "offset": 0
+                  },
+                  "end": {
+                    "line": 1,
+                    "column": 7,
+                    "offset": 6
+                  }
+                },
+                "value": "foo\\"
+              },
+              {
+                "type": "text",
+                "position": {
+                  "start": {
+                    "line": 1,
+                    "column": 7,
+                    "offset": 6
+                  },
+                  "end": {
+                    "line": 1,
+                    "column": 11,
+                    "offset": 10
+                  }
+                },
+                "value": "bar`"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,93 @@
+{
+  "title": "GFM#71 https://github.github.com/gfm/#example-71",
+  "cases": [
+    {
+      "description": "Setext heading text lines must not be interpretable as block constructs other than paragraphs. So, the line of dashes in these examples gets interpreted as a thematic break",
+      "input": "> foo\n-----",
+      "markupAnswer": "> foo\n\n---",
+      "htmlAnswer": "<blockquote>\n<p>foo</p>\n</blockquote>\n<hr />",
+      "parseAnswer": {
+        "type": "root",
+        "position": {
+          "start": {
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "end": {
+            "line": 2,
+            "column": 6,
+            "offset": 11
+          }
+        },
+        "children": [
+          {
+            "type": "blockquote",
+            "position": {
+              "start": {
+                "line": 1,
+                "column": 1,
+                "offset": 0
+              },
+              "end": {
+                "line": 1,
+                "column": 7,
+                "offset": 6
+              }
+            },
+            "children": [
+              {
+                "type": "paragraph",
+                "position": {
+                  "start": {
+                    "line": 1,
+                    "column": 3,
+                    "offset": 2
+                  },
+                  "end": {
+                    "line": 1,
+                    "column": 7,
+                    "offset": 6
+                  }
+                },
+                "children": [
+                  {
+                    "type": "text",
+                    "position": {
+                      "start": {
+                        "line": 1,
+                        "column": 3,
+                        "offset": 2
+                      },
+                      "end": {
+                        "line": 1,
+                        "column": 6,
+                        "offset": 5
+                      }
+                    },
+                    "value": "foo"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "thematicBreak",
+            "position": {
+              "start": {
+                "line": 2,
+                "column": 1,
+                "offset": 6
+              },
+              "end": {
+                "line": 2,
+                "column": 6,
+                "offset": 11
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

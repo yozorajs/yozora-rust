@@ -1,0 +1,64 @@
+{
+  "title": "GFM#262 https://github.github.com/gfm/#example-262",
+  "cases": [
+    {
+      "description": "A list may start or end with an empty list item",
+      "input": "*",
+      "markupAnswer": "* ",
+      "htmlAnswer": "<ul>\n<li></li>\n</ul>",
+      "parseAnswer": {
+        "type": "root",
+        "position": {
+          "start": {
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "end": {
+            "line": 1,
+            "column": 2,
+            "offset": 1
+          }
+        },
+        "children": [
+          {
+            "type": "list",
+            "position": {
+              "start": {
+                "line": 1,
+                "column": 1,
+                "offset": 0
+              },
+              "end": {
+                "line": 1,
+                "column": 2,
+                "offset": 1
+              }
+            },
+            "ordered": false,
+            "marker": 42,
+            "spread": false,
+            "children": [
+              {
+                "type": "listItem",
+                "position": {
+                  "start": {
+                    "line": 1,
+                    "column": 1,
+                    "offset": 0
+                  },
+                  "end": {
+                    "line": 1,
+                    "column": 2,
+                    "offset": 1
+                  }
+                },
+                "children": []
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

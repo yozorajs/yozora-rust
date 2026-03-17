@@ -1,0 +1,61 @@
+{
+  "title": "GFM#16 https://github.github.com/gfm/#example-16",
+  "cases": [
+    {
+      "description": "Not enough characters",
+      "input": "--\n**\n__",
+      "markupAnswer": "--\n**\n__",
+      "htmlAnswer": "<p>--\n**\n__</p>",
+      "parseAnswer": {
+        "type": "root",
+        "position": {
+          "start": {
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "end": {
+            "line": 3,
+            "column": 3,
+            "offset": 8
+          }
+        },
+        "children": [
+          {
+            "type": "paragraph",
+            "position": {
+              "start": {
+                "line": 1,
+                "column": 1,
+                "offset": 0
+              },
+              "end": {
+                "line": 3,
+                "column": 3,
+                "offset": 8
+              }
+            },
+            "children": [
+              {
+                "type": "text",
+                "position": {
+                  "start": {
+                    "line": 1,
+                    "column": 1,
+                    "offset": 0
+                  },
+                  "end": {
+                    "line": 3,
+                    "column": 3,
+                    "offset": 8
+                  }
+                },
+                "value": "--\n**\n__"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

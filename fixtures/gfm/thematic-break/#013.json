@@ -1,0 +1,73 @@
+{
+  "title": "GFM#13 https://github.github.com/gfm/#example-13",
+  "cases": [
+    {
+      "description": "A line consisting of 0-3 spaces of indentation, followed by a sequence of three or more matching -, _, or * characters, each followed optionally by any number of spaces or tabs, forms a thematic break.",
+      "input": "***\n---\n___",
+      "markupAnswer": "---\n\n---\n\n---",
+      "htmlAnswer": "<hr />\n<hr />\n<hr />",
+      "parseAnswer": {
+        "type": "root",
+        "position": {
+          "start": {
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "end": {
+            "line": 3,
+            "column": 4,
+            "offset": 11
+          }
+        },
+        "children": [
+          {
+            "type": "thematicBreak",
+            "position": {
+              "start": {
+                "line": 1,
+                "column": 1,
+                "offset": 0
+              },
+              "end": {
+                "line": 1,
+                "column": 5,
+                "offset": 4
+              }
+            }
+          },
+          {
+            "type": "thematicBreak",
+            "position": {
+              "start": {
+                "line": 2,
+                "column": 1,
+                "offset": 4
+              },
+              "end": {
+                "line": 2,
+                "column": 5,
+                "offset": 8
+              }
+            }
+          },
+          {
+            "type": "thematicBreak",
+            "position": {
+              "start": {
+                "line": 3,
+                "column": 1,
+                "offset": 8
+              },
+              "end": {
+                "line": 3,
+                "column": 4,
+                "offset": 11
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

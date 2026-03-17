@@ -1,0 +1,44 @@
+{
+  "title": "GFM#134 https://github.github.com/gfm/#example-134",
+  "cases": [
+    {
+      "description": "In type 7 blocks, the tag name can be anything",
+      "input": "<i class=\"foo\">\n*bar*\n</i>",
+      "markupAnswer": "<i class=\"foo\">\n*bar*\n</i>",
+      "htmlAnswer": "<i class=\"foo\">\n*bar*\n</i>",
+      "parseAnswer": {
+        "type": "root",
+        "position": {
+          "start": {
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "end": {
+            "line": 3,
+            "column": 5,
+            "offset": 26
+          }
+        },
+        "children": [
+          {
+            "type": "html",
+            "position": {
+              "start": {
+                "line": 1,
+                "column": 1,
+                "offset": 0
+              },
+              "end": {
+                "line": 3,
+                "column": 5,
+                "offset": 26
+              }
+            },
+            "value": "<i class=\"foo\">\n*bar*\n</i>"
+          }
+        ]
+      }
+    }
+  ]
+}

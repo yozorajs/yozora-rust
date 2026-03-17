@@ -1,0 +1,61 @@
+{
+  "title": "GFM#393 https://github.github.com/gfm/#example-393",
+  "cases": [
+    {
+      "description": "A newline counts as whitespace",
+      "input": "__\nfoo bar__",
+      "markupAnswer": "__\nfoo bar__",
+      "htmlAnswer": "<p>__\nfoo bar__</p>",
+      "parseAnswer": {
+        "type": "root",
+        "position": {
+          "start": {
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "end": {
+            "line": 2,
+            "column": 10,
+            "offset": 12
+          }
+        },
+        "children": [
+          {
+            "type": "paragraph",
+            "position": {
+              "start": {
+                "line": 1,
+                "column": 1,
+                "offset": 0
+              },
+              "end": {
+                "line": 2,
+                "column": 10,
+                "offset": 12
+              }
+            },
+            "children": [
+              {
+                "type": "text",
+                "position": {
+                  "start": {
+                    "line": 1,
+                    "column": 1,
+                    "offset": 0
+                  },
+                  "end": {
+                    "line": 2,
+                    "column": 10,
+                    "offset": 12
+                  }
+                },
+                "value": "__\nfoo bar__"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

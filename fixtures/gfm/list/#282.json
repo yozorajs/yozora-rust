@@ -1,0 +1,171 @@
+{
+  "title": "GFM#282 https://github.github.com/gfm/#example-282",
+  "cases": [
+    {
+      "description": "Changing the bullet or ordered list delimiter starts a new list",
+      "input": "1. foo\n2. bar\n3) baz",
+      "markupAnswer": "1. foo\n2. bar\n\n3) baz",
+      "htmlAnswer": "<ol>\n<li>foo</li>\n<li>bar</li>\n</ol>\n<ol start=\"3\">\n<li>baz</li>\n</ol>",
+      "parseAnswer": {
+        "type": "root",
+        "position": {
+          "start": {
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "end": {
+            "line": 3,
+            "column": 7,
+            "offset": 20
+          }
+        },
+        "children": [
+          {
+            "type": "list",
+            "position": {
+              "start": {
+                "line": 1,
+                "column": 1,
+                "offset": 0
+              },
+              "end": {
+                "line": 2,
+                "column": 8,
+                "offset": 14
+              }
+            },
+            "ordered": true,
+            "orderType": "1",
+            "start": 1,
+            "marker": 46,
+            "spread": false,
+            "children": [
+              {
+                "type": "listItem",
+                "position": {
+                  "start": {
+                    "line": 1,
+                    "column": 1,
+                    "offset": 0
+                  },
+                  "end": {
+                    "line": 1,
+                    "column": 8,
+                    "offset": 7
+                  }
+                },
+                "children": [
+                  {
+                    "type": "text",
+                    "position": {
+                      "start": {
+                        "line": 1,
+                        "column": 4,
+                        "offset": 3
+                      },
+                      "end": {
+                        "line": 1,
+                        "column": 7,
+                        "offset": 6
+                      }
+                    },
+                    "value": "foo"
+                  }
+                ]
+              },
+              {
+                "type": "listItem",
+                "position": {
+                  "start": {
+                    "line": 2,
+                    "column": 1,
+                    "offset": 7
+                  },
+                  "end": {
+                    "line": 2,
+                    "column": 8,
+                    "offset": 14
+                  }
+                },
+                "children": [
+                  {
+                    "type": "text",
+                    "position": {
+                      "start": {
+                        "line": 2,
+                        "column": 4,
+                        "offset": 10
+                      },
+                      "end": {
+                        "line": 2,
+                        "column": 7,
+                        "offset": 13
+                      }
+                    },
+                    "value": "bar"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "list",
+            "position": {
+              "start": {
+                "line": 3,
+                "column": 1,
+                "offset": 14
+              },
+              "end": {
+                "line": 3,
+                "column": 7,
+                "offset": 20
+              }
+            },
+            "ordered": true,
+            "orderType": "1",
+            "start": 3,
+            "marker": 41,
+            "spread": false,
+            "children": [
+              {
+                "type": "listItem",
+                "position": {
+                  "start": {
+                    "line": 3,
+                    "column": 1,
+                    "offset": 14
+                  },
+                  "end": {
+                    "line": 3,
+                    "column": 7,
+                    "offset": 20
+                  }
+                },
+                "children": [
+                  {
+                    "type": "text",
+                    "position": {
+                      "start": {
+                        "line": 3,
+                        "column": 4,
+                        "offset": 17
+                      },
+                      "end": {
+                        "line": 3,
+                        "column": 7,
+                        "offset": 20
+                      }
+                    },
+                    "value": "baz"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

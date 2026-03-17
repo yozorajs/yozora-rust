@@ -1,0 +1,61 @@
+{
+  "title": "GFM#384 https://github.github.com/gfm/#example-384",
+  "cases": [
+    {
+      "description": "Intraword emphasis is disallowed for _",
+      "input": "_пристаням_стремятся",
+      "markupAnswer": "_пристаням_стремятся",
+      "htmlAnswer": "<p>_пристаням_стремятся</p>",
+      "parseAnswer": {
+        "type": "root",
+        "position": {
+          "start": {
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "end": {
+            "line": 1,
+            "column": 21,
+            "offset": 20
+          }
+        },
+        "children": [
+          {
+            "type": "paragraph",
+            "position": {
+              "start": {
+                "line": 1,
+                "column": 1,
+                "offset": 0
+              },
+              "end": {
+                "line": 1,
+                "column": 21,
+                "offset": 20
+              }
+            },
+            "children": [
+              {
+                "type": "text",
+                "position": {
+                  "start": {
+                    "line": 1,
+                    "column": 1,
+                    "offset": 0
+                  },
+                  "end": {
+                    "line": 1,
+                    "column": 21,
+                    "offset": 20
+                  }
+                },
+                "value": "_пристаням_стремятся"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

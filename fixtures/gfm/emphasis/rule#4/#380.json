@@ -1,0 +1,61 @@
+{
+  "title": "GFM#380 https://github.github.com/gfm/#example-380",
+  "cases": [
+    {
+      "description": "This is not emphasis, because the closing _ is preceded by whitespace",
+      "input": "_foo bar _",
+      "markupAnswer": "_foo bar _",
+      "htmlAnswer": "<p>_foo bar _</p>",
+      "parseAnswer": {
+        "type": "root",
+        "position": {
+          "start": {
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "end": {
+            "line": 1,
+            "column": 11,
+            "offset": 10
+          }
+        },
+        "children": [
+          {
+            "type": "paragraph",
+            "position": {
+              "start": {
+                "line": 1,
+                "column": 1,
+                "offset": 0
+              },
+              "end": {
+                "line": 1,
+                "column": 11,
+                "offset": 10
+              }
+            },
+            "children": [
+              {
+                "type": "text",
+                "position": {
+                  "start": {
+                    "line": 1,
+                    "column": 1,
+                    "offset": 0
+                  },
+                  "end": {
+                    "line": 1,
+                    "column": 11,
+                    "offset": 10
+                  }
+                },
+                "value": "_foo bar _"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

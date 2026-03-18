@@ -1,4 +1,9 @@
+pub mod engine;
+pub mod phase;
+
 use yozora_ast::{Node, Position};
+
+pub use phase::*;
 
 #[derive(Debug, Clone)]
 pub struct BlockTokenizeResult {
@@ -48,20 +53,68 @@ pub trait BlockTokenizer: Tokenizer {
             consumed_lines: 1,
         })
     }
+
+    fn tokenize_block_lines_with_api(
+        &self,
+        lines: &[&str],
+        position: Option<Position>,
+        _api: &mut dyn MatchBlockPhaseApi,
+    ) -> Option<BlockTokenizeResult> {
+        self.tokenize_block_lines(lines, position)
+    }
 }
 
 pub trait InlineTokenizer: Tokenizer {
     fn tokenize_inline(&self, _input: &str, _position: Option<Position>) -> Option<Vec<Node>> {
         None
     }
+
+    fn tokenize_inline_with_api(
+        &self,
+        input: &str,
+        position: Option<Position>,
+        _api: &dyn MatchInlinePhaseApi,
+    ) -> Option<Vec<Node>> {
+        self.tokenize_inline(input, position)
+    }
+
+    fn tokenize_inline_with_apis(
+        &self,
+        input: &str,
+        position: Option<Position>,
+        match_api: &dyn MatchInlinePhaseApi,
+        _parse_api: &dyn ParseInlinePhaseApi,
+    ) -> Option<Vec<Node>> {
+        self.tokenize_inline_with_api(input, position, match_api)
+    }
 }
 
 pub trait BlockFallbackTokenizer: BlockTokenizer {
     fn build_block(&self, inline_children: Vec<Node>, position: Option<Position>) -> Node;
+
+    fn build_block_with_api(
+        &self,
+        inline_children: Vec<Node>,
+        position: Option<Position>,
+        _api: &dyn ParseBlockPhaseApi,
+    ) -> Node {
+        self.build_block(inline_children, position)
+    }
 }
 
 pub trait InlineFallbackTokenizer: InlineTokenizer {
     fn build_inline(&self, value: &str, position: Option<Position>) -> Node;
+
+    fn find_and_handle_delimiter(
+        &self,
+        source: &str,
+        start_index: usize,
+        end_index: usize,
+        position: Option<Position>,
+        _api: &dyn MatchInlinePhaseApi,
+    ) -> Node {
+        self.build_inline(&source[start_index..end_index], position)
+    }
 }
 
 pub enum AnyTokenizer {
@@ -155,7 +208,11 @@ pub fn strip_indent_columns_with_base(
     }
 
     let remaining_indent = total_indent - columns;
-    Some(format!("{}{}", " ".repeat(remaining_indent), &line[content_start..]))
+    Some(format!(
+        "{}{}",
+        " ".repeat(remaining_indent),
+        &line[content_start..]
+    ))
 }
 
 impl AnyFallbackTokenizer {

@@ -22,14 +22,11 @@ fn fixture_gfm_subset_l1() {
         "gfm/link/#493.json",
         "gfm/image/#580.json",
         "gfm/autolink/#602.json",
-        "gfm/autolink-extension/#621.json",
         "gfm/html-inline/#632.json",
         "gfm/break/hard line breaks/#654.json",
-        "gfm/delete/#491.json",
         "gfm/definition/#161.json",
         "gfm/link-reference/collapsed/#561.json",
         "gfm/image-reference/collapsed/#592.json",
-        "gfm/table/#198.json",
         "gfm/html-block/#119.json",
     ];
 

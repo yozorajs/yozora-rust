@@ -1,10 +1,9 @@
 use yozora_ast::Root;
-use yozora_core_parser::{DefaultParser, ParseOptions};
+use yozora_core_parser::{DefaultParser, ParseContents, ParseOptions};
 use yozora_core_tokenizer::{AnyFallbackTokenizer, AnyTokenizer};
 use yozora_tokenizer_admonition::AdmonitionTokenizer;
 use yozora_tokenizer_autolink::AutolinkTokenizer;
 use yozora_tokenizer_autolink_extension::AutolinkExtensionTokenizer;
-use yozora_tokenizer_backslash_escape::BackslashEscapeTokenizer;
 use yozora_tokenizer_blockquote::BlockquoteTokenizer;
 use yozora_tokenizer_break::BreakTokenizer;
 use yozora_tokenizer_definition::DefinitionTokenizer;
@@ -22,14 +21,13 @@ use yozora_tokenizer_image::ImageTokenizer;
 use yozora_tokenizer_image_reference::ImageReferenceTokenizer;
 use yozora_tokenizer_indented_code::IndentedCodeTokenizer;
 use yozora_tokenizer_inline_code::InlineCodeTokenizer;
-use yozora_tokenizer_inline_math::InlineMathTokenizer;
+use yozora_tokenizer_inline_math::{InlineMathTokenizer, InlineMathTokenizerOptions};
 use yozora_tokenizer_link::LinkTokenizer;
 use yozora_tokenizer_link_reference::LinkReferenceTokenizer;
-use yozora_tokenizer_list::ListTokenizer;
+use yozora_tokenizer_list::{ListTokenizer, ListTokenizerOptions};
 use yozora_tokenizer_math::MathTokenizer;
 use yozora_tokenizer_paragraph::ParagraphTokenizer;
 use yozora_tokenizer_setext_heading::SetextHeadingTokenizer;
-use yozora_tokenizer_soft_break::SoftBreakTokenizer;
 use yozora_tokenizer_table::TableTokenizer;
 use yozora_tokenizer_text::TextTokenizer;
 use yozora_tokenizer_thematic_break::ThematicBreakTokenizer;
@@ -57,16 +55,113 @@ impl Default for YozoraParser {
 fn register_builtin_tokenizers(inner: &mut DefaultParser) {
     inner
         .use_tokenizer(
-            AnyTokenizer::Inline(Box::new(BackslashEscapeTokenizer::default())),
+            AnyTokenizer::Block(Box::new(IndentedCodeTokenizer::default())),
             None,
         )
-        .expect("failed to register tokenizer-backslash-escape");
+        .expect("failed to register tokenizer-indented-code");
+    inner
+        .use_tokenizer(
+            AnyTokenizer::Block(Box::new(HtmlBlockTokenizer::default())),
+            None,
+        )
+        .expect("failed to register tokenizer-html-block");
+    inner
+        .use_tokenizer(
+            AnyTokenizer::Block(Box::new(SetextHeadingTokenizer::default())),
+            None,
+        )
+        .expect("failed to register tokenizer-setext-heading");
+    inner
+        .use_tokenizer(
+            AnyTokenizer::Block(Box::new(ThematicBreakTokenizer::default())),
+            None,
+        )
+        .expect("failed to register tokenizer-thematic-break");
+    inner
+        .use_tokenizer(
+            AnyTokenizer::Block(Box::new(BlockquoteTokenizer::default())),
+            None,
+        )
+        .expect("failed to register tokenizer-blockquote");
+    inner
+        .use_tokenizer(
+            AnyTokenizer::Block(Box::new(ListTokenizer::new(ListTokenizerOptions {
+                enable_task_list_item: true,
+            }))),
+            None,
+        )
+        .expect("failed to register tokenizer-list");
+    inner
+        .use_tokenizer(
+            AnyTokenizer::Block(Box::new(HeadingTokenizer::default())),
+            None,
+        )
+        .expect("failed to register tokenizer-heading");
+    inner
+        .use_tokenizer(
+            AnyTokenizer::Block(Box::new(FencedCodeTokenizer::default())),
+            None,
+        )
+        .expect("failed to register tokenizer-fenced-code");
     inner
         .use_tokenizer(
             AnyTokenizer::Block(Box::new(AdmonitionTokenizer::default())),
             None,
         )
         .expect("failed to register tokenizer-admonition");
+    inner
+        .use_tokenizer(
+            AnyTokenizer::Block(Box::new(MathTokenizer::default())),
+            None,
+        )
+        .expect("failed to register tokenizer-math");
+    inner
+        .use_tokenizer(
+            AnyTokenizer::Block(Box::new(FootnoteDefinitionTokenizer::default())),
+            None,
+        )
+        .expect("failed to register tokenizer-footnote-definition");
+    inner
+        .use_tokenizer(
+            AnyTokenizer::Block(Box::new(DefinitionTokenizer::default())),
+            None,
+        )
+        .expect("failed to register tokenizer-definition");
+    inner
+        .use_tokenizer(
+            AnyTokenizer::Block(Box::new(EcmaImportTokenizer::default())),
+            None,
+        )
+        .expect("failed to register tokenizer-ecma-import");
+    inner
+        .use_tokenizer(
+            AnyTokenizer::Block(Box::new(TableTokenizer::default())),
+            None,
+        )
+        .expect("failed to register tokenizer-table");
+
+    inner
+        .use_tokenizer(
+            AnyTokenizer::Inline(Box::new(HtmlInlineTokenizer::default())),
+            None,
+        )
+        .expect("failed to register tokenizer-html-inline");
+    inner
+        .use_tokenizer(
+            AnyTokenizer::Inline(Box::new(InlineMathTokenizer::new(
+                InlineMathTokenizerOptions {
+                    backtick_required: true,
+                },
+            ))),
+            None,
+        )
+        .expect("failed to register tokenizer-inline-math-with-backtick");
+    inner
+        .use_tokenizer(
+            AnyTokenizer::Inline(Box::new(InlineCodeTokenizer::default())),
+            None,
+        )
+        .expect("failed to register tokenizer-inline-code");
     inner
         .use_tokenizer(
             AnyTokenizer::Inline(Box::new(AutolinkTokenizer::default())),
@@ -81,46 +176,10 @@ fn register_builtin_tokenizers(inner: &mut DefaultParser) {
         .expect("failed to register tokenizer-autolink-extension");
     inner
         .use_tokenizer(
-            AnyTokenizer::Block(Box::new(BlockquoteTokenizer::default())),
-            None,
-        )
-        .expect("failed to register tokenizer-blockquote");
-    inner
-        .use_tokenizer(
             AnyTokenizer::Inline(Box::new(BreakTokenizer::default())),
             None,
         )
         .expect("failed to register tokenizer-break");
-    inner
-        .use_tokenizer(
-            AnyTokenizer::Block(Box::new(DefinitionTokenizer::default())),
-            None,
-        )
-        .expect("failed to register tokenizer-definition");
-    inner
-        .use_tokenizer(
-            AnyTokenizer::Inline(Box::new(DeleteTokenizer::default())),
-            None,
-        )
-        .expect("failed to register tokenizer-delete");
-    inner
-        .use_tokenizer(
-            AnyTokenizer::Block(Box::new(EcmaImportTokenizer::default())),
-            None,
-        )
-        .expect("failed to register tokenizer-ecma-import");
-    inner
-        .use_tokenizer(
-            AnyTokenizer::Inline(Box::new(EmphasisTokenizer::default())),
-            None,
-        )
-        .expect("failed to register tokenizer-emphasis");
-    inner
-        .use_tokenizer(
-            AnyTokenizer::Block(Box::new(FencedCodeTokenizer::default())),
-            None,
-        )
-        .expect("failed to register tokenizer-fenced-code");
     inner
         .use_tokenizer(
             AnyTokenizer::Inline(Box::new(FootnoteTokenizer::default())),
@@ -129,34 +188,10 @@ fn register_builtin_tokenizers(inner: &mut DefaultParser) {
         .expect("failed to register tokenizer-footnote");
     inner
         .use_tokenizer(
-            AnyTokenizer::Block(Box::new(FootnoteDefinitionTokenizer::default())),
-            None,
-        )
-        .expect("failed to register tokenizer-footnote-definition");
-    inner
-        .use_tokenizer(
             AnyTokenizer::Inline(Box::new(FootnoteReferenceTokenizer::default())),
             None,
         )
         .expect("failed to register tokenizer-footnote-reference");
-    inner
-        .use_tokenizer(
-            AnyTokenizer::Block(Box::new(HeadingTokenizer::default())),
-            None,
-        )
-        .expect("failed to register tokenizer-heading");
-    inner
-        .use_tokenizer(
-            AnyTokenizer::Block(Box::new(HtmlBlockTokenizer::default())),
-            None,
-        )
-        .expect("failed to register tokenizer-html-block");
-    inner
-        .use_tokenizer(
-            AnyTokenizer::Inline(Box::new(HtmlInlineTokenizer::default())),
-            None,
-        )
-        .expect("failed to register tokenizer-html-inline");
     inner
         .use_tokenizer(
             AnyTokenizer::Inline(Box::new(ImageTokenizer::default())),
@@ -171,24 +206,6 @@ fn register_builtin_tokenizers(inner: &mut DefaultParser) {
         .expect("failed to register tokenizer-image-reference");
     inner
         .use_tokenizer(
-            AnyTokenizer::Block(Box::new(IndentedCodeTokenizer::default())),
-            None,
-        )
-        .expect("failed to register tokenizer-indented-code");
-    inner
-        .use_tokenizer(
-            AnyTokenizer::Inline(Box::new(InlineCodeTokenizer::default())),
-            None,
-        )
-        .expect("failed to register tokenizer-inline-code");
-    inner
-        .use_tokenizer(
-            AnyTokenizer::Inline(Box::new(InlineMathTokenizer::default())),
-            None,
-        )
-        .expect("failed to register tokenizer-inline-math");
-    inner
-        .use_tokenizer(
             AnyTokenizer::Inline(Box::new(LinkTokenizer::default())),
             None,
         )
@@ -201,45 +218,101 @@ fn register_builtin_tokenizers(inner: &mut DefaultParser) {
         .expect("failed to register tokenizer-link-reference");
     inner
         .use_tokenizer(
-            AnyTokenizer::Block(Box::new(ListTokenizer::default())),
+            AnyTokenizer::Inline(Box::new(InlineMathTokenizer::new(
+                InlineMathTokenizerOptions {
+                    backtick_required: false,
+                },
+            ))),
             None,
         )
-        .expect("failed to register tokenizer-list");
+        .expect("failed to register tokenizer-inline-math");
     inner
         .use_tokenizer(
-            AnyTokenizer::Block(Box::new(MathTokenizer::default())),
+            AnyTokenizer::Inline(Box::new(EmphasisTokenizer::default())),
             None,
         )
-        .expect("failed to register tokenizer-math");
+        .expect("failed to register tokenizer-emphasis");
     inner
         .use_tokenizer(
-            AnyTokenizer::Block(Box::new(SetextHeadingTokenizer::default())),
+            AnyTokenizer::Inline(Box::new(DeleteTokenizer::default())),
             None,
         )
-        .expect("failed to register tokenizer-setext-heading");
-    inner
-        .use_tokenizer(
-            AnyTokenizer::Inline(Box::new(SoftBreakTokenizer::default())),
-            None,
-        )
-        .expect("failed to register tokenizer-soft-break");
-    inner
-        .use_tokenizer(
-            AnyTokenizer::Block(Box::new(TableTokenizer::default())),
-            None,
-        )
-        .expect("failed to register tokenizer-table");
-    inner
-        .use_tokenizer(
-            AnyTokenizer::Block(Box::new(ThematicBreakTokenizer::default())),
-            None,
-        )
-        .expect("failed to register tokenizer-thematic-break");
+        .expect("failed to register tokenizer-delete");
 }
 
 impl YozoraParser {
-    pub fn parse(&self, input: &str, options: Option<ParseOptions>) -> Root {
-        self.inner.parse(input, options)
+    pub fn use_tokenizer(
+        &mut self,
+        tokenizer: AnyTokenizer,
+        register_before_tokenizer: Option<&str>,
+    ) -> Result<&mut Self, String> {
+        self.inner
+            .use_tokenizer(tokenizer, register_before_tokenizer)?;
+        Ok(self)
+    }
+
+    pub fn replace_tokenizer(
+        &mut self,
+        tokenizer: AnyTokenizer,
+        register_before_tokenizer: Option<&str>,
+    ) -> Result<&mut Self, String> {
+        self.inner
+            .replace_tokenizer(tokenizer, register_before_tokenizer)?;
+        Ok(self)
+    }
+
+    pub fn unmount_tokenizer(&mut self, tokenizer_name: &str) -> &mut Self {
+        self.inner.unmount_tokenizer(tokenizer_name);
+        self
+    }
+
+    pub fn use_fallback_tokenizer(&mut self, tokenizer: AnyFallbackTokenizer) -> &mut Self {
+        self.inner.use_fallback_tokenizer(tokenizer);
+        self
+    }
+
+    pub fn set_default_parse_options(&mut self, options: ParseOptions) {
+        self.inner.set_default_parse_options(options);
+    }
+
+    pub fn parse<'a, C>(&self, contents: C, options: Option<ParseOptions>) -> Root
+    where
+        C: Into<ParseContents<'a>>,
+    {
+        self.inner.parse(contents, options)
+    }
+
+    #[allow(non_snake_case)]
+    pub fn useTokenizer(
+        &mut self,
+        tokenizer: AnyTokenizer,
+        register_before_tokenizer: Option<&str>,
+    ) -> Result<&mut Self, String> {
+        self.use_tokenizer(tokenizer, register_before_tokenizer)
+    }
+
+    #[allow(non_snake_case)]
+    pub fn replaceTokenizer(
+        &mut self,
+        tokenizer: AnyTokenizer,
+        register_before_tokenizer: Option<&str>,
+    ) -> Result<&mut Self, String> {
+        self.replace_tokenizer(tokenizer, register_before_tokenizer)
+    }
+
+    #[allow(non_snake_case)]
+    pub fn unmountTokenizer(&mut self, tokenizer_name: &str) -> &mut Self {
+        self.unmount_tokenizer(tokenizer_name)
+    }
+
+    #[allow(non_snake_case)]
+    pub fn useFallbackTokenizer(&mut self, tokenizer: AnyFallbackTokenizer) -> &mut Self {
+        self.use_fallback_tokenizer(tokenizer)
+    }
+
+    #[allow(non_snake_case)]
+    pub fn setDefaultParseOptions(&mut self, options: ParseOptions) {
+        self.set_default_parse_options(options)
     }
 
     pub fn inner_mut(&mut self) -> &mut DefaultParser {
@@ -249,8 +322,10 @@ impl YozoraParser {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
-    use yozora_ast::Node;
+    use yozora_ast::{Association, Node};
 
     #[test]
     fn parse_heading_block() {
@@ -418,4 +493,135 @@ mod tests {
             .any(|node| matches!(node, Node::Footnote(_))));
     }
 
+    #[test]
+    fn parse_and_camel_case_methods_work() {
+        let mut parser = YozoraParser::default();
+        parser.setDefaultParseOptions(ParseOptions {
+            should_reserve_position: true,
+            ..ParseOptions::default()
+        });
+
+        let lines = ["# hello", "", "world"];
+        let root = parser.parse(ParseContents::Lines(&lines), None);
+        assert!(root.position.is_some());
+        assert_eq!(root.children.len(), 2);
+    }
+
+    #[test]
+    fn parse_accepts_iterable_like_lines() {
+        let parser = YozoraParser::default();
+        let root = parser.parse(vec!["# title", "", "content"], None);
+        assert_eq!(root.children.len(), 2);
+    }
+
+    #[test]
+    fn parse_options_preset_definitions_resolve_link_references() {
+        let parser = YozoraParser::default();
+
+        let without_preset = parser.parse("[foo][]", None);
+        let Node::Paragraph(paragraph) = &without_preset.children[0] else {
+            panic!("expected paragraph node");
+        };
+        assert!(paragraph
+            .children
+            .iter()
+            .any(|node| matches!(node, Node::Text(_))));
+
+        let with_preset = parser.parse(
+            "[foo][]",
+            Some(ParseOptions {
+                preset_definitions: vec![Association {
+                    identifier: "foo".to_string(),
+                    label: "foo".to_string(),
+                }],
+                ..ParseOptions::default()
+            }),
+        );
+        let Node::Paragraph(paragraph) = &with_preset.children[0] else {
+            panic!("expected paragraph node");
+        };
+        assert!(paragraph
+            .children
+            .iter()
+            .any(|node| matches!(node, Node::LinkReference(_))));
+    }
+
+    #[test]
+    fn parse_options_preset_footnotes_resolve_footnote_references() {
+        let parser = YozoraParser::default();
+
+        let without_preset = parser.parse("[^n]", None);
+        let Node::Paragraph(paragraph) = &without_preset.children[0] else {
+            panic!("expected paragraph node");
+        };
+        assert!(paragraph
+            .children
+            .iter()
+            .any(|node| matches!(node, Node::Text(_))));
+
+        let with_preset = parser.parse(
+            "[^n]",
+            Some(ParseOptions {
+                preset_footnote_definitions: vec![Association {
+                    identifier: "n".to_string(),
+                    label: "n".to_string(),
+                }],
+                ..ParseOptions::default()
+            }),
+        );
+        let Node::Paragraph(paragraph) = &with_preset.children[0] else {
+            panic!("expected paragraph node");
+        };
+        assert!(paragraph
+            .children
+            .iter()
+            .any(|node| matches!(node, Node::FootnoteReference(_))));
+    }
+
+    #[test]
+    fn parse_options_format_url_is_applied_to_url_nodes() {
+        let parser = YozoraParser::default();
+        let format_url = Arc::new(|url: &str| format!("prefix:{url}"));
+
+        let root = parser.parse(
+            "[link](/u) ![alt](/img)\n\n[foo]: /def",
+            Some(ParseOptions {
+                format_url: Some(format_url),
+                ..ParseOptions::default()
+            }),
+        );
+
+        let Node::Paragraph(paragraph) = &root.children[0] else {
+            panic!("expected paragraph node");
+        };
+        let link = paragraph
+            .children
+            .iter()
+            .find_map(|node| match node {
+                Node::Link(link) => Some(link),
+                _ => None,
+            })
+            .expect("expected link node");
+        assert_eq!(link.url, "prefix:/u");
+
+        let image = paragraph
+            .children
+            .iter()
+            .find_map(|node| match node {
+                Node::Image(image) => Some(image),
+                _ => None,
+            })
+            .expect("expected image node");
+        assert_eq!(image.url, "prefix:/img");
+
+        let definition = root
+            .children
+            .iter()
+            .find_map(|node| match node {
+                Node::Definition(definition) => Some(definition),
+                _ => None,
+            })
+            .expect("expected definition node");
+        assert_eq!(definition.url, "prefix:/def");
+    }
 }

@@ -101,10 +101,7 @@ fn parse_numeric_entity(
                 });
             }
 
-            let normalized = if val == 0
-                || val > 0x10FFFF
-                || (0xD800..=0xDFFF).contains(&val)
-            {
+            let normalized = if val == 0 || val > 0x10FFFF || (0xD800..=0xDFFF).contains(&val) {
                 UnicodeCodePoint::ReplacementCharacter as i32
             } else {
                 val

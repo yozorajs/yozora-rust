@@ -41,6 +41,7 @@ fn fixture_batch_report() {
 
     let parse_options = Some(ParseOptions {
         should_reserve_position: matches!(assert_level, AssertLevel::L2),
+        ..ParseOptions::default()
     });
 
     let mut total_cases = 0usize;
@@ -67,9 +68,9 @@ fn fixture_batch_report() {
         for case in &cases {
             total_cases += 1;
             let root = match parser_profile.as_str() {
-                "yozora" => YozoraParser::default().parse(&case.input, parse_options),
-                "gfm" => GfmParser::default().parse(&case.input, parse_options),
-                "gfm_ex" => GfmExParser::default().parse(&case.input, parse_options),
+                "yozora" => YozoraParser::default().parse(&case.input, parse_options.clone()),
+                "gfm" => GfmParser::default().parse(&case.input, parse_options.clone()),
+                "gfm_ex" => GfmExParser::default().parse(&case.input, parse_options.clone()),
                 other => panic!("unsupported parser profile: {other}"),
             };
 

@@ -137,7 +137,6 @@ dependencies = [
  "yozora-tokenizer-admonition",
  "yozora-tokenizer-autolink",
  "yozora-tokenizer-autolink-extension",
- "yozora-tokenizer-backslash-escape",
  "yozora-tokenizer-blockquote",
  "yozora-tokenizer-break",
  "yozora-tokenizer-definition",
@@ -162,7 +161,6 @@ dependencies = [
  "yozora-tokenizer-math",
  "yozora-tokenizer-paragraph",
  "yozora-tokenizer-setext-heading",
- "yozora-tokenizer-soft-break",
  "yozora-tokenizer-table",
  "yozora-tokenizer-text",
  "yozora-tokenizer-thematic-break",
@@ -176,12 +174,9 @@ dependencies = [
  "yozora-core-parser",
  "yozora-core-tokenizer",
  "yozora-tokenizer-autolink",
- "yozora-tokenizer-autolink-extension",
- "yozora-tokenizer-backslash-escape",
  "yozora-tokenizer-blockquote",
  "yozora-tokenizer-break",
  "yozora-tokenizer-definition",
- "yozora-tokenizer-delete",
  "yozora-tokenizer-emphasis",
  "yozora-tokenizer-fenced-code",
  "yozora-tokenizer-heading",
@@ -196,8 +191,6 @@ dependencies = [
  "yozora-tokenizer-list",
  "yozora-tokenizer-paragraph",
  "yozora-tokenizer-setext-heading",
- "yozora-tokenizer-soft-break",
- "yozora-tokenizer-table",
  "yozora-tokenizer-text",
  "yozora-tokenizer-thematic-break",
 ]
@@ -211,7 +204,6 @@ dependencies = [
  "yozora-core-tokenizer",
  "yozora-tokenizer-autolink",
  "yozora-tokenizer-autolink-extension",
- "yozora-tokenizer-backslash-escape",
  "yozora-tokenizer-blockquote",
  "yozora-tokenizer-break",
  "yozora-tokenizer-definition",
@@ -230,7 +222,6 @@ dependencies = [
  "yozora-tokenizer-list",
  "yozora-tokenizer-paragraph",
  "yozora-tokenizer-setext-heading",
- "yozora-tokenizer-soft-break",
  "yozora-tokenizer-table",
  "yozora-tokenizer-text",
  "yozora-tokenizer-thematic-break",
@@ -253,6 +244,7 @@ name = "yozora-tokenizer-admonition"
 version = "0.1.0"
 dependencies = [
  "yozora-ast",
+ "yozora-character",
  "yozora-core-tokenizer",
 ]
 
@@ -261,6 +253,7 @@ name = "yozora-tokenizer-autolink"
 version = "0.1.0"
 dependencies = [
  "yozora-ast",
+ "yozora-character",
  "yozora-core-tokenizer",
 ]
 
@@ -269,6 +262,7 @@ name = "yozora-tokenizer-autolink-extension"
 version = "0.1.0"
 dependencies = [
  "yozora-ast",
+ "yozora-character",
  "yozora-core-tokenizer",
 ]
 
@@ -286,6 +280,7 @@ name = "yozora-tokenizer-blockquote"
 version = "0.1.0"
 dependencies = [
  "yozora-ast",
+ "yozora-character",
  "yozora-core-tokenizer",
 ]
 
@@ -294,6 +289,7 @@ name = "yozora-tokenizer-break"
 version = "0.1.0"
 dependencies = [
  "yozora-ast",
+ "yozora-character",
  "yozora-core-tokenizer",
 ]
 
@@ -311,6 +307,7 @@ name = "yozora-tokenizer-delete"
 version = "0.1.0"
 dependencies = [
  "yozora-ast",
+ "yozora-character",
  "yozora-core-tokenizer",
 ]
 
@@ -319,6 +316,7 @@ name = "yozora-tokenizer-ecma-import"
 version = "0.1.0"
 dependencies = [
  "yozora-ast",
+ "yozora-character",
  "yozora-core-tokenizer",
 ]
 
@@ -327,6 +325,7 @@ name = "yozora-tokenizer-emphasis"
 version = "0.1.0"
 dependencies = [
  "yozora-ast",
+ "yozora-character",
  "yozora-core-tokenizer",
 ]
 
@@ -352,6 +351,7 @@ name = "yozora-tokenizer-footnote"
 version = "0.1.0"
 dependencies = [
  "yozora-ast",
+ "yozora-character",
  "yozora-core-tokenizer",
 ]
 
@@ -360,6 +360,7 @@ name = "yozora-tokenizer-footnote-definition"
 version = "0.1.0"
 dependencies = [
  "yozora-ast",
+ "yozora-character",
  "yozora-core-tokenizer",
 ]
 
@@ -368,6 +369,7 @@ name = "yozora-tokenizer-footnote-reference"
 version = "0.1.0"
 dependencies = [
  "yozora-ast",
+ "yozora-character",
  "yozora-core-tokenizer",
 ]
 
@@ -376,6 +378,7 @@ name = "yozora-tokenizer-heading"
 version = "0.1.0"
 dependencies = [
  "yozora-ast",
+ "yozora-character",
  "yozora-core-tokenizer",
 ]
 
@@ -384,6 +387,7 @@ name = "yozora-tokenizer-html-block"
 version = "0.1.0"
 dependencies = [
  "yozora-ast",
+ "yozora-character",
  "yozora-core-tokenizer",
 ]
 
@@ -392,6 +396,7 @@ name = "yozora-tokenizer-html-inline"
 version = "0.1.0"
 dependencies = [
  "yozora-ast",
+ "yozora-character",
  "yozora-core-tokenizer",
 ]
 
@@ -409,6 +414,7 @@ name = "yozora-tokenizer-image-reference"
 version = "0.1.0"
 dependencies = [
  "yozora-ast",
+ "yozora-character",
  "yozora-core-tokenizer",
 ]
 
@@ -417,6 +423,7 @@ name = "yozora-tokenizer-indented-code"
 version = "0.1.0"
 dependencies = [
  "yozora-ast",
+ "yozora-character",
  "yozora-core-tokenizer",
 ]
 
@@ -425,6 +432,7 @@ name = "yozora-tokenizer-inline-code"
 version = "0.1.0"
 dependencies = [
  "yozora-ast",
+ "yozora-character",
  "yozora-core-tokenizer",
 ]
 
@@ -433,6 +441,7 @@ name = "yozora-tokenizer-inline-math"
 version = "0.1.0"
 dependencies = [
  "yozora-ast",
+ "yozora-character",
  "yozora-core-tokenizer",
 ]
 
@@ -459,6 +468,7 @@ name = "yozora-tokenizer-list"
 version = "0.1.0"
 dependencies = [
  "yozora-ast",
+ "yozora-character",
  "yozora-core-tokenizer",
 ]
 
@@ -467,6 +477,7 @@ name = "yozora-tokenizer-math"
 version = "0.1.0"
 dependencies = [
  "yozora-ast",
+ "yozora-character",
  "yozora-core-tokenizer",
 ]
 
@@ -483,6 +494,7 @@ name = "yozora-tokenizer-setext-heading"
 version = "0.1.0"
 dependencies = [
  "yozora-ast",
+ "yozora-character",
  "yozora-core-tokenizer",
 ]
 
@@ -491,6 +503,7 @@ name = "yozora-tokenizer-soft-break"
 version = "0.1.0"
 dependencies = [
  "yozora-ast",
+ "yozora-character",
  "yozora-core-tokenizer",
 ]
 
@@ -499,6 +512,7 @@ name = "yozora-tokenizer-table"
 version = "0.1.0"
 dependencies = [
  "yozora-ast",
+ "yozora-character",
  "yozora-core-tokenizer",
 ]
 
@@ -507,6 +521,7 @@ name = "yozora-tokenizer-text"
 version = "0.1.0"
 dependencies = [
  "yozora-ast",
+ "yozora-character",
  "yozora-core-tokenizer",
 ]
 
@@ -515,6 +530,7 @@ name = "yozora-tokenizer-thematic-break"
 version = "0.1.0"
 dependencies = [
  "yozora-ast",
+ "yozora-character",
  "yozora-core-tokenizer",
 ]
 

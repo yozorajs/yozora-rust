@@ -16,7 +16,7 @@ impl Default for ParagraphTokenizer {
             meta: TokenizerMeta {
                 name: PARAGRAPH_TOKENIZER_NAME.to_string(),
                 kind: TokenizerKind::Block,
-                priority: -1,
+                priority: TokenizerPriority::FALLBACK,
             },
         }
     }
@@ -89,19 +89,19 @@ impl BlockTokenizer for ParagraphTokenizer {
         Box::new(ParagraphParseHook { api })
     }
 
-    fn extract_phrasing_content_lines(
+    fn extractPhrasingContentLines(
         &self,
         token: &BlockToken,
     ) -> Option<Vec<PhrasingContentLine>> {
         r#match::extract_lines(token)
     }
 
-    fn build_block_token(
+    fn buildBlockToken(
         &self,
         lines: &[PhrasingContentLine],
         original_token: &BlockToken,
     ) -> Option<BlockToken> {
-        r#match::build_block_token(lines, original_token)
+        r#match::buildBlockToken(lines, original_token)
     }
 }
 
@@ -116,22 +116,22 @@ mod tests {
     struct DummyBlockApi;
 
     impl ParseBlockPhaseApi for DummyBlockApi {
-        fn should_reserve_position(&self) -> bool {
+        fn shouldReservePosition(&self) -> bool {
             false
         }
 
-        fn format_url(&self, url: &str) -> String {
+        fn formatUrl(&self, url: &str) -> String {
             url.to_string()
         }
 
-        fn process_inlines(&self, node_points: &[NodePoint]) -> Vec<Node> {
+        fn processInlines(&self, node_points: &[NodePoint]) -> Vec<Node> {
             vec![Node::Text(Text {
                 position: None,
                 value: calc_string_from_node_points(node_points, 0, node_points.len(), false),
             })]
         }
 
-        fn parse_block_tokens(&self, _tokens: &[BlockToken]) -> Vec<Node> {
+        fn parseBlockTokens(&self, _tokens: Option<&[BlockToken]>) -> Vec<Node> {
             Vec::new()
         }
     }
@@ -154,7 +154,7 @@ mod tests {
 
         let original_token = BlockToken::new(PARAGRAPH_TOKENIZER_NAME, PARAGRAPH_TYPE, None);
         let token = tokenizer
-            .build_block_token(&[line], &original_token)
+            .buildBlockToken(&[line], &original_token)
             .expect("expected block token");
 
         let parse_hook = tokenizer.parse(&api);

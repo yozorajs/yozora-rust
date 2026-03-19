@@ -6,7 +6,7 @@ pub(crate) fn find_break_delimiter(
     start_index: usize,
     end_index: usize,
 ) -> Option<TokenDelimiter> {
-    let node_points = api.get_node_points();
+    let node_points = api.getNodePoints();
     if start_index + 1 >= end_index || end_index > node_points.len() {
         return None;
     }

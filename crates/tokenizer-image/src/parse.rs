@@ -16,7 +16,7 @@ pub(crate) fn parse_image_tokens(
     parse_api: &dyn ParseInlinePhaseApi,
 ) -> Vec<Node> {
     let mut nodes = Vec::with_capacity(tokens.len());
-    let node_points = parse_api.get_node_points();
+    let node_points = parse_api.getNodePoints();
 
     for token in tokens {
         let Some(data) = token.data_as::<ImageTokenData>() else {
@@ -37,10 +37,10 @@ pub(crate) fn parse_image_tokens(
 
             let destination =
                 calc_escaped_string_from_node_points(node_points, start_index, end_index, true);
-            url = parse_api.format_url(&destination);
+            url = parse_api.formatUrl(&destination);
         }
 
-        let children = parse_api.parse_inline_tokens(&data.children_tokens);
+        let children = parse_api.parseInlineTokens(Some(&data.children_tokens));
         let alt = calc_image_alt(&children);
 
         let title = data.title_content.map(|title_content| {
@@ -53,11 +53,11 @@ pub(crate) fn parse_image_tokens(
             }
         });
 
-        let position = if parse_api.should_reserve_position() {
-            parse_api.calc_position(NodeInterval {
+        let position = if parse_api.shouldReservePosition() {
+            Some(parse_api.calcPosition(NodeInterval {
                 start_index: token.start_index,
                 end_index: token.end_index,
-            })
+            }))
         } else {
             None
         };

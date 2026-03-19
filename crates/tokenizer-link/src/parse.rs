@@ -20,18 +20,18 @@ pub(crate) fn parse_link_tokens(
             continue;
         };
 
-        let position = if parse_api.should_reserve_position() {
-            parse_api.calc_position(NodeInterval {
+        let position = if parse_api.shouldReservePosition() {
+            Some(parse_api.calcPosition(NodeInterval {
                 start_index: token.start_index,
                 end_index: token.end_index,
-            })
+            }))
         } else {
             None
         };
 
         nodes.push(Node::Link(Link {
             position,
-            url: parse_api.format_url(&data.url),
+            url: parse_api.formatUrl(&data.url),
             title: data.title.clone(),
             children: if data.children_tokens.is_empty() {
                 vec![Node::Text(Text {
@@ -39,7 +39,7 @@ pub(crate) fn parse_link_tokens(
                     value: data.label.clone(),
                 })]
             } else {
-                parse_api.parse_inline_tokens(&data.children_tokens)
+                parse_api.parseInlineTokens(Some(&data.children_tokens))
             },
         }));
     }

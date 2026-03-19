@@ -18,7 +18,7 @@ pub(crate) fn parse_autolink_tokens(
     tokens: &[InlineToken],
     parse_api: &dyn ParseInlinePhaseApi,
 ) -> Vec<Node> {
-    let node_points = parse_api.get_node_points();
+    let node_points = parse_api.getNodePoints();
     let mut nodes = Vec::with_capacity(tokens.len());
 
     for token in tokens {
@@ -39,20 +39,20 @@ pub(crate) fn parse_autolink_tokens(
             url = format!("mailto:{url}");
         }
 
-        let position = if parse_api.should_reserve_position() {
-            parse_api.calc_position(NodeInterval {
+        let position = if parse_api.shouldReservePosition() {
+            Some(parse_api.calcPosition(NodeInterval {
                 start_index: token.start_index,
                 end_index: token.end_index,
-            })
+            }))
         } else {
             None
         };
 
         nodes.push(Node::Link(Link {
             position,
-            url: parse_api.format_url(&url),
+            url: parse_api.formatUrl(&url),
             title: None,
-            children: parse_api.parse_inline_tokens(&data.children_tokens),
+            children: parse_api.parseInlineTokens(Some(&data.children_tokens)),
         }));
     }
 

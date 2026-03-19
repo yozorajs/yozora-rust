@@ -16,7 +16,7 @@ impl Default for DefinitionTokenizer {
             meta: TokenizerMeta {
                 name: DEFINITION_TOKENIZER_NAME.to_string(),
                 kind: TokenizerKind::Block,
-                priority: 10,
+                priority: TokenizerPriority::ATOMIC,
             },
         }
     }

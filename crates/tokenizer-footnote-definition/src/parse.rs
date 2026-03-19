@@ -18,9 +18,9 @@ pub(crate) fn parse_footnote_definition_tokens(
             continue;
         };
 
-        let children = parse_api.parse_block_tokens(&token.children);
+        let children = parse_api.parseBlockTokens(Some(&token.children));
         nodes.push(Node::FootnoteDefinition(FootnoteDefinition {
-            position: if parse_api.should_reserve_position() {
+            position: if parse_api.shouldReservePosition() {
                 token.position.clone()
             } else {
                 None

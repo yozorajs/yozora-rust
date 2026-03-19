@@ -16,7 +16,7 @@ impl Default for AdmonitionTokenizer {
             meta: TokenizerMeta {
                 name: ADMONITION_TOKENIZER_NAME.to_string(),
                 kind: TokenizerKind::Block,
-                priority: 12,
+                priority: TokenizerPriority::FENCED_BLOCK,
             },
         }
     }

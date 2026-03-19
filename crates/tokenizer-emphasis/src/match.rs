@@ -11,9 +11,9 @@ pub(crate) fn find_delimiter(
     start_index: usize,
     end_index: usize,
 ) -> Option<TokenDelimiter> {
-    let node_points = api.get_node_points();
-    let block_start_index = api.get_block_start_index();
-    let block_end_index = api.get_block_end_index();
+    let node_points = api.getNodePoints();
+    let block_start_index = api.getBlockStartIndex();
+    let block_end_index = api.getBlockEndIndex();
 
     if start_index >= end_index || end_index > node_points.len() {
         return None;
@@ -101,7 +101,7 @@ pub(crate) fn is_delimiter_pair(
     opener_delimiter: &TokenDelimiter,
     closer_delimiter: &TokenDelimiter,
 ) -> IsDelimiterPairResult {
-    let node_points = api.get_node_points();
+    let node_points = api.getNodePoints();
 
     let Some(opener) = node_points.get(opener_delimiter.start_index) else {
         return IsDelimiterPairResult::NotPaired {
@@ -144,7 +144,7 @@ pub(crate) fn process_delimiter_pair(
         1
     };
 
-    let resolved_children = api.resolve_internal_tokens(
+    let resolved_children = api.resolveInternalTokens(
         internal_tokens,
         opener_delimiter.end_index,
         closer_delimiter.start_index,

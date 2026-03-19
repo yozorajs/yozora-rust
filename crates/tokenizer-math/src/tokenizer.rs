@@ -16,7 +16,7 @@ impl Default for MathTokenizer {
             meta: TokenizerMeta {
                 name: MATH_TOKENIZER_NAME.to_string(),
                 kind: TokenizerKind::Block,
-                priority: 11,
+                priority: TokenizerPriority::FENCED_BLOCK,
             },
         }
     }

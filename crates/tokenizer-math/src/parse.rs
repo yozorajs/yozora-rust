@@ -29,7 +29,7 @@ pub(crate) fn parse_math_tokens(
         }
 
         nodes.push(Node::Math(Math {
-            position: if parse_api.should_reserve_position() {
+            position: if parse_api.shouldReservePosition() {
                 token.position.clone()
             } else {
                 None

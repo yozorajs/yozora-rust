@@ -16,7 +16,7 @@ impl Default for BlockquoteTokenizer {
             meta: TokenizerMeta {
                 name: BLOCKQUOTE_TOKENIZER_NAME.to_string(),
                 kind: TokenizerKind::Block,
-                priority: 10,
+                priority: TokenizerPriority::CONTAINING_BLOCK,
             },
         }
     }

@@ -82,7 +82,7 @@ pub(crate) fn on_close(token: &BlockToken, api: &dyn MatchBlockPhaseApi) {
         return;
     };
 
-    api.register_footnote_definition_identifier(&data.identifier);
+    api.registerFootnoteDefinitionIdentifier(&data.identifier);
 }
 
 pub fn eat_footnote_label(

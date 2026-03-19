@@ -23,7 +23,7 @@ pub(crate) fn parse_admonition_tokens(
 
         let title = if let Some(title_line) = &data.title_line {
             if title_line.start_index < title_line.end_index {
-                parse_api.process_inlines(
+                parse_api.processInlines(
                     &title_line.node_points[title_line.start_index..title_line.end_index],
                 )
             } else {
@@ -33,9 +33,9 @@ pub(crate) fn parse_admonition_tokens(
             Vec::new()
         };
 
-        let children = parse_api.parse_block_tokens(&token.children);
+        let children = parse_api.parseBlockTokens(Some(&token.children));
         nodes.push(Node::Admonition(Admonition {
-            position: if parse_api.should_reserve_position() {
+            position: if parse_api.shouldReservePosition() {
                 token.position.clone()
             } else {
                 None

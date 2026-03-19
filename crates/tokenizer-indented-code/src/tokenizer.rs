@@ -16,7 +16,7 @@ impl Default for IndentedCodeTokenizer {
             meta: TokenizerMeta {
                 name: INDENTED_CODE_TOKENIZER_NAME.to_string(),
                 kind: TokenizerKind::Block,
-                priority: 10,
+                priority: TokenizerPriority::ATOMIC,
             },
         }
     }

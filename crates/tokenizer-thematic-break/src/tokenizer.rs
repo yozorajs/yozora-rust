@@ -16,7 +16,7 @@ impl Default for ThematicBreakTokenizer {
             meta: TokenizerMeta {
                 name: THEMATIC_BREAK_TOKENIZER_NAME.to_string(),
                 kind: TokenizerKind::Block,
-                priority: 10,
+                priority: TokenizerPriority::ATOMIC,
             },
         }
     }

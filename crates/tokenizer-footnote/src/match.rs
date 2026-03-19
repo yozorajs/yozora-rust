@@ -58,7 +58,7 @@ pub(crate) fn is_delimiter_pair(
         opener_delimiter.end_index,
         closer_delimiter.start_index,
         internal_tokens,
-        api.get_node_points(),
+        api.getNodePoints(),
     );
 
     match status {
@@ -84,7 +84,7 @@ pub(crate) fn process_delimiter_pair(
     closer_delimiter: &TokenDelimiter,
     internal_tokens: &[InlineToken],
 ) -> ProcessDelimiterPairResult {
-    let children_tokens = api.resolve_internal_tokens(
+    let children_tokens = api.resolveInternalTokens(
         internal_tokens,
         opener_delimiter.end_index,
         closer_delimiter.start_index,

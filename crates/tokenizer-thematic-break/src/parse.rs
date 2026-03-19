@@ -9,7 +9,7 @@ pub(crate) fn parse_thematic_break_tokens(
         .iter()
         .map(|token| {
             Node::ThematicBreak(ThematicBreak {
-                position: if parse_api.should_reserve_position() {
+                position: if parse_api.shouldReservePosition() {
                     token.position.clone()
                 } else {
                     None

@@ -161,7 +161,6 @@ dependencies = [
  "yozora-tokenizer-math",
  "yozora-tokenizer-paragraph",
  "yozora-tokenizer-setext-heading",
- "yozora-tokenizer-soft-break",
  "yozora-tokenizer-table",
  "yozora-tokenizer-text",
  "yozora-tokenizer-thematic-break",
@@ -192,7 +191,6 @@ dependencies = [
  "yozora-tokenizer-list",
  "yozora-tokenizer-paragraph",
  "yozora-tokenizer-setext-heading",
- "yozora-tokenizer-soft-break",
  "yozora-tokenizer-text",
  "yozora-tokenizer-thematic-break",
 ]
@@ -224,7 +222,6 @@ dependencies = [
  "yozora-tokenizer-list",
  "yozora-tokenizer-paragraph",
  "yozora-tokenizer-setext-heading",
- "yozora-tokenizer-soft-break",
  "yozora-tokenizer-table",
  "yozora-tokenizer-text",
  "yozora-tokenizer-thematic-break",
@@ -262,15 +259,6 @@ dependencies = [
 
 [[package]]
 name = "yozora-tokenizer-autolink-extension"
-version = "0.1.0"
-dependencies = [
- "yozora-ast",
- "yozora-character",
- "yozora-core-tokenizer",
-]
-
-[[package]]
-name = "yozora-tokenizer-backslash-escape"
 version = "0.1.0"
 dependencies = [
  "yozora-ast",
@@ -497,15 +485,6 @@ dependencies = [
 
 [[package]]
 name = "yozora-tokenizer-setext-heading"
-version = "0.1.0"
-dependencies = [
- "yozora-ast",
- "yozora-character",
- "yozora-core-tokenizer",
-]
-
-[[package]]
-name = "yozora-tokenizer-soft-break"
 version = "0.1.0"
 dependencies = [
  "yozora-ast",

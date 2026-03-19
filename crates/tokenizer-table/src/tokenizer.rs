@@ -16,7 +16,7 @@ impl Default for TableTokenizer {
             meta: TokenizerMeta {
                 name: TABLE_TOKENIZER_NAME.to_string(),
                 kind: TokenizerKind::Block,
-                priority: 5,
+                priority: TokenizerPriority::INTERRUPTABLE_BLOCK,
             },
         }
     }

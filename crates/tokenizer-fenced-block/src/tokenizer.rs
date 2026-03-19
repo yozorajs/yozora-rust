@@ -16,7 +16,7 @@ impl Default for FencedBlockTokenizer {
             meta: TokenizerMeta {
                 name: FENCED_BLOCK_TOKENIZER_NAME.to_string(),
                 kind: TokenizerKind::Block,
-                priority: 0,
+                priority: TokenizerPriority::FENCED_BLOCK,
             },
         }
     }

@@ -1,6 +1,8 @@
 use crate::constant::TokenizerType;
 use crate::types::match_block::{MatchBlockHook, MatchBlockPhaseApi};
-use crate::types::match_inline::{MatchInlineHook, MatchInlinePhaseApi};
+use crate::types::match_inline::{
+    MatchInlineFallbackPhaseApi, MatchInlineHook, MatchInlinePhaseApi,
+};
 use crate::types::parse_block::{ParseBlockHook, ParseBlockPhaseApi};
 use crate::types::parse_inline::{ParseInlineHook, ParseInlinePhaseApi};
 use crate::types::phrasing_content::PhrasingContentLine;
@@ -30,14 +32,14 @@ pub trait BlockTokenizer: Tokenizer {
         api: &'a dyn ParseBlockPhaseApi,
     ) -> Box<dyn ParseBlockHook + 'a>;
 
-    fn extract_phrasing_content_lines(
+    fn extractPhrasingContentLines(
         &self,
         _token: &BlockToken,
     ) -> Option<Vec<PhrasingContentLine>> {
         None
     }
 
-    fn build_block_token(
+    fn buildBlockToken(
         &self,
         _lines: &[PhrasingContentLine],
         _original_token: &BlockToken,
@@ -64,6 +66,6 @@ pub trait InlineFallbackTokenizer: InlineTokenizer {
         &self,
         start_index: usize,
         end_index: usize,
-        api: &dyn MatchInlinePhaseApi,
+        api: &dyn MatchInlineFallbackPhaseApi,
     ) -> InlineToken;
 }

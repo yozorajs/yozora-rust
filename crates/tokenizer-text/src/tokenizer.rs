@@ -19,7 +19,7 @@ impl Default for TextTokenizer {
             meta: TokenizerMeta {
                 name: TEXT_TOKENIZER_NAME.to_string(),
                 kind: TokenizerKind::Inline,
-                priority: -1,
+                priority: TokenizerPriority::FALLBACK,
             },
         }
     }
@@ -75,7 +75,7 @@ struct TextParseHook<'a> {
 
 impl ParseInlineHook for TextParseHook<'_> {
     fn parse(&self, tokens: &[InlineToken]) -> Vec<Node> {
-        let node_points = self.api.get_node_points();
+        let node_points = self.api.getNodePoints();
         let mut nodes = Vec::with_capacity(tokens.len());
 
         for token in tokens {
@@ -83,10 +83,14 @@ impl ParseInlineHook for TextParseHook<'_> {
                 continue;
             }
 
-            let position = self.api.calc_position(NodeInterval {
-                start_index: token.start_index,
-                end_index: token.end_index,
-            });
+            let position = if self.api.shouldReservePosition() {
+                Some(self.api.calcPosition(NodeInterval {
+                    start_index: token.start_index,
+                    end_index: token.end_index,
+                }))
+            } else {
+                None
+            };
 
             let value = calc_escaped_string_from_node_points(
                 node_points,
@@ -151,7 +155,7 @@ impl InlineFallbackTokenizer for TextTokenizer {
         &self,
         start_index: usize,
         end_index: usize,
-        _api: &dyn MatchInlinePhaseApi,
+        _api: &dyn MatchInlineFallbackPhaseApi,
     ) -> InlineToken {
         InlineToken::new(self.meta.name.clone(), TEXT_TYPE, (start_index, end_index))
     }
@@ -165,12 +169,78 @@ mod tests {
     struct DummyInlineApi;
 
     impl MatchInlinePhaseApi for DummyInlineApi {
-        fn has_definition(&self, _identifier: &str) -> bool {
+        fn hasDefinition(&self, _identifier: &str) -> bool {
             false
         }
 
-        fn has_footnote_definition(&self, _identifier: &str) -> bool {
+        fn hasFootnoteDefinition(&self, _identifier: &str) -> bool {
             false
+        }
+
+        fn getNodePoints(&self) -> &[NodePoint] {
+            &[]
+        }
+
+        fn getBlockStartIndex(&self) -> usize {
+            0
+        }
+
+        fn getBlockEndIndex(&self) -> usize {
+            0
+        }
+
+        fn resolveFallbackTokens(
+            &self,
+            tokens: &[InlineToken],
+            _token_start_index: usize,
+            _token_end_index: usize,
+        ) -> Vec<InlineToken> {
+            tokens.to_vec()
+        }
+
+        fn resolveInternalTokens(
+            &self,
+            higher_priority_tokens: &[InlineToken],
+            _start_index: usize,
+            _end_index: usize,
+        ) -> Vec<InlineToken> {
+            higher_priority_tokens.to_vec()
+        }
+    }
+
+    impl MatchInlineFallbackPhaseApi for DummyInlineApi {
+        fn hasDefinition(&self, identifier: &str) -> bool {
+            MatchInlinePhaseApi::hasDefinition(self, identifier)
+        }
+
+        fn hasFootnoteDefinition(&self, identifier: &str) -> bool {
+            MatchInlinePhaseApi::hasFootnoteDefinition(self, identifier)
+        }
+
+        fn getNodePoints(&self) -> &[NodePoint] {
+            MatchInlinePhaseApi::getNodePoints(self)
+        }
+
+        fn getBlockStartIndex(&self) -> usize {
+            MatchInlinePhaseApi::getBlockStartIndex(self)
+        }
+
+        fn getBlockEndIndex(&self) -> usize {
+            MatchInlinePhaseApi::getBlockEndIndex(self)
+        }
+
+        fn resolveFallbackTokens(
+            &self,
+            tokens: &[InlineToken],
+            token_start_index: usize,
+            token_end_index: usize,
+        ) -> Vec<InlineToken> {
+            MatchInlinePhaseApi::resolveFallbackTokens(
+                self,
+                tokens,
+                token_start_index,
+                token_end_index,
+            )
         }
     }
 
@@ -179,31 +249,31 @@ mod tests {
     }
 
     impl ParseInlinePhaseApi for DummyParseApi {
-        fn should_reserve_position(&self) -> bool {
+        fn shouldReservePosition(&self) -> bool {
             false
         }
 
-        fn calc_position(&self, _interval: NodeInterval) -> Option<yozora_ast::Position> {
-            None
+        fn calcPosition(&self, _interval: NodeInterval) -> yozora_ast::Position {
+            panic!("calcPosition should not be called in this test")
         }
 
-        fn format_url(&self, url: &str) -> String {
+        fn formatUrl(&self, url: &str) -> String {
             url.to_string()
         }
 
-        fn get_node_points(&self) -> &[NodePoint] {
+        fn getNodePoints(&self) -> &[NodePoint] {
             &self.node_points
         }
 
-        fn has_definition(&self, _identifier: &str) -> bool {
+        fn hasDefinition(&self, _identifier: &str) -> bool {
             false
         }
 
-        fn has_footnote_definition(&self, _identifier: &str) -> bool {
+        fn hasFootnoteDefinition(&self, _identifier: &str) -> bool {
             false
         }
 
-        fn parse_inline_tokens(&self, _tokens: &[InlineToken]) -> Vec<Node> {
+        fn parseInlineTokens(&self, _tokens: Option<&[InlineToken]>) -> Vec<Node> {
             Vec::new()
         }
     }

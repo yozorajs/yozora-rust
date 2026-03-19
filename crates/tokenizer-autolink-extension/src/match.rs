@@ -120,7 +120,7 @@ pub(crate) fn process_single_delimiter(
         InlineToken::new("", LINK_TYPE, (delimiter.start_index, delimiter.end_index)).with_data(
             AutolinkExtensionTokenData {
                 content_type,
-                children_tokens: api.resolve_fallback_tokens(
+                children_tokens: api.resolveFallbackTokens(
                     &[],
                     delimiter.start_index,
                     delimiter.end_index,

@@ -39,7 +39,7 @@ impl ListTokenizer {
             meta: TokenizerMeta {
                 name: LIST_TOKENIZER_NAME.to_string(),
                 kind: TokenizerKind::Block,
-                priority: 10,
+                priority: TokenizerPriority::CONTAINING_BLOCK,
             },
             enable_task_list_item: options.enable_task_list_item,
             empty_item_could_not_interrupted_types: options.empty_item_could_not_interrupted_types,

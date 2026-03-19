@@ -47,7 +47,7 @@ pub(crate) fn parse_indented_code_tokens(
         }
 
         nodes.push(Node::Code(Code {
-            position: if parse_api.should_reserve_position() {
+            position: if parse_api.shouldReservePosition() {
                 token.position.clone()
             } else {
                 None

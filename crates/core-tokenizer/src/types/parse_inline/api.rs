@@ -4,18 +4,19 @@ use yozora_character::NodePoint;
 use crate::types::token::InlineToken;
 use crate::types::util::NodeInterval;
 
+#[allow(non_snake_case)]
 pub trait ParseInlinePhaseApi {
-    fn should_reserve_position(&self) -> bool;
+    fn shouldReservePosition(&self) -> bool;
 
-    fn calc_position(&self, interval: NodeInterval) -> Option<Position>;
+    fn calcPosition(&self, interval: NodeInterval) -> Position;
 
-    fn format_url(&self, url: &str) -> String;
+    fn formatUrl(&self, url: &str) -> String;
 
-    fn get_node_points(&self) -> &[NodePoint];
+    fn getNodePoints(&self) -> &[NodePoint];
 
-    fn has_definition(&self, identifier: &str) -> bool;
+    fn hasDefinition(&self, identifier: &str) -> bool;
 
-    fn has_footnote_definition(&self, identifier: &str) -> bool;
+    fn hasFootnoteDefinition(&self, identifier: &str) -> bool;
 
-    fn parse_inline_tokens(&self, tokens: &[InlineToken]) -> Vec<Node>;
+    fn parseInlineTokens(&self, tokens: Option<&[InlineToken]>) -> Vec<Node>;
 }

@@ -16,7 +16,7 @@ impl Default for FootnoteTokenizer {
             meta: TokenizerMeta {
                 name: FOOTNOTE_TOKENIZER_NAME.to_string(),
                 kind: TokenizerKind::Inline,
-                priority: 3,
+                priority: TokenizerPriority::LINKS,
             },
         }
     }
@@ -58,7 +58,7 @@ impl MatchInlineHook for FootnoteMatchHook<'_> {
             &mut last_delimiter,
             |start_index, end_index| {
                 let entry = r#match::find_delimiter_entry(
-                    self.api.get_node_points(),
+                    self.api.getNodePoints(),
                     start_index,
                     end_index,
                 )?;

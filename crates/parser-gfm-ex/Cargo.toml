@@ -13,7 +13,6 @@ yozora-tokenizer-autolink = { path = "../tokenizer-autolink" }
 yozora-tokenizer-autolink-extension = { path = "../tokenizer-autolink-extension" }
 yozora-tokenizer-blockquote = { path = "../tokenizer-blockquote" }
 yozora-tokenizer-break = { path = "../tokenizer-break" }
-yozora-tokenizer-soft-break = { path = "../tokenizer-soft-break" }
 yozora-tokenizer-definition = { path = "../tokenizer-definition" }
 yozora-tokenizer-delete = { path = "../tokenizer-delete" }
 yozora-tokenizer-emphasis = { path = "../tokenizer-emphasis" }

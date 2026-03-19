@@ -115,9 +115,17 @@ impl DefaultParser {
     pub fn useFallbackTokenizer(&mut self, tokenizer: AnyFallbackTokenizer) -> &mut Self {
         match tokenizer {
             AnyFallbackTokenizer::Block(tokenizer) => {
+                if let Some(existing) = self.blockFallbackTokenizer.as_ref() {
+                    let name = existing.name().to_string();
+                    self.unmountTokenizer(&name);
+                }
                 self.blockFallbackTokenizer = Some(tokenizer);
             }
             AnyFallbackTokenizer::Inline(tokenizer) => {
+                if let Some(existing) = self.inlineFallbackTokenizer.as_ref() {
+                    let name = existing.name().to_string();
+                    self.unmountTokenizer(&name);
+                }
                 self.inlineFallbackTokenizer = Some(tokenizer);
             }
         }

@@ -66,10 +66,10 @@ pub(crate) fn parse_heading_tokens(
         }];
 
         let contents = merge_and_strip_content_lines(&lines, 0, lines.len());
-        let children = parse_api.process_inlines(&contents);
+        let children = parse_api.processInlines(&contents);
 
         nodes.push(Node::Heading(Heading {
-            position: if parse_api.should_reserve_position() {
+            position: if parse_api.shouldReservePosition() {
                 token.position.clone()
             } else {
                 None

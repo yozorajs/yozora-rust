@@ -5,14 +5,15 @@ pub mod util;
 
 use yozora_ast::Node;
 
-pub use constant::{DelimiterType, TokenizerType};
+pub use constant::{DelimiterType, TokenizerPriority, TokenizerType};
 pub use tokenizers::{gen_find_delimiter, genFindDelimiter, BaseBlockTokenizer, BaseInlineTokenizer};
 pub use types::match_block::{
     EatAndInterruptPreviousSiblingResult, EatContinuationTextResult, EatLazyContinuationTextResult,
     EatOpenerResult, MatchBlockHook, MatchBlockPhaseApi, OnCloseResult, RemainingSibling,
 };
 pub use types::match_inline::{
-    IsDelimiterPairResult, MatchInlineHook, MatchInlinePhaseApi, ProcessDelimiterPairResult,
+    IsDelimiterPairResult, MatchInlineFallbackPhaseApi, MatchInlineHook, MatchInlinePhaseApi,
+    ProcessDelimiterPairResult,
 };
 pub use types::parse_block::{ParseBlockHook, ParseBlockPhaseApi};
 pub use types::parse_inline::{ParseInlineHook, ParseInlinePhaseApi};

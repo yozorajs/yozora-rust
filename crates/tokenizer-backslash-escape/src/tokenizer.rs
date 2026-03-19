@@ -18,7 +18,7 @@ impl Default for BackslashEscapeTokenizer {
             meta: TokenizerMeta {
                 name: BACKSLASH_ESCAPE_TOKENIZER_NAME.to_string(),
                 kind: TokenizerKind::Inline,
-                priority: 0,
+                priority: TokenizerPriority::SOFT_INLINE,
             },
         }
     }
@@ -52,9 +52,9 @@ struct BackslashEscapeMatchHook {
 
 impl BackslashEscapeMatchHook {
     fn new(api: &dyn MatchInlinePhaseApi) -> Self {
-        let start_index = api.get_block_start_index();
-        let end_index = api.get_block_end_index();
-        let source = build_source(api.get_node_points(), start_index, end_index);
+        let start_index = api.getBlockStartIndex();
+        let end_index = api.getBlockEndIndex();
+        let source = build_source(api.getNodePoints(), start_index, end_index);
 
         let Some(value) = r#match::match_backslash_escaped_text(&source) else {
             return Self {
@@ -113,11 +113,11 @@ impl ParseInlineHook for BackslashEscapeParseHook<'_> {
                 continue;
             };
 
-            let position = if self.api.should_reserve_position() {
-                self.api.calc_position(NodeInterval {
+            let position = if self.api.shouldReservePosition() {
+                Some(self.api.calcPosition(NodeInterval {
                     start_index: token.start_index,
                     end_index: token.end_index,
-                })
+                }))
             } else {
                 None
             };

@@ -16,7 +16,7 @@ impl Default for SoftBreakTokenizer {
             meta: TokenizerMeta {
                 name: SOFT_BREAK_TOKENIZER_NAME.to_string(),
                 kind: TokenizerKind::Inline,
-                priority: 0,
+                priority: TokenizerPriority::SOFT_INLINE,
             },
         }
     }
@@ -57,7 +57,7 @@ impl MatchInlineHook for SoftBreakMatchHook<'_> {
         }
 
         let Some(value) =
-            r#match::match_soft_break_value(self.api.get_node_points(), start_index, end_index)
+            r#match::match_soft_break_value(self.api.getNodePoints(), start_index, end_index)
         else {
             self.last_delimiter = None;
             self.last_data = None;

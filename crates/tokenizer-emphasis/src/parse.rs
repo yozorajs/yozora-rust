@@ -18,12 +18,12 @@ pub(crate) fn parse_emphasis_tokens(
             continue;
         };
 
-        let children = parse_api.parse_inline_tokens(&data.children);
-        let position = if parse_api.should_reserve_position() {
-            parse_api.calc_position(NodeInterval {
+        let children = parse_api.parseInlineTokens(Some(&data.children));
+        let position = if parse_api.shouldReservePosition() {
+            Some(parse_api.calcPosition(NodeInterval {
                 start_index: token.start_index,
                 end_index: token.end_index,
-            })
+            }))
         } else {
             None
         };

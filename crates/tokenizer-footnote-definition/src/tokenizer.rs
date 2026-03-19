@@ -16,7 +16,7 @@ impl Default for FootnoteDefinitionTokenizer {
             meta: TokenizerMeta {
                 name: FOOTNOTE_DEFINITION_TOKENIZER_NAME.to_string(),
                 kind: TokenizerKind::Block,
-                priority: 10,
+                priority: TokenizerPriority::CONTAINING_BLOCK,
             },
         }
     }

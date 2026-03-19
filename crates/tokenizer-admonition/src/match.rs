@@ -68,7 +68,7 @@ pub(crate) fn eat_continuation_text(
     let mut body_lines = data.body_lines;
     body_lines.push(calc_content_line(line, data.indent));
 
-    token.children = api.rollback_phrasing_lines(&body_lines, None);
+    token.children = api.rollbackPhrasingLines(&body_lines, None);
 
     token.data = std::sync::Arc::new(AdmonitionTokenData {
         keyword: data.keyword,

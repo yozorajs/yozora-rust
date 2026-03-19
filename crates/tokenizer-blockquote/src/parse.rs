@@ -8,8 +8,8 @@ pub(crate) fn parse_blockquote_tokens(
     let mut nodes = Vec::with_capacity(tokens.len());
 
     for token in tokens {
-        let children = parse_api.parse_block_tokens(&token.children);
-        let position = if parse_api.should_reserve_position() {
+        let children = parse_api.parseBlockTokens(Some(&token.children));
+        let position = if parse_api.shouldReservePosition() {
             token.position.clone()
         } else {
             None

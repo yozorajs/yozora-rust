@@ -18,7 +18,7 @@ pub(crate) fn find_delimiter_entry(
     start_index: usize,
     end_index: usize,
 ) -> Option<DelimiterEntry> {
-    let node_points = api.get_node_points();
+    let node_points = api.getNodePoints();
     let mut i = start_index;
 
     while i < end_index {
@@ -53,7 +53,7 @@ pub(crate) fn process_single_delimiter(
         return Vec::new();
     }
 
-    let node_points = api.get_node_points();
+    let node_points = api.getNodePoints();
     let Some((label, identifier)) = resolve_link_label_and_identifier(
         node_points,
         delimiter.start_index + 2,
@@ -62,7 +62,7 @@ pub(crate) fn process_single_delimiter(
         return Vec::new();
     };
 
-    if !api.has_footnote_definition(&identifier) {
+    if !api.hasFootnoteDefinition(&identifier) {
         return Vec::new();
     }
 

@@ -16,7 +16,7 @@ impl Default for HeadingTokenizer {
             meta: TokenizerMeta {
                 name: HEADING_TOKENIZER_NAME.to_string(),
                 kind: TokenizerKind::Block,
-                priority: 10,
+                priority: TokenizerPriority::ATOMIC,
             },
         }
     }

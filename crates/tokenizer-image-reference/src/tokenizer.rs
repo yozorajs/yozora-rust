@@ -18,7 +18,7 @@ impl Default for ImageReferenceTokenizer {
             meta: TokenizerMeta {
                 name: IMAGE_REFERENCE_TOKENIZER_NAME.to_string(),
                 kind: TokenizerKind::Inline,
-                priority: 6,
+                priority: TokenizerPriority::LINKS,
             },
         }
     }
@@ -84,7 +84,7 @@ impl MatchInlineHook for ImageReferenceMatchHook<'_> {
             &mut last_delimiter,
             |start_index, end_index| {
                 let entry = r#match::find_image_reference_delimiter_entry(
-                    self.api.get_node_points(),
+                    self.api.getNodePoints(),
                     start_index,
                     end_index,
                 )?;
@@ -108,7 +108,7 @@ impl MatchInlineHook for ImageReferenceMatchHook<'_> {
             opener_delimiter.end_index,
             closer_delimiter.start_index,
             internal_tokens,
-            self.api.get_node_points(),
+            self.api.getNodePoints(),
         );
 
         match status {
@@ -141,7 +141,7 @@ impl MatchInlineHook for ImageReferenceMatchHook<'_> {
             closer_delimiter,
             &brackets,
             internal_tokens,
-            self.api.get_node_points(),
+            self.api.getNodePoints(),
         );
 
         ProcessDelimiterPairResult {

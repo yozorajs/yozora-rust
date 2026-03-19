@@ -21,7 +21,7 @@ impl Default for LinkTokenizer {
             meta: TokenizerMeta {
                 name: LINK_TOKENIZER_NAME.to_string(),
                 kind: TokenizerKind::Inline,
-                priority: 6,
+                priority: TokenizerPriority::LINKS,
             },
         }
     }
@@ -54,9 +54,9 @@ struct LinkMatchHook<'a> {
 
 impl<'a> LinkMatchHook<'a> {
     fn new(api: &'a dyn MatchInlinePhaseApi) -> Self {
-        let block_start_index = api.get_block_start_index();
-        let block_end_index = api.get_block_end_index();
-        let source = r#match::build_source(api.get_node_points(), block_start_index, block_end_index);
+        let block_start_index = api.getBlockStartIndex();
+        let block_end_index = api.getBlockEndIndex();
+        let source = r#match::build_source(api.getNodePoints(), block_start_index, block_end_index);
         let char_starts = r#match::build_char_starts(&source);
 
         Self {
@@ -107,7 +107,7 @@ impl MatchInlineHook for LinkMatchHook<'_> {
                 let entry = r#match::find_link_delimiter_entry(
                     &self.source,
                     &self.char_starts,
-                    self.api.get_node_points(),
+                    self.api.getNodePoints(),
                     self.block_start_index,
                     self.block_end_index,
                     start_index,
@@ -141,7 +141,7 @@ impl MatchInlineHook for LinkMatchHook<'_> {
             opener_delimiter.end_index,
             closer_delimiter.start_index,
             internal_tokens,
-            self.api.get_node_points(),
+            self.api.getNodePoints(),
         );
 
         match status {
@@ -175,14 +175,14 @@ impl MatchInlineHook for LinkMatchHook<'_> {
             };
         };
 
-        let children_tokens = self.api.resolve_internal_tokens(
+        let children_tokens = self.api.resolveInternalTokens(
             internal_tokens,
             opener_delimiter.end_index,
             closer_delimiter.start_index,
         );
 
         let token = r#match::create_link_token(
-            self.api.get_node_points(),
+            self.api.getNodePoints(),
             opener_delimiter,
             closer_delimiter,
             data.url,
@@ -237,27 +237,36 @@ mod tests {
     }
 
     impl MatchInlinePhaseApi for DummyMatchApi {
-        fn has_definition(&self, _identifier: &str) -> bool {
+        fn hasDefinition(&self, _identifier: &str) -> bool {
             false
         }
 
-        fn has_footnote_definition(&self, _identifier: &str) -> bool {
+        fn hasFootnoteDefinition(&self, _identifier: &str) -> bool {
             false
         }
 
-        fn get_node_points(&self) -> &[NodePoint] {
+        fn getNodePoints(&self) -> &[NodePoint] {
             &self.node_points
         }
 
-        fn get_block_start_index(&self) -> usize {
+        fn getBlockStartIndex(&self) -> usize {
             0
         }
 
-        fn get_block_end_index(&self) -> usize {
+        fn getBlockEndIndex(&self) -> usize {
             self.node_points.len()
         }
 
-        fn resolve_internal_tokens(
+        fn resolveFallbackTokens(
+            &self,
+            tokens: &[InlineToken],
+            _token_start_index: usize,
+            _token_end_index: usize,
+        ) -> Vec<InlineToken> {
+            tokens.to_vec()
+        }
+
+        fn resolveInternalTokens(
             &self,
             _higher_priority_tokens: &[InlineToken],
             start_index: usize,
@@ -272,31 +281,34 @@ mod tests {
     }
 
     impl ParseInlinePhaseApi for DummyParseApi {
-        fn should_reserve_position(&self) -> bool {
+        fn shouldReservePosition(&self) -> bool {
             false
         }
 
-        fn calc_position(&self, _interval: NodeInterval) -> Option<yozora_ast::Position> {
-            None
+        fn calcPosition(&self, _interval: NodeInterval) -> yozora_ast::Position {
+            panic!("calcPosition should not be called in this test")
         }
 
-        fn format_url(&self, url: &str) -> String {
+        fn formatUrl(&self, url: &str) -> String {
             url.to_string()
         }
 
-        fn get_node_points(&self) -> &[NodePoint] {
+        fn getNodePoints(&self) -> &[NodePoint] {
             &self.node_points
         }
 
-        fn has_definition(&self, _identifier: &str) -> bool {
+        fn hasDefinition(&self, _identifier: &str) -> bool {
             false
         }
 
-        fn has_footnote_definition(&self, _identifier: &str) -> bool {
+        fn hasFootnoteDefinition(&self, _identifier: &str) -> bool {
             false
         }
 
-        fn parse_inline_tokens(&self, tokens: &[InlineToken]) -> Vec<Node> {
+        fn parseInlineTokens(&self, tokens: Option<&[InlineToken]>) -> Vec<Node> {
+            let Some(tokens) = tokens else {
+                return Vec::new();
+            };
             tokens
                 .iter()
                 .map(|token| {
@@ -325,10 +337,10 @@ mod tests {
 
         let mut hook = tokenizer.r#match(&match_api);
         let opener = hook
-            .findDelimiter((0, match_api.get_block_end_index()))
+            .findDelimiter((0, match_api.getBlockEndIndex()))
             .expect("expected opener");
         let closer = hook
-            .findDelimiter((opener.end_index, match_api.get_block_end_index()))
+            .findDelimiter((opener.end_index, match_api.getBlockEndIndex()))
             .expect("expected closer");
 
         let result = hook.processDelimiterPair(&opener, &closer, &[]);

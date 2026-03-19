@@ -339,7 +339,7 @@ pub(crate) fn on_close(
     }
 
     let (_, identifier) = resolve_label_and_identifier(&data.label.node_points)?;
-    match_api.register_definition_identifier(&identifier);
+    match_api.registerDefinitionIdentifier(&identifier);
     result
 }
 

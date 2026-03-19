@@ -18,7 +18,7 @@ impl Default for ImageTokenizer {
             meta: TokenizerMeta {
                 name: IMAGE_TOKENIZER_NAME.to_string(),
                 kind: TokenizerKind::Inline,
-                priority: 5,
+                priority: TokenizerPriority::LINKS,
             },
         }
     }
@@ -51,10 +51,10 @@ struct ImageMatchHook<'a> {
 
 impl<'a> ImageMatchHook<'a> {
     fn new(api: &'a dyn MatchInlinePhaseApi) -> Self {
-        let block_start_index = api.get_block_start_index();
-        let block_end_index = api.get_block_end_index();
+        let block_start_index = api.getBlockStartIndex();
+        let block_end_index = api.getBlockEndIndex();
         let source =
-            r#match::build_source(api.get_node_points(), block_start_index, block_end_index);
+            r#match::build_source(api.getNodePoints(), block_start_index, block_end_index);
         let char_starts = r#match::build_char_starts(&source);
 
         Self {
@@ -105,7 +105,7 @@ impl MatchInlineHook for ImageMatchHook<'_> {
                 let entry = r#match::find_image_delimiter_entry(
                     &self.source,
                     &self.char_starts,
-                    self.api.get_node_points(),
+                    self.api.getNodePoints(),
                     self.block_start_index,
                     self.block_end_index,
                     start_index,
@@ -131,7 +131,7 @@ impl MatchInlineHook for ImageMatchHook<'_> {
             opener_delimiter.end_index,
             closer_delimiter.start_index,
             internal_tokens,
-            self.api.get_node_points(),
+            self.api.getNodePoints(),
         );
 
         match status {
@@ -165,7 +165,7 @@ impl MatchInlineHook for ImageMatchHook<'_> {
             };
         };
 
-        let children_tokens = self.api.resolve_internal_tokens(
+        let children_tokens = self.api.resolveInternalTokens(
             internal_tokens,
             opener_delimiter.end_index,
             closer_delimiter.start_index,

@@ -2,40 +2,49 @@ use yozora_character::NodePoint;
 
 use crate::types::token::InlineToken;
 
-pub trait MatchInlinePhaseApi {
-    fn has_definition(&self, identifier: &str) -> bool;
+#[allow(non_snake_case)]
+pub trait MatchInlineFallbackPhaseApi {
+    fn hasDefinition(&self, identifier: &str) -> bool;
 
-    fn has_footnote_definition(&self, identifier: &str) -> bool;
+    fn hasFootnoteDefinition(&self, identifier: &str) -> bool;
 
-    fn get_node_points(&self) -> &[NodePoint] {
-        &[]
-    }
+    fn getNodePoints(&self) -> &[NodePoint];
 
-    fn get_block_start_index(&self) -> usize {
-        0
-    }
+    fn getBlockStartIndex(&self) -> usize;
 
-    fn get_block_end_index(&self) -> usize {
-        0
-    }
+    fn getBlockEndIndex(&self) -> usize;
 
-    fn resolve_fallback_tokens(
+    fn resolveFallbackTokens(
         &self,
         tokens: &[InlineToken],
         token_start_index: usize,
         token_end_index: usize,
-    ) -> Vec<InlineToken> {
-        let _ = (token_start_index, token_end_index);
-        tokens.to_vec()
-    }
+    ) -> Vec<InlineToken>;
+}
 
-    fn resolve_internal_tokens(
+#[allow(non_snake_case)]
+pub trait MatchInlinePhaseApi {
+    fn hasDefinition(&self, identifier: &str) -> bool;
+
+    fn hasFootnoteDefinition(&self, identifier: &str) -> bool;
+
+    fn getNodePoints(&self) -> &[NodePoint];
+
+    fn getBlockStartIndex(&self) -> usize;
+
+    fn getBlockEndIndex(&self) -> usize;
+
+    fn resolveFallbackTokens(
+        &self,
+        tokens: &[InlineToken],
+        token_start_index: usize,
+        token_end_index: usize,
+    ) -> Vec<InlineToken>;
+
+    fn resolveInternalTokens(
         &self,
         higher_priority_tokens: &[InlineToken],
         start_index: usize,
         end_index: usize,
-    ) -> Vec<InlineToken> {
-        let _ = (start_index, end_index);
-        higher_priority_tokens.to_vec()
-    }
+    ) -> Vec<InlineToken>;
 }

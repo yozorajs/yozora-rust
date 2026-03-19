@@ -195,7 +195,7 @@ pub(crate) fn process_single_delimiter(
         while bracket_index < brackets.len() {
             let bracket = &brackets[bracket_index];
             if let Some(identifier) = &bracket.identifier {
-                if api.has_definition(identifier) {
+                if api.hasDefinition(identifier) {
                     found_index = Some(bracket_index);
                     break;
                 }
@@ -217,7 +217,7 @@ pub(crate) fn process_single_delimiter(
         // Full reference: `[label0][label1]` where the second bracket resolves.
         if (last_bracket_index + 1) < current_index as isize {
             let previous = &brackets[current_index - 1];
-            let children_tokens = api.resolve_internal_tokens(
+            let children_tokens = api.resolveInternalTokens(
                 &[],
                 previous.start_index + 1,
                 previous.end_index.saturating_sub(1),
@@ -242,7 +242,7 @@ pub(crate) fn process_single_delimiter(
 
         // Shortcut reference: `[label]`.
         if current_index + 1 == brackets.len() {
-            let children_tokens = api.resolve_internal_tokens(
+            let children_tokens = api.resolveInternalTokens(
                 &[],
                 bracket.start_index + 1,
                 bracket.end_index.saturating_sub(1),
@@ -265,7 +265,7 @@ pub(crate) fn process_single_delimiter(
         // Collapsed reference: `[label][]`.
         if current_index + 1 < brackets.len() && brackets[current_index + 1].identifier.is_none() {
             let collapsed_tail = &brackets[current_index + 1];
-            let children_tokens = api.resolve_internal_tokens(
+            let children_tokens = api.resolveInternalTokens(
                 &[],
                 bracket.start_index + 1,
                 bracket.end_index.saturating_sub(1),

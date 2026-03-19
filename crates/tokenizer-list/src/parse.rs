@@ -56,7 +56,7 @@ fn resolve_list(tokens: &[&BlockToken], parse_api: &dyn ParseBlockPhaseApi) -> O
     let mut children = Vec::with_capacity(tokens.len());
     for token in tokens {
         let data = token.data_as::<TokenData>()?;
-        let item_nodes = parse_api.parse_block_tokens(&token.children);
+        let item_nodes = parse_api.parseBlockTokens(Some(&token.children));
         let item_children = if spread {
             item_nodes
         } else {
@@ -64,7 +64,7 @@ fn resolve_list(tokens: &[&BlockToken], parse_api: &dyn ParseBlockPhaseApi) -> O
         };
 
         children.push(Node::ListItem(ListItem {
-            position: if parse_api.should_reserve_position() {
+            position: if parse_api.shouldReservePosition() {
                 token.position.clone()
             } else {
                 None
@@ -74,7 +74,7 @@ fn resolve_list(tokens: &[&BlockToken], parse_api: &dyn ParseBlockPhaseApi) -> O
         }));
     }
 
-    let position = if parse_api.should_reserve_position() {
+    let position = if parse_api.shouldReservePosition() {
         calc_list_position(tokens)
     } else {
         None

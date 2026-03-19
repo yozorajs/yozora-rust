@@ -158,8 +158,8 @@ pub(crate) fn process_delimiter_pair(
     if let Some(bracket) = bracket {
         if let (Some(label), Some(identifier)) = (bracket.label.clone(), bracket.identifier.clone())
         {
-            if api.has_definition(&identifier) {
-                let children_tokens = api.resolve_internal_tokens(
+            if api.hasDefinition(&identifier) {
+                let children_tokens = api.resolveInternalTokens(
                     internal_tokens,
                     opener_delimiter.end_index,
                     closer_delimiter.start_index,
@@ -186,14 +186,14 @@ pub(crate) fn process_delimiter_pair(
 
     if next_index >= 0 && next_index as usize == closer_delimiter.start_index + 1 {
         if let Some((label, identifier)) = label_and_identifier {
-            if api.has_definition(&identifier) {
+            if api.hasDefinition(&identifier) {
                 let reference_type = if bracket.is_none() {
                     ReferenceType::Shortcut
                 } else {
                     ReferenceType::Collapsed
                 };
 
-                let children_tokens = api.resolve_internal_tokens(
+                let children_tokens = api.resolveInternalTokens(
                     internal_tokens,
                     opener_delimiter.end_index,
                     closer_delimiter.start_index,

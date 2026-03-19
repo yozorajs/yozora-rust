@@ -83,7 +83,7 @@ pub(crate) fn process_single_delimiter(
     content_type: AutolinkContentType,
 ) -> Vec<InlineToken> {
     let children_tokens = if delimiter.end_index > delimiter.start_index + 1 {
-        api.resolve_fallback_tokens(&[], delimiter.start_index + 1, delimiter.end_index - 1)
+        api.resolveFallbackTokens(&[], delimiter.start_index + 1, delimiter.end_index - 1)
     } else {
         Vec::new()
     };

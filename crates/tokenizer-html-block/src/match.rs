@@ -1,7 +1,16 @@
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct HtmlBlockToken {
-    pub consumed_lines: usize,
-    pub value: String,
+use std::sync::Arc;
+
+use yozora_ast::HTML_TYPE;
+use yozora_character::calc_string_from_node_points;
+use yozora_core_tokenizer::{
+    calc_end_point, calc_start_point, BlockToken, EatAndInterruptPreviousSiblingResult,
+    EatContinuationTextResult, EatOpenerResult, PhrasingContentLine, RemainingSibling,
+};
+
+#[derive(Debug, Clone)]
+pub(crate) struct HtmlBlockTokenData {
+    pub kind: HtmlBlockKind,
+    pub lines: Vec<PhrasingContentLine>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,59 +41,78 @@ impl HtmlBlockKind {
     }
 }
 
-pub(crate) fn can_interrupt_paragraph_with_lines(lines: &[&str]) -> bool {
-    let Some(first) = lines.first().copied() else {
-        return false;
-    };
+pub(crate) fn eat_opener(line: &PhrasingContentLine) -> Option<EatOpenerResult> {
+    let source = calc_line_text(line);
+    let kind = detect_html_block_kind(&source)?;
 
-    !matches!(detect_html_block_kind(first), Some(HtmlBlockKind::Type7))
-}
+    let token =
+        BlockToken::new("", HTML_TYPE, calc_line_position(line)).with_data(HtmlBlockTokenData {
+            kind: kind.clone(),
+            lines: vec![line.clone()],
+        });
 
-pub(crate) fn match_html_block_token(lines: &[&str]) -> Option<HtmlBlockToken> {
-    let first = *lines.first()?;
-    let kind = detect_html_block_kind(first)?;
-
-    let mut consumed_lines = 0usize;
-    let mut body = Vec::new();
-    let mut last_line_has_line_end = false;
-
-    for (idx, line) in lines.iter().enumerate() {
-        if idx > 0 && kind.ends_on_blank_line() && line.trim().is_empty() {
-            break;
-        }
-
-        last_line_has_line_end = line.ends_with('\n');
-        body.push(line.trim_end_matches('\n').to_string());
-        consumed_lines += 1;
-
-        if kind.is_closed_by_line(line) {
-            break;
-        }
-    }
-
-    if consumed_lines == 0 {
-        return None;
-    }
-
-    let mut value = body.join("\n");
-    if consumed_lines < lines.len() {
-        value.push('\n');
-    } else if last_line_has_line_end {
-        value.push('\n');
-    } else if matches!(kind, HtmlBlockKind::Type6)
-        && should_append_unclosed_type7_newline(first, &body)
-        && !value.ends_with('\n')
-    {
-        value.push('\n');
-    }
-
-    Some(HtmlBlockToken {
-        consumed_lines,
-        value,
+    let saturated = !kind.ends_on_blank_line() && kind.is_closed_by_line(&source);
+    Some(EatOpenerResult {
+        token,
+        next_index: line.end_index,
+        saturated,
     })
 }
 
+pub(crate) fn eat_and_interrupt_previous_sibling(
+    line: &PhrasingContentLine,
+    prev_sibling_token: &BlockToken,
+) -> Option<EatAndInterruptPreviousSiblingResult> {
+    let opener = eat_opener(line)?;
+    let data = opener.token.data_as::<HtmlBlockTokenData>()?;
+    if data.kind == HtmlBlockKind::Type7 {
+        return None;
+    }
+
+    Some(EatAndInterruptPreviousSiblingResult {
+        token: opener.token,
+        next_index: opener.next_index,
+        saturated: opener.saturated,
+        remaining_sibling: RemainingSibling::One(prev_sibling_token.clone()),
+    })
+}
+
+pub(crate) fn eat_continuation_text(
+    line: &PhrasingContentLine,
+    token: &mut BlockToken,
+) -> EatContinuationTextResult {
+    let Some(data) = token.data_as::<HtmlBlockTokenData>().cloned() else {
+        return EatContinuationTextResult::NotMatched;
+    };
+
+    let source = calc_line_text(line);
+    if data.kind.ends_on_blank_line() && source.trim().is_empty() {
+        return EatContinuationTextResult::NotMatched;
+    }
+
+    let mut lines = data.lines;
+    lines.push(line.clone());
+    let should_close = !data.kind.ends_on_blank_line() && data.kind.is_closed_by_line(&source);
+
+    token.data = Arc::new(HtmlBlockTokenData {
+        kind: data.kind,
+        lines,
+    });
+    update_token_end_position(token, line);
+
+    if should_close {
+        EatContinuationTextResult::Closing {
+            next_index: line.end_index,
+        }
+    } else {
+        EatContinuationTextResult::Opening {
+            next_index: line.end_index,
+        }
+    }
+}
+
 pub(crate) fn detect_html_block_kind(line: &str) -> Option<HtmlBlockKind> {
+    let line = line.trim_end_matches(['\n', '\r']);
     let leading_spaces = line.chars().take_while(|ch| *ch == ' ').count();
     if leading_spaces >= 4 {
         return None;
@@ -127,6 +155,38 @@ pub(crate) fn detect_html_block_kind(line: &str) -> Option<HtmlBlockKind> {
     }
 
     None
+}
+
+fn calc_line_text(line: &PhrasingContentLine) -> String {
+    calc_string_from_node_points(&line.node_points, line.start_index, line.end_index, false)
+}
+
+fn calc_line_position(line: &PhrasingContentLine) -> Option<yozora_ast::Position> {
+    if line.start_index >= line.end_index {
+        return None;
+    }
+
+    Some(yozora_ast::Position {
+        start: calc_start_point(line.node_points.as_ref(), line.start_index),
+        end: calc_end_point(line.node_points.as_ref(), line.end_index - 1),
+        indent: None,
+    })
+}
+
+fn update_token_end_position(token: &mut BlockToken, line: &PhrasingContentLine) {
+    let Some(position) = token.position.as_mut() else {
+        return;
+    };
+    if line.start_index >= line.end_index {
+        return;
+    }
+
+    let end = line.node_points[line.end_index - 1];
+    position.end = yozora_ast::Point {
+        line: end.line,
+        column: end.column + 1,
+        offset: Some(end.offset + 1),
+    };
 }
 
 fn starts_type1_tag(trimmed: &str, tag: &str) -> bool {
@@ -245,6 +305,9 @@ fn is_html_block_tag(tag: &str) -> bool {
 }
 
 fn is_complete_inline_html_tag_line(line: &str) -> bool {
+    let line = line.trim_end_matches(['\n', '\r']);
+    let line = line.trim_end_matches([' ', '\t']);
+
     let Some(end) = find_tag_end(line, 0) else {
         return false;
     };
@@ -454,55 +517,4 @@ fn is_attr_name_char(b: u8) -> bool {
 
 fn is_unquoted_attr_value_char(b: u8) -> bool {
     !b.is_ascii_whitespace() && !matches!(b, b'"' | b'\'' | b'=' | b'<' | b'>' | b'`')
-}
-
-fn should_append_unclosed_type7_newline(first_line: &str, body: &[String]) -> bool {
-    let trimmed = first_line.trim_start();
-    if trimmed.starts_with("</") {
-        return false;
-    }
-
-    if body.len() > 2 {
-        return false;
-    }
-
-    if !is_complete_inline_html_tag_line(trimmed) {
-        return false;
-    }
-
-    let Some(tag) = extract_opening_tag_name(trimmed) else {
-        return false;
-    };
-
-    if body.len() == 1 && trimmed.trim_end().ends_with("/>") {
-        return false;
-    }
-
-    let closing = format!("</{tag}");
-    if contains_case_insensitive(trimmed, &closing) {
-        return false;
-    }
-
-    !body
-        .iter()
-        .skip(1)
-        .any(|line| contains_case_insensitive(line, &closing))
-}
-
-fn extract_opening_tag_name(trimmed: &str) -> Option<String> {
-    let rest = trimmed.strip_prefix('<')?;
-    let mut name = String::new();
-    for ch in rest.chars() {
-        if ch.is_ascii_alphanumeric() || ch == '-' {
-            name.push(ch);
-            continue;
-        }
-        break;
-    }
-
-    if name.is_empty() {
-        return None;
-    }
-
-    Some(name.to_ascii_lowercase())
 }

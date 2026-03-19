@@ -1,79 +1,78 @@
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SetextHeadingToken {
-    pub consumed_lines: usize,
-    pub depth: u8,
-    pub content: String,
+use yozora_ast::HEADING_TYPE;
+use yozora_character::{is_whitespace_character, AsciiCodePoint, VirtualCodePoint};
+use yozora_core_tokenizer::{
+    calc_end_point, calc_start_point, BlockToken, EatAndInterruptPreviousSiblingResult,
+    PhrasingContentLine, RemainingSibling,
+};
+
+#[derive(Debug, Clone)]
+pub(crate) struct SetextHeadingTokenData {
+    pub marker: i32,
+    pub lines: Vec<PhrasingContentLine>,
 }
 
-pub(crate) fn match_setext_heading_token(lines: &[&str]) -> Option<SetextHeadingToken> {
-    if lines.len() < 2 {
+pub(crate) fn eat_and_interrupt_previous_sibling(
+    line: &PhrasingContentLine,
+    _prev_sibling_token: &BlockToken,
+    phrasing_lines: Option<Vec<PhrasingContentLine>>,
+) -> Option<EatAndInterruptPreviousSiblingResult> {
+    if line.count_of_precede_spaces >= 4 || line.first_non_whitespace_index >= line.end_index {
         return None;
     }
 
-    if leading_space_count(lines[0]) >= 4 {
-        return None;
-    }
+    let node_points = line.node_points.as_ref();
+    let mut marker: Option<i32> = None;
+    let mut has_potential_internal_space = false;
 
-    let mut content_lines = Vec::new();
-    for (index, line) in lines.iter().enumerate() {
-        if index == 0 {
-            if line.trim().is_empty() {
-                return None;
-            }
-            content_lines.push(trim_line_end(line));
-            continue;
-        }
-
-        if let Some(depth) = parse_underline_depth(line) {
-            let content = content_lines.join("\n");
-            let content = content.trim().to_string();
-            if content.is_empty() {
-                return None;
-            }
-
-            return Some(SetextHeadingToken {
-                consumed_lines: index + 1,
-                depth,
-                content,
-            });
-        }
-
-        if line.trim().is_empty() || leading_space_count(line) >= 4 {
+    for i in line.first_non_whitespace_index..line.end_index {
+        let code_point = node_points[i].code_point;
+        if code_point == VirtualCodePoint::LineEnd as i32 {
             break;
         }
 
-        content_lines.push(trim_line_end(line));
+        if is_whitespace_character(code_point) {
+            has_potential_internal_space = true;
+            continue;
+        }
+
+        if has_potential_internal_space
+            || (code_point != AsciiCodePoint::EQUALS_SIGN as i32
+                && code_point != AsciiCodePoint::MINUS_SIGN as i32)
+            || marker.is_some_and(|m| m != code_point)
+        {
+            marker = None;
+            break;
+        }
+
+        marker = Some(code_point);
     }
 
-    None
+    let marker = marker?;
+    let lines = phrasing_lines?;
+    let first_line = lines.first()?;
+
+    let token = BlockToken::new("", HEADING_TYPE, calc_spanning_position(first_line, line))
+        .with_data(SetextHeadingTokenData { marker, lines });
+
+    Some(EatAndInterruptPreviousSiblingResult {
+        token,
+        next_index: line.end_index,
+        saturated: true,
+        remaining_sibling: RemainingSibling::None,
+    })
 }
 
-fn parse_underline_depth(line: &str) -> Option<u8> {
-    if leading_space_count(line) >= 4 {
+fn calc_spanning_position(
+    first: &PhrasingContentLine,
+    last: &PhrasingContentLine,
+) -> Option<yozora_ast::Position> {
+    if first.start_index >= first.end_index || last.start_index >= last.end_index {
         return None;
     }
 
-    let trimmed = line.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    let marker = trimmed.chars().next()?;
-    if marker != '=' && marker != '-' {
-        return None;
-    }
-
-    if !trimmed.chars().all(|ch| ch == marker) {
-        return None;
-    }
-
-    Some(if marker == '=' { 1 } else { 2 })
-}
-
-fn trim_line_end(line: &str) -> String {
-    line.trim_end().to_string()
-}
-
-fn leading_space_count(line: &str) -> usize {
-    line.chars().take_while(|ch| *ch == ' ').count()
+    Some(yozora_ast::Position {
+        start: calc_start_point(first.node_points.as_ref(), first.start_index),
+        end: calc_end_point(last.node_points.as_ref(), last.end_index - 1),
+        indent: None,
+    })
 }

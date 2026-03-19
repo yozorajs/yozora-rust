@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 
 use yozora_ast::Root;
-use yozora_core_parser::{DefaultParser, ParseContents, ParseOptions};
+use yozora_core_parser::{DefaultParser, DefaultParserProps, ParseContents, ParseOptions};
 use yozora_core_tokenizer::{AnyFallbackTokenizer, AnyTokenizer};
 use yozora_tokenizer_admonition::AdmonitionTokenizer;
 use yozora_tokenizer_autolink::AutolinkTokenizer;
@@ -40,15 +40,12 @@ pub struct YozoraParser {
 
 impl Default for YozoraParser {
     fn default() -> Self {
-        let mut inner = DefaultParser::new();
+        let mut inner = DefaultParser::new(DefaultParserProps {
+            blockFallbackTokenizer: Some(Box::new(ParagraphTokenizer::default())),
+            inlineFallbackTokenizer: Some(Box::new(TextTokenizer::default())),
+            defaultParseOptions: None,
+        });
         register_builtin_tokenizers(&mut inner);
-        inner
-            .useFallbackTokenizer(AnyFallbackTokenizer::Block(Box::new(
-                ParagraphTokenizer::default(),
-            )))
-            .useFallbackTokenizer(AnyFallbackTokenizer::Inline(Box::new(
-                TextTokenizer::default(),
-            )));
 
         Self { inner }
     }
@@ -59,32 +56,27 @@ fn register_builtin_tokenizers(inner: &mut DefaultParser) {
         .useTokenizer(
             AnyTokenizer::Block(Box::new(IndentedCodeTokenizer::default())),
             None,
-        )
-        .expect("failed to register tokenizer-indented-code");
+        );
     inner
         .useTokenizer(
             AnyTokenizer::Block(Box::new(HtmlBlockTokenizer::default())),
             None,
-        )
-        .expect("failed to register tokenizer-html-block");
+        );
     inner
         .useTokenizer(
             AnyTokenizer::Block(Box::new(SetextHeadingTokenizer::default())),
             None,
-        )
-        .expect("failed to register tokenizer-setext-heading");
+        );
     inner
         .useTokenizer(
             AnyTokenizer::Block(Box::new(ThematicBreakTokenizer::default())),
             None,
-        )
-        .expect("failed to register tokenizer-thematic-break");
+        );
     inner
         .useTokenizer(
             AnyTokenizer::Block(Box::new(BlockquoteTokenizer::default())),
             None,
-        )
-        .expect("failed to register tokenizer-blockquote");
+        );
     inner
         .useTokenizer(
             AnyTokenizer::Block(Box::new(ListTokenizer::new(ListTokenizerOptions {
@@ -92,63 +84,53 @@ fn register_builtin_tokenizers(inner: &mut DefaultParser) {
                 ..ListTokenizerOptions::default()
             }))),
             None,
-        )
-        .expect("failed to register tokenizer-list");
+        );
     inner
         .useTokenizer(
             AnyTokenizer::Block(Box::new(HeadingTokenizer::default())),
             None,
-        )
-        .expect("failed to register tokenizer-heading");
+        );
     inner
         .useTokenizer(
             AnyTokenizer::Block(Box::new(FencedCodeTokenizer::default())),
             None,
-        )
-        .expect("failed to register tokenizer-fenced-code");
+        );
     inner
         .useTokenizer(
             AnyTokenizer::Block(Box::new(AdmonitionTokenizer::default())),
             None,
-        )
-        .expect("failed to register tokenizer-admonition");
+        );
     inner
         .useTokenizer(
             AnyTokenizer::Block(Box::new(MathTokenizer::default())),
             None,
-        )
-        .expect("failed to register tokenizer-math");
+        );
     inner
         .useTokenizer(
             AnyTokenizer::Block(Box::new(FootnoteDefinitionTokenizer::default())),
             None,
-        )
-        .expect("failed to register tokenizer-footnote-definition");
+        );
     inner
         .useTokenizer(
             AnyTokenizer::Block(Box::new(DefinitionTokenizer::default())),
             None,
-        )
-        .expect("failed to register tokenizer-definition");
+        );
     inner
         .useTokenizer(
             AnyTokenizer::Block(Box::new(EcmaImportTokenizer::default())),
             None,
-        )
-        .expect("failed to register tokenizer-ecma-import");
+        );
     inner
         .useTokenizer(
             AnyTokenizer::Block(Box::new(TableTokenizer::default())),
             None,
-        )
-        .expect("failed to register tokenizer-table");
+        );
 
     inner
         .useTokenizer(
             AnyTokenizer::Inline(Box::new(HtmlInlineTokenizer::default())),
             None,
-        )
-        .expect("failed to register tokenizer-html-inline");
+        );
     inner
         .useTokenizer(
             AnyTokenizer::Inline(Box::new(InlineMathTokenizer::new(
@@ -157,68 +139,57 @@ fn register_builtin_tokenizers(inner: &mut DefaultParser) {
                 },
             ))),
             None,
-        )
-        .expect("failed to register tokenizer-inline-math-with-backtick");
+        );
     inner
         .useTokenizer(
             AnyTokenizer::Inline(Box::new(InlineCodeTokenizer::default())),
             None,
-        )
-        .expect("failed to register tokenizer-inline-code");
+        );
     inner
         .useTokenizer(
             AnyTokenizer::Inline(Box::new(AutolinkTokenizer::default())),
             None,
-        )
-        .expect("failed to register tokenizer-autolink");
+        );
     inner
         .useTokenizer(
             AnyTokenizer::Inline(Box::new(AutolinkExtensionTokenizer::default())),
             None,
-        )
-        .expect("failed to register tokenizer-autolink-extension");
+        );
     inner
         .useTokenizer(
             AnyTokenizer::Inline(Box::new(BreakTokenizer::default())),
             None,
-        )
-        .expect("failed to register tokenizer-break");
+        );
     inner
         .useTokenizer(
             AnyTokenizer::Inline(Box::new(FootnoteTokenizer::default())),
             None,
-        )
-        .expect("failed to register tokenizer-footnote");
+        );
     inner
         .useTokenizer(
             AnyTokenizer::Inline(Box::new(FootnoteReferenceTokenizer::default())),
             None,
-        )
-        .expect("failed to register tokenizer-footnote-reference");
+        );
     inner
         .useTokenizer(
             AnyTokenizer::Inline(Box::new(ImageTokenizer::default())),
             None,
-        )
-        .expect("failed to register tokenizer-image");
+        );
     inner
         .useTokenizer(
             AnyTokenizer::Inline(Box::new(ImageReferenceTokenizer::default())),
             None,
-        )
-        .expect("failed to register tokenizer-image-reference");
+        );
     inner
         .useTokenizer(
             AnyTokenizer::Inline(Box::new(LinkTokenizer::default())),
             None,
-        )
-        .expect("failed to register tokenizer-link");
+        );
     inner
         .useTokenizer(
             AnyTokenizer::Inline(Box::new(LinkReferenceTokenizer::default())),
             None,
-        )
-        .expect("failed to register tokenizer-link-reference");
+        );
     inner
         .useTokenizer(
             AnyTokenizer::Inline(Box::new(InlineMathTokenizer::new(
@@ -227,20 +198,17 @@ fn register_builtin_tokenizers(inner: &mut DefaultParser) {
                 },
             ))),
             None,
-        )
-        .expect("failed to register tokenizer-inline-math");
+        );
     inner
         .useTokenizer(
             AnyTokenizer::Inline(Box::new(EmphasisTokenizer::default())),
             None,
-        )
-        .expect("failed to register tokenizer-emphasis");
+        );
     inner
         .useTokenizer(
             AnyTokenizer::Inline(Box::new(DeleteTokenizer::default())),
             None,
-        )
-        .expect("failed to register tokenizer-delete");
+        );
 }
 
 impl YozoraParser {
@@ -248,20 +216,18 @@ impl YozoraParser {
         &mut self,
         tokenizer: AnyTokenizer,
         registerBeforeTokenizer: Option<&str>,
-    ) -> Result<&mut Self, String> {
-        self.inner
-            .useTokenizer(tokenizer, registerBeforeTokenizer)?;
-        Ok(self)
+    ) -> &mut Self {
+        self.inner.useTokenizer(tokenizer, registerBeforeTokenizer);
+        self
     }
 
     pub fn replaceTokenizer(
         &mut self,
         tokenizer: AnyTokenizer,
         registerBeforeTokenizer: Option<&str>,
-    ) -> Result<&mut Self, String> {
-        self.inner
-            .replaceTokenizer(tokenizer, registerBeforeTokenizer)?;
-        Ok(self)
+    ) -> &mut Self {
+        self.inner.replaceTokenizer(tokenizer, registerBeforeTokenizer);
+        self
     }
 
     pub fn unmountTokenizer(&mut self, tokenizerName: &str) -> &mut Self {
@@ -274,7 +240,7 @@ impl YozoraParser {
         self
     }
 
-    pub fn setDefaultParseOptions(&mut self, options: ParseOptions) {
+    pub fn setDefaultParseOptions(&mut self, options: Option<ParseOptions>) {
         self.inner.setDefaultParseOptions(options);
     }
 
@@ -466,10 +432,10 @@ mod tests {
     #[test]
     fn parse_and_camel_case_methods_work() {
         let mut parser = YozoraParser::default();
-        parser.setDefaultParseOptions(ParseOptions {
+        parser.setDefaultParseOptions(Some(ParseOptions {
             shouldReservePosition: Some(true),
             ..ParseOptions::default()
-        });
+        }));
 
         let lines = ["# hello", "", "world"];
         let root = parser.parse(ParseContents::Chunks(&lines), None);

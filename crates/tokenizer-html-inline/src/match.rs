@@ -1,9 +1,64 @@
-use yozora_core_tokenizer::NodeInterval;
+use yozora_ast::HTML_TYPE;
+use yozora_character::{calc_string_from_node_points, NodePoint};
+use yozora_core_tokenizer::{DelimiterType, InlineToken, NodeInterval, TokenDelimiter};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HtmlInlineToken {
     Text(NodeInterval),
     Html(NodeInterval),
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct DelimiterEntry {
+    pub delimiter: TokenDelimiter,
+}
+
+pub(crate) fn find_delimiter_entry(
+    node_points: &[NodePoint],
+    start_index: usize,
+    end_index: usize,
+) -> Option<DelimiterEntry> {
+    if start_index >= end_index || end_index > node_points.len() {
+        return None;
+    }
+
+    let source = calc_string_from_node_points(node_points, start_index, end_index, false);
+    let char_starts: Vec<usize> = source.char_indices().map(|(i, _)| i).collect();
+    let source_len = source.len();
+
+    let matched = match_html_inline_tokens(&source)?;
+    for token in matched {
+        let HtmlInlineToken::Html(interval) = token else {
+            continue;
+        };
+
+        let local_start = byte_to_char_index(&char_starts, source_len, interval.start_index);
+        let local_end = byte_to_char_index(&char_starts, source_len, interval.end_index);
+        if local_start >= local_end {
+            continue;
+        }
+
+        let thickness = local_end - local_start;
+        return Some(DelimiterEntry {
+            delimiter: TokenDelimiter {
+                delimiter_type: DelimiterType::Full,
+                start_index: start_index + local_start,
+                end_index: start_index + local_end,
+                thickness,
+                original_thickness: thickness,
+            },
+        });
+    }
+
+    None
+}
+
+pub(crate) fn process_single_delimiter(delimiter: &TokenDelimiter) -> Vec<InlineToken> {
+    vec![InlineToken::new(
+        "",
+        HTML_TYPE,
+        (delimiter.start_index, delimiter.end_index),
+    )]
 }
 
 pub(crate) fn match_html_inline_tokens(input: &str) -> Option<Vec<HtmlInlineToken>> {
@@ -322,15 +377,22 @@ fn is_angle_link_destination(input: &str, start: usize, end: usize) -> bool {
     bytes.get(i).copied() == Some(b')')
 }
 
+fn byte_to_char_index(char_starts: &[usize], source_len: usize, byte_index: usize) -> usize {
+    if byte_index >= source_len {
+        return char_starts.len();
+    }
+
+    match char_starts.binary_search(&byte_index) {
+        Ok(i) | Err(i) => i,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tokenizer::HtmlInlineTokenizer;
-    use yozora_core_tokenizer::InlineTokenizer;
 
     #[test]
     fn should_parse_multiline_tag_with_quoted_inner_angle_brackets() {
-        let tokenizer = HtmlInlineTokenizer::default();
         let input = "<a foo=\"bar\" bam = 'baz <em>\"</em>'\n_boolean zoop:33=zoop:33 />";
         let end = find_tag_end(input, 0).expect("should find end");
         assert_eq!(end, input.len() - 1);
@@ -338,23 +400,21 @@ mod tests {
         assert!(is_valid_opening_tag(inner));
         assert!(looks_like_html_tag(input));
 
-        let nodes = tokenizer
-            .tokenize_inline(input, None)
-            .expect("should match");
-        assert_eq!(nodes.len(), 1);
-        let yozora_ast::Node::Html(node) = &nodes[0] else {
-            panic!("expected html node");
+        let tokens = match_html_inline_tokens(input).expect("should match");
+        assert_eq!(tokens.len(), 1);
+        let HtmlInlineToken::Html(interval) = tokens[0] else {
+            panic!("expected html token");
         };
-        assert_eq!(node.value, input);
+        assert_eq!(interval.start_index, 0);
+        assert_eq!(interval.end_index, input.len());
     }
 
     #[test]
     fn should_not_parse_invalid_tag_whitespace() {
-        let tokenizer = HtmlInlineTokenizer::default();
         let input = "<bar/ >";
         let inner = &input[1..input.len() - 1];
         assert!(!is_valid_opening_tag(inner));
         assert!(!looks_like_html_tag(input));
-        assert!(tokenizer.tokenize_inline(input, None).is_none());
+        assert!(match_html_inline_tokens(input).is_none());
     }
 }

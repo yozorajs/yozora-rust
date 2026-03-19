@@ -1,18 +1,5 @@
-use std::sync::Arc;
-
 use yozora_ast::Node;
-use yozora_ast::{Point, Position, PARAGRAPH_TYPE};
-use yozora_character::{is_whitespace_character, NodePoint};
-use yozora_core_tokenizer::engine::{
-    BlockToken, EatLazyContinuationTextResult, EatOpenerResult, EngineBlockTokenizer,
-    EngineTokenizer, MatchBlockHook, MatchBlockPhaseApi as EngineMatchBlockPhaseApi,
-    ParseBlockHook, ParseBlockPhaseApi as EngineParseBlockPhaseApi, PhrasingContentLine,
-    TokenizerType,
-};
-use yozora_core_tokenizer::{
-    BlockFallbackTokenizer, BlockTokenizeResult, BlockTokenizer, MatchBlockPhaseApi,
-    ParseBlockPhaseApi, Tokenizer, TokenizerKind, TokenizerMeta,
-};
+use yozora_core_tokenizer::*;
 
 use crate::{parse, r#match};
 
@@ -36,56 +23,7 @@ impl Default for ParagraphTokenizer {
 }
 
 impl Tokenizer for ParagraphTokenizer {
-    fn meta(&self) -> &TokenizerMeta {
-        &self.meta
-    }
-}
-
-impl BlockTokenizer for ParagraphTokenizer {
-    fn tokenize_block_lines(
-        &self,
-        lines: &[&str],
-        _position: Option<yozora_ast::Position>,
-    ) -> Option<BlockTokenizeResult> {
-        r#match::match_paragraph_block_lines(lines).map(|_| unreachable!())
-    }
-
-    fn tokenize_block_lines_with_api(
-        &self,
-        lines: &[&str],
-        position: Option<yozora_ast::Position>,
-        _api: &mut dyn MatchBlockPhaseApi,
-    ) -> Option<BlockTokenizeResult> {
-        self.tokenize_block_lines(lines, position)
-    }
-}
-
-impl BlockFallbackTokenizer for ParagraphTokenizer {
-    fn build_block(
-        &self,
-        inline_children: Vec<Node>,
-        position: Option<yozora_ast::Position>,
-    ) -> Node {
-        parse::parse_paragraph_node(inline_children, position)
-    }
-
-    fn build_block_with_api(
-        &self,
-        inline_children: Vec<Node>,
-        position: Option<yozora_ast::Position>,
-        _api: &dyn ParseBlockPhaseApi,
-    ) -> Node {
-        self.build_block(inline_children, position)
-    }
-}
-
-#[derive(Debug, Clone)]
-struct ParagraphTokenData {
-    lines: Vec<PhrasingContentLine>,
-}
-
-impl EngineTokenizer for ParagraphTokenizer {
-    fn tokenizer_type(&self) -> TokenizerType {
+    fn r#type(&self) -> TokenizerType {
         TokenizerType::Block
     }
 
@@ -100,47 +38,6 @@ impl EngineTokenizer for ParagraphTokenizer {
 
 struct ParagraphMatchHook;
 
-impl ParagraphMatchHook {
-    fn create_token(line: &PhrasingContentLine) -> Option<BlockToken> {
-        if line.first_non_whitespace_index >= line.end_index {
-            return None;
-        }
-
-        let start = line.node_points[line.start_index];
-        let end = line.node_points[line.end_index - 1];
-        let position = Position {
-            start: Point {
-                line: start.line,
-                column: start.column,
-                offset: Some(start.offset),
-            },
-            end: Point {
-                line: end.line,
-                column: end.column + 1,
-                offset: Some(end.offset + 1),
-            },
-            indent: None,
-        };
-
-        let mut token = BlockToken::new("", PARAGRAPH_TYPE, Some(position));
-        token.data = Arc::new(ParagraphTokenData {
-            lines: vec![line.clone()],
-        });
-        Some(token)
-    }
-
-    fn get_lines(token: &BlockToken) -> Vec<PhrasingContentLine> {
-        token
-            .data_as::<ParagraphTokenData>()
-            .map(|data| data.lines.clone())
-            .unwrap_or_default()
-    }
-
-    fn set_lines(token: &mut BlockToken, lines: Vec<PhrasingContentLine>) {
-        token.data = Arc::new(ParagraphTokenData { lines });
-    }
-}
-
 impl MatchBlockHook for ParagraphMatchHook {
     fn is_containing_block(&self) -> bool {
         false
@@ -151,12 +48,7 @@ impl MatchBlockHook for ParagraphMatchHook {
         line: &PhrasingContentLine,
         _parent_token: &BlockToken,
     ) -> Option<EatOpenerResult> {
-        let token = Self::create_token(line)?;
-        Some(EatOpenerResult {
-            token,
-            next_index: line.end_index,
-            saturated: false,
-        })
+        r#match::eat_opener(line)
     }
 
     fn eat_lazy_continuation_text(
@@ -165,108 +57,35 @@ impl MatchBlockHook for ParagraphMatchHook {
         token: &mut BlockToken,
         _parent_token: &BlockToken,
     ) -> EatLazyContinuationTextResult {
-        if line.first_non_whitespace_index >= line.end_index {
-            return EatLazyContinuationTextResult::NotMatched;
-        }
+        r#match::eat_lazy_continuation_text(line, token)
+    }
 
-        let mut lines = Self::get_lines(token);
-        lines.push(line.clone());
-        Self::set_lines(token, lines);
-
-        if let Some(position) = token.position.as_mut() {
-            let end = line.node_points[line.end_index - 1];
-            position.end = Point {
-                line: end.line,
-                column: end.column + 1,
-                offset: Some(end.offset + 1),
-            };
-        }
-
-        EatLazyContinuationTextResult::Opening {
-            next_index: line.end_index,
-        }
+    fn eat_continuation_text(
+        &mut self,
+        line: &PhrasingContentLine,
+        token: &mut BlockToken,
+        _parent_token: &BlockToken,
+    ) -> EatContinuationTextResult {
+        r#match::eat_continuation_text(line, token)
     }
 }
 
 struct ParagraphParseHook<'a> {
-    api: &'a dyn EngineParseBlockPhaseApi,
+    api: &'a dyn ParseBlockPhaseApi,
 }
 
 impl ParseBlockHook for ParagraphParseHook<'_> {
     fn parse(&self, tokens: &[BlockToken]) -> Vec<Node> {
-        let mut nodes = Vec::with_capacity(tokens.len());
-
-        for token in tokens {
-            let Some(data) = token.data_as::<ParagraphTokenData>() else {
-                continue;
-            };
-
-            let node_points = merge_and_strip_content_lines(&data.lines);
-
-            let inline_children = self.api.process_inlines(&node_points);
-            let position = if self.api.should_reserve_position() {
-                token.position.clone()
-            } else {
-                None
-            };
-            nodes.push(parse::parse_paragraph_node(inline_children, position));
-        }
-
-        nodes
+        parse::parse_paragraph_tokens(tokens, self.api)
     }
 }
 
-fn merge_and_strip_content_lines(lines: &[PhrasingContentLine]) -> Vec<NodePoint> {
-    if lines.is_empty() {
-        return Vec::new();
-    }
-
-    let mut merged = Vec::new();
-    let last_index = lines.len() - 1;
-
-    for line in &lines[..last_index] {
-        if line.first_non_whitespace_index >= line.end_index {
-            continue;
-        }
-
-        merged
-            .extend_from_slice(&line.node_points[line.first_non_whitespace_index..line.end_index]);
-    }
-
-    let last = &lines[last_index];
-    if last.first_non_whitespace_index >= last.end_index {
-        return merged;
-    }
-
-    let node_points = last.node_points.as_ref();
-    let mut right = last.end_index;
-    while right > last.first_non_whitespace_index {
-        let index = right - 1;
-        if !is_whitespace_character(node_points[index].code_point) {
-            break;
-        }
-        right -= 1;
-    }
-
-    if right > last.first_non_whitespace_index {
-        merged.extend_from_slice(&node_points[last.first_non_whitespace_index..right]);
-    }
-
-    merged
-}
-
-impl EngineBlockTokenizer for ParagraphTokenizer {
-    fn create_match_hook<'a>(
-        &'a self,
-        _api: &'a dyn EngineMatchBlockPhaseApi,
-    ) -> Box<dyn MatchBlockHook + 'a> {
+impl BlockTokenizer for ParagraphTokenizer {
+    fn r#match<'a>(&'a self, _api: &'a dyn MatchBlockPhaseApi) -> Box<dyn MatchBlockHook + 'a> {
         Box::new(ParagraphMatchHook)
     }
 
-    fn create_parse_hook<'a>(
-        &'a self,
-        api: &'a dyn EngineParseBlockPhaseApi,
-    ) -> Box<dyn ParseBlockHook + 'a> {
+    fn parse<'a>(&'a self, api: &'a dyn ParseBlockPhaseApi) -> Box<dyn ParseBlockHook + 'a> {
         Box::new(ParagraphParseHook { api })
     }
 
@@ -274,9 +93,7 @@ impl EngineBlockTokenizer for ParagraphTokenizer {
         &self,
         token: &BlockToken,
     ) -> Option<Vec<PhrasingContentLine>> {
-        token
-            .data_as::<ParagraphTokenData>()
-            .map(|data| data.lines.clone())
+        r#match::extract_lines(token)
     }
 
     fn build_block_token(
@@ -284,52 +101,17 @@ impl EngineBlockTokenizer for ParagraphTokenizer {
         lines: &[PhrasingContentLine],
         original_token: &BlockToken,
     ) -> Option<BlockToken> {
-        let first = lines.first()?;
-        if first.start_index >= first.end_index {
-            return None;
-        }
-
-        let start = first.node_points[first.start_index];
-        let mut end_point = Point {
-            line: start.line,
-            column: start.column + 1,
-            offset: Some(start.offset + 1),
-        };
-
-        if let Some(last) = lines.last() {
-            if last.start_index < last.end_index {
-                let end = last.node_points[last.end_index - 1];
-                end_point = Point {
-                    line: end.line,
-                    column: end.column + 1,
-                    offset: Some(end.offset + 1),
-                };
-            }
-        }
-
-        let mut token = BlockToken::new(
-            original_token.tokenizer.clone(),
-            original_token.node_type,
-            Some(Position {
-                start: Point {
-                    line: start.line,
-                    column: start.column,
-                    offset: Some(start.offset),
-                },
-                end: end_point,
-                indent: None,
-            }),
-        );
-        token.data = Arc::new(ParagraphTokenData {
-            lines: lines.to_vec(),
-        });
-        Some(token)
+        r#match::build_block_token(lines, original_token)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
+    use yozora_ast::{Text, PARAGRAPH_TYPE};
+    use yozora_character::{calc_string_from_node_points, create_node_point_generator, NodePoint};
 
     struct DummyBlockApi;
 
@@ -341,19 +123,44 @@ mod tests {
         fn format_url(&self, url: &str) -> String {
             url.to_string()
         }
+
+        fn process_inlines(&self, node_points: &[NodePoint]) -> Vec<Node> {
+            vec![Node::Text(Text {
+                position: None,
+                value: calc_string_from_node_points(node_points, 0, node_points.len(), false),
+            })]
+        }
+
+        fn parse_block_tokens(&self, _tokens: &[BlockToken]) -> Vec<Node> {
+            Vec::new()
+        }
     }
 
     #[test]
-    fn phase_fallback_should_build_paragraph() {
+    fn should_build_and_parse_paragraph_token() {
         let tokenizer = ParagraphTokenizer::default();
         let api = DummyBlockApi;
-        let children = vec![Node::Text(yozora_ast::Text {
-            position: None,
-            value: "hello".to_string(),
-        })];
 
-        let node = tokenizer.build_block_with_api(children, None, &api);
-        let Node::Paragraph(paragraph) = node else {
+        let node_points = create_node_point_generator("hello")
+            .pop()
+            .expect("expected node points");
+        let line = PhrasingContentLine {
+            node_points: Arc::new(node_points),
+            start_index: 0,
+            end_index: 5,
+            first_non_whitespace_index: 0,
+            count_of_precede_spaces: 0,
+        };
+
+        let original_token = BlockToken::new(PARAGRAPH_TOKENIZER_NAME, PARAGRAPH_TYPE, None);
+        let token = tokenizer
+            .build_block_token(&[line], &original_token)
+            .expect("expected block token");
+
+        let parse_hook = tokenizer.parse(&api);
+        let nodes = parse_hook.parse(&[token]);
+        assert_eq!(nodes.len(), 1);
+        let Node::Paragraph(paragraph) = &nodes[0] else {
             panic!("expected paragraph node");
         };
         assert_eq!(paragraph.children.len(), 1);

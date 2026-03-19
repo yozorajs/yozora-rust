@@ -1,15 +1,7 @@
-use yozora_ast::{ImageReference, Node, ReferenceType, IMAGE_REFERENCE_TYPE};
-use yozora_character::{NodePoint, VirtualCodePoint};
-use yozora_core_tokenizer::engine::{
-    DelimiterType, EngineInlineTokenizer, EngineTokenizer, InlineToken, MatchInlineHook,
-    MatchInlinePhaseApi as EngineMatchInlinePhaseApi, ParseInlineHook,
-    ParseInlinePhaseApi as EngineParseInlinePhaseApi, TokenDelimiter, TokenizerType,
-};
-use yozora_core_tokenizer::phase::NodeInterval;
-use yozora_core_tokenizer::{
-    InlineTokenizer, MatchInlinePhaseApi, ParseInlinePhaseApi, Tokenizer, TokenizerKind,
-    TokenizerMeta,
-};
+use std::cell::RefCell;
+
+use yozora_ast::Node;
+use yozora_core_tokenizer::*;
 
 use crate::{parse, r#match};
 
@@ -33,53 +25,7 @@ impl Default for ImageReferenceTokenizer {
 }
 
 impl Tokenizer for ImageReferenceTokenizer {
-    fn meta(&self) -> &TokenizerMeta {
-        &self.meta
-    }
-}
-
-impl InlineTokenizer for ImageReferenceTokenizer {
-    fn tokenize_inline(
-        &self,
-        input: &str,
-        _position: Option<yozora_ast::Position>,
-    ) -> Option<Vec<Node>> {
-        let tokens = r#match::match_image_reference_tokens(input, None)?;
-        Some(parse::parse_image_reference_tokens(input, &tokens))
-    }
-
-    fn tokenize_inline_with_api(
-        &self,
-        input: &str,
-        _position: Option<yozora_ast::Position>,
-        api: &dyn MatchInlinePhaseApi,
-    ) -> Option<Vec<Node>> {
-        let tokens = r#match::match_image_reference_tokens(input, Some(api))?;
-        Some(parse::parse_image_reference_tokens(input, &tokens))
-    }
-
-    fn tokenize_inline_with_apis(
-        &self,
-        input: &str,
-        _position: Option<yozora_ast::Position>,
-        match_api: &dyn MatchInlinePhaseApi,
-        _parse_api: &dyn ParseInlinePhaseApi,
-    ) -> Option<Vec<Node>> {
-        let tokens = r#match::match_image_reference_tokens(input, Some(match_api))?;
-        Some(parse::parse_image_reference_tokens(input, &tokens))
-    }
-}
-
-#[derive(Debug, Clone)]
-struct ImageReferenceTokenData {
-    identifier: String,
-    label: String,
-    reference_type: ReferenceType,
-    alt: String,
-}
-
-impl EngineTokenizer for ImageReferenceTokenizer {
-    fn tokenizer_type(&self) -> TokenizerType {
+    fn r#type(&self) -> TokenizerType {
         TokenizerType::Inline
     }
 
@@ -92,244 +38,141 @@ impl EngineTokenizer for ImageReferenceTokenizer {
     }
 }
 
-struct LegacyMatchApiAdapter<'a> {
-    api: &'a dyn EngineMatchInlinePhaseApi,
-}
-
-impl MatchInlinePhaseApi for LegacyMatchApiAdapter<'_> {
-    fn has_definition(&self, identifier: &str) -> bool {
-        self.api.has_definition(identifier)
-    }
-
-    fn has_footnote_definition(&self, identifier: &str) -> bool {
-        self.api.has_footnote_definition(identifier)
-    }
-}
-
-#[derive(Debug, Clone)]
-struct DelimiterEntry {
-    delimiter: TokenDelimiter,
-    data: ImageReferenceTokenData,
-}
-
-struct ImageReferenceMatchHook {
-    delimiters: Vec<DelimiterEntry>,
-    cursor: usize,
+struct ImageReferenceMatchHook<'a> {
+    api: &'a dyn MatchInlinePhaseApi,
+    delimiters: RefCell<Vec<r#match::DelimiterEntry>>,
     last_end_index: Option<usize>,
     last_delimiter: Option<TokenDelimiter>,
 }
 
-impl ImageReferenceMatchHook {
-    fn new(api: &dyn EngineMatchInlinePhaseApi) -> Self {
-        let block_start_index = api.get_block_start_index();
-        let block_end_index = api.get_block_end_index();
-        let node_points = api.get_node_points();
-
-        let source = build_source(node_points, block_start_index, block_end_index);
-        let char_starts = build_char_starts(&source);
-
-        let adapter = LegacyMatchApiAdapter { api };
-        let matched =
-            r#match::match_image_reference_tokens(&source, Some(&adapter)).unwrap_or_default();
-
-        let mut delimiters = Vec::new();
-        for token in matched {
-            let r#match::ImageReferenceToken::ImageReference {
-                interval,
-                identifier,
-                label,
-                reference_type,
-                alt,
-            } = token
-            else {
-                continue;
-            };
-
-            let local_start = byte_to_char_index(&char_starts, source.len(), interval.start_index);
-            let local_end = byte_to_char_index(&char_starts, source.len(), interval.end_index);
-            if local_start >= local_end {
-                continue;
-            }
-
-            delimiters.push(DelimiterEntry {
-                delimiter: TokenDelimiter {
-                    delimiter_type: DelimiterType::Full,
-                    start_index: block_start_index + local_start,
-                    end_index: block_start_index + local_end,
-                    thickness: local_end - local_start,
-                    original_thickness: local_end - local_start,
-                },
-                data: ImageReferenceTokenData {
-                    identifier,
-                    label,
-                    reference_type,
-                    alt,
-                },
-            });
-        }
-
-        Self {
-            delimiters,
-            cursor: 0,
-            last_end_index: None,
-            last_delimiter: None,
-        }
+impl ImageReferenceMatchHook<'_> {
+    fn register_delimiter(&self, entry: r#match::DelimiterEntry) {
+        self.delimiters.borrow_mut().push(entry);
     }
 
-    fn lookup_data(&self, delimiter: &TokenDelimiter) -> Option<&ImageReferenceTokenData> {
+    fn lookup_brackets(
+        &self,
+        delimiter: &TokenDelimiter,
+    ) -> Vec<r#match::ImageReferenceDelimiterBracket> {
         self.delimiters
+            .borrow()
             .iter()
-            .find(|x| {
-                x.delimiter.start_index == delimiter.start_index
-                    && x.delimiter.end_index == delimiter.end_index
+            .rev()
+            .find(|entry| {
+                entry.delimiter.start_index == delimiter.start_index
+                    && entry.delimiter.end_index == delimiter.end_index
+                    && entry.delimiter.delimiter_type == delimiter.delimiter_type
             })
-            .map(|x| &x.data)
-    }
-
-    fn find_delimiter_impl(
-        &mut self,
-        start_index: usize,
-        end_index: usize,
-    ) -> Option<TokenDelimiter> {
-        while self.cursor < self.delimiters.len() {
-            let delimiter = &self.delimiters[self.cursor].delimiter;
-            if delimiter.start_index < start_index {
-                self.cursor += 1;
-                continue;
-            }
-            if delimiter.start_index >= end_index {
-                return None;
-            }
-
-            self.cursor += 1;
-            return Some(delimiter.clone());
-        }
-
-        None
+            .map(|entry| entry.brackets.clone())
+            .unwrap_or_default()
     }
 }
 
-impl MatchInlineHook for ImageReferenceMatchHook {
+impl MatchInlineHook for ImageReferenceMatchHook<'_> {
     fn reset(&mut self) {
-        self.cursor = 0;
         self.last_end_index = None;
         self.last_delimiter = None;
+        self.delimiters.borrow_mut().clear();
     }
 
-    fn find_delimiter(&mut self, start_index: usize, end_index: usize) -> Option<TokenDelimiter> {
-        if self.last_end_index == Some(end_index) {
-            match &self.last_delimiter {
-                Some(delimiter) if delimiter.start_index >= start_index => {
-                    return Some(delimiter.clone());
-                }
-                None => return None,
-                _ => {}
-            }
+    fn findDelimiter(&mut self, range_index: (usize, usize)) -> Option<TokenDelimiter> {
+        let mut last_end_index = self.last_end_index;
+        let mut last_delimiter = self.last_delimiter.clone();
+        let delimiter = genFindDelimiter(
+            range_index,
+            &mut last_end_index,
+            &mut last_delimiter,
+            |start_index, end_index| {
+                let entry = r#match::find_image_reference_delimiter_entry(
+                    self.api.get_node_points(),
+                    start_index,
+                    end_index,
+                )?;
+                let delimiter = entry.delimiter.clone();
+                self.register_delimiter(entry);
+                Some(delimiter)
+            },
+        );
+        self.last_end_index = last_end_index;
+        self.last_delimiter = last_delimiter;
+        delimiter
+    }
+
+    fn isDelimiterPair(
+        &self,
+        opener_delimiter: &TokenDelimiter,
+        closer_delimiter: &TokenDelimiter,
+        internal_tokens: &[InlineToken],
+    ) -> IsDelimiterPairResult {
+        let status = r#match::check_balanced_brackets_status(
+            opener_delimiter.end_index,
+            closer_delimiter.start_index,
+            internal_tokens,
+            self.api.get_node_points(),
+        );
+
+        match status {
+            -1 => IsDelimiterPairResult::NotPaired {
+                opener: false,
+                closer: true,
+            },
+            0 => IsDelimiterPairResult::Paired,
+            1 => IsDelimiterPairResult::NotPaired {
+                opener: true,
+                closer: false,
+            },
+            _ => IsDelimiterPairResult::NotPaired {
+                opener: false,
+                closer: false,
+            },
         }
-
-        self.last_end_index = Some(end_index);
-        self.last_delimiter = self.find_delimiter_impl(start_index, end_index);
-        self.last_delimiter.clone()
     }
 
-    fn process_single_delimiter(&self, delimiter: &TokenDelimiter) -> Vec<InlineToken> {
-        let Some(data) = self.lookup_data(delimiter) else {
-            return Vec::new();
-        };
+    fn processDelimiterPair(
+        &self,
+        opener_delimiter: &TokenDelimiter,
+        closer_delimiter: &TokenDelimiter,
+        internal_tokens: &[InlineToken],
+    ) -> ProcessDelimiterPairResult {
+        let brackets = self.lookup_brackets(closer_delimiter);
+        let tokens = r#match::process_delimiter_pair(
+            self.api,
+            opener_delimiter,
+            closer_delimiter,
+            &brackets,
+            internal_tokens,
+            self.api.get_node_points(),
+        );
 
-        vec![InlineToken::new(
-            "",
-            IMAGE_REFERENCE_TYPE,
-            (delimiter.start_index, delimiter.end_index),
-        )
-        .with_data(data.clone())]
+        ProcessDelimiterPairResult {
+            tokens,
+            remainOpenerDelimiter: None,
+            remainCloserDelimiter: None,
+        }
     }
 }
 
 struct ImageReferenceParseHook<'a> {
-    api: &'a dyn EngineParseInlinePhaseApi,
+    api: &'a dyn ParseInlinePhaseApi,
 }
 
 impl ParseInlineHook for ImageReferenceParseHook<'_> {
     fn parse(&self, tokens: &[InlineToken]) -> Vec<Node> {
-        let mut nodes = Vec::with_capacity(tokens.len());
-
-        for token in tokens {
-            let Some(data) = token.data_as::<ImageReferenceTokenData>() else {
-                continue;
-            };
-
-            let position = if self.api.should_reserve_position() {
-                self.api.calc_position(NodeInterval {
-                    start_index: token.start_index,
-                    end_index: token.end_index,
-                })
-            } else {
-                None
-            };
-
-            nodes.push(Node::ImageReference(ImageReference {
-                position,
-                identifier: data.identifier.clone(),
-                label: data.label.clone(),
-                reference_type: data.reference_type,
-                alt: data.alt.clone(),
-            }));
-        }
-
-        nodes
+        parse::parse_image_reference_tokens(tokens, self.api)
     }
 }
 
-impl EngineInlineTokenizer for ImageReferenceTokenizer {
-    fn create_match_hook<'a>(
-        &'a self,
-        api: &'a dyn EngineMatchInlinePhaseApi,
-    ) -> Box<dyn MatchInlineHook + 'a> {
-        Box::new(ImageReferenceMatchHook::new(api))
+impl InlineTokenizer for ImageReferenceTokenizer {
+    fn r#match<'a>(&'a self, api: &'a dyn MatchInlinePhaseApi) -> Box<dyn MatchInlineHook + 'a> {
+        Box::new(ImageReferenceMatchHook {
+            api,
+            delimiters: RefCell::new(Vec::new()),
+            last_end_index: None,
+            last_delimiter: None,
+        })
     }
 
-    fn create_parse_hook<'a>(
-        &'a self,
-        api: &'a dyn EngineParseInlinePhaseApi,
-    ) -> Box<dyn ParseInlineHook + 'a> {
+    fn parse<'a>(&'a self, api: &'a dyn ParseInlinePhaseApi) -> Box<dyn ParseInlineHook + 'a> {
         Box::new(ImageReferenceParseHook { api })
-    }
-}
-
-fn build_source(node_points: &[NodePoint], start_index: usize, end_index: usize) -> String {
-    let mut source = String::new();
-    for point in node_points
-        .iter()
-        .skip(start_index)
-        .take(end_index.saturating_sub(start_index))
-    {
-        let code_point = point.code_point;
-        let ch = if code_point == VirtualCodePoint::Space as i32 {
-            Some(' ')
-        } else if code_point == VirtualCodePoint::LineEnd as i32 {
-            Some('\n')
-        } else {
-            char::from_u32(code_point as u32)
-        };
-
-        if let Some(ch) = ch {
-            source.push(ch);
-        }
-    }
-    source
-}
-
-fn build_char_starts(source: &str) -> Vec<usize> {
-    source.char_indices().map(|(i, _)| i).collect()
-}
-
-fn byte_to_char_index(char_starts: &[usize], source_len: usize, byte_index: usize) -> usize {
-    if byte_index >= source_len {
-        return char_starts.len();
-    }
-
-    match char_starts.binary_search(&byte_index) {
-        Ok(i) | Err(i) => i,
     }
 }

@@ -1,51 +1,50 @@
-use yozora_ast::{LinkReference, Node, Text};
-use yozora_core_tokenizer::{NodeInterval, ParseInlinePhaseApi};
+use yozora_ast::{LinkReference, Node, ReferenceType, Text};
+use yozora_core_tokenizer::{InlineToken, NodeInterval, ParseInlinePhaseApi};
 
-use crate::r#match::LinkReferenceToken;
+#[derive(Debug, Clone)]
+pub(crate) struct LinkReferenceTokenData {
+    pub identifier: String,
+    pub label: String,
+    pub reference_type: ReferenceType,
+    pub child_text: String,
+    pub children_tokens: Vec<InlineToken>,
+}
 
 pub(crate) fn parse_link_reference_tokens(
-    input: &str,
-    tokens: &[LinkReferenceToken],
-    parse_api: Option<&dyn ParseInlinePhaseApi>,
+    tokens: &[InlineToken],
+    parse_api: &dyn ParseInlinePhaseApi,
 ) -> Vec<Node> {
     let mut nodes = Vec::with_capacity(tokens.len());
 
     for token in tokens {
-        match token {
-            LinkReferenceToken::Text(interval) => {
-                nodes.push(Node::Text(Text {
-                    position: calc_position(parse_api, *interval),
-                    value: input[interval.start_index..interval.end_index].to_string(),
-                }));
-            }
-            LinkReferenceToken::Link {
-                interval,
-                child_interval,
-                identifier,
-                label,
-                reference_type,
-                child_text,
-            } => {
-                nodes.push(Node::LinkReference(LinkReference {
-                    position: calc_position(parse_api, *interval),
-                    identifier: identifier.clone(),
-                    label: label.clone(),
-                    reference_type: *reference_type,
-                    children: vec![Node::Text(Text {
-                        position: calc_position(parse_api, *child_interval),
-                        value: child_text.clone(),
-                    })],
-                }));
-            }
-        }
+        let Some(data) = token.data_as::<LinkReferenceTokenData>() else {
+            continue;
+        };
+
+        let position = if parse_api.should_reserve_position() {
+            parse_api.calc_position(NodeInterval {
+                start_index: token.start_index,
+                end_index: token.end_index,
+            })
+        } else {
+            None
+        };
+
+        nodes.push(Node::LinkReference(LinkReference {
+            position,
+            identifier: data.identifier.clone(),
+            label: data.label.clone(),
+            reference_type: data.reference_type,
+            children: if data.children_tokens.is_empty() {
+                vec![Node::Text(Text {
+                    position: None,
+                    value: data.child_text.clone(),
+                })]
+            } else {
+                parse_api.parse_inline_tokens(&data.children_tokens)
+            },
+        }));
     }
 
     nodes
-}
-
-fn calc_position(
-    parse_api: Option<&dyn ParseInlinePhaseApi>,
-    interval: NodeInterval,
-) -> Option<yozora_ast::Position> {
-    parse_api.and_then(|api| api.calc_position(interval))
 }

@@ -1,138 +1,171 @@
-use yozora_character::{calc_escaped_string_from_node_points, create_node_point_generator};
+use std::sync::Arc;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct FencedCodeToken {
-    pub consumed_lines: usize,
-    pub value: String,
-    pub lang: Option<String>,
-    pub meta: Option<String>,
-}
+use yozora_ast::CODE_TYPE;
+use yozora_character::{
+    calc_trim_boundary_of_code_points, is_space_character, AsciiCodePoint, NodePoint,
+};
+use yozora_core_tokenizer::{
+    calc_end_point, calc_start_point, BlockToken, EatAndInterruptPreviousSiblingResult,
+    EatContinuationTextResult, EatOpenerResult, PhrasingContentLine, RemainingSibling,
+};
 
 #[derive(Debug, Clone)]
-struct OpeningFence {
-    marker: char,
-    fence_len: usize,
-    indent: usize,
-    lang: Option<String>,
-    meta: Option<String>,
+pub(crate) struct FencedCodeTokenData {
+    pub marker: i32,
+    pub marker_count: usize,
+    pub indent: usize,
+    pub info_string: Vec<NodePoint>,
+    pub lines: Vec<PhrasingContentLine>,
 }
 
-pub(crate) fn match_fenced_code_token(lines: &[&str]) -> Option<FencedCodeToken> {
-    let first = *lines.first()?;
-    let opening = parse_opening_fence(first)?;
+pub(crate) fn eat_opener(line: &PhrasingContentLine) -> Option<EatOpenerResult> {
+    if line.count_of_precede_spaces >= 4 {
+        return None;
+    }
 
-    let mut content_lines = Vec::new();
-    let mut consumed_lines = lines.len();
+    let first_non_whitespace_index = line.first_non_whitespace_index;
+    if first_non_whitespace_index + 2 >= line.end_index {
+        return None;
+    }
 
-    for (index, line) in lines.iter().enumerate().skip(1) {
-        if is_closing_fence(line, opening.marker, opening.fence_len) {
-            consumed_lines = index + 1;
-            break;
+    let node_points = line.node_points.as_ref();
+    let marker = node_points[first_non_whitespace_index].code_point;
+    if marker != AsciiCodePoint::BACKTICK as i32 && marker != AsciiCodePoint::TILDE as i32 {
+        return None;
+    }
+
+    let mut i = first_non_whitespace_index + 1;
+    while i < line.end_index && node_points[i].code_point == marker {
+        i += 1;
+    }
+
+    let marker_count = i - first_non_whitespace_index;
+    if marker_count < 3 {
+        return None;
+    }
+
+    let (left, right) = calc_trim_boundary_of_code_points(node_points, i, line.end_index);
+    let info_string = node_points[left..right].to_vec();
+    if marker == AsciiCodePoint::BACKTICK as i32
+        && info_string
+            .iter()
+            .any(|point| point.code_point == AsciiCodePoint::BACKTICK as i32)
+    {
+        return None;
+    }
+
+    let token =
+        BlockToken::new("", CODE_TYPE, calc_line_position(line)).with_data(FencedCodeTokenData {
+            marker,
+            marker_count,
+            indent: first_non_whitespace_index.saturating_sub(line.start_index),
+            info_string,
+            lines: Vec::new(),
+        });
+
+    Some(EatOpenerResult {
+        token,
+        next_index: line.end_index,
+        saturated: false,
+    })
+}
+
+pub(crate) fn eat_and_interrupt_previous_sibling(
+    line: &PhrasingContentLine,
+    prev_sibling_token: &BlockToken,
+) -> Option<EatAndInterruptPreviousSiblingResult> {
+    let opener = eat_opener(line)?;
+    Some(EatAndInterruptPreviousSiblingResult {
+        token: opener.token,
+        next_index: opener.next_index,
+        saturated: opener.saturated,
+        remaining_sibling: RemainingSibling::One(prev_sibling_token.clone()),
+    })
+}
+
+pub(crate) fn eat_continuation_text(
+    line: &PhrasingContentLine,
+    token: &mut BlockToken,
+) -> EatContinuationTextResult {
+    let Some(data) = token.data_as::<FencedCodeTokenData>().cloned() else {
+        return EatContinuationTextResult::NotMatched;
+    };
+
+    let node_points = line.node_points.as_ref();
+    if line.count_of_precede_spaces < 4 && line.first_non_whitespace_index < line.end_index {
+        let mut i = line.first_non_whitespace_index;
+        while i < line.end_index && node_points[i].code_point == data.marker {
+            i += 1;
         }
 
-        let normalized = strip_opening_indent(line, opening.indent)
-            .trim_end_matches(['\n', '\r'])
-            .to_string();
-        content_lines.push(normalized);
+        let marker_count = i - line.first_non_whitespace_index;
+        if marker_count >= data.marker_count {
+            while i < line.end_index && is_space_character(node_points[i].code_point) {
+                i += 1;
+            }
+
+            if i + 1 >= line.end_index {
+                return EatContinuationTextResult::Closing {
+                    next_index: line.end_index,
+                };
+            }
+        }
     }
 
-    let value = if content_lines.is_empty() {
-        "\n".to_string()
-    } else {
-        format!("{}\n", content_lines.join("\n"))
-    };
+    let first_index = std::cmp::min(
+        line.start_index + data.indent,
+        std::cmp::min(
+            line.first_non_whitespace_index,
+            line.end_index.saturating_sub(1),
+        ),
+    );
+    let mut lines = data.lines;
+    lines.push(PhrasingContentLine {
+        node_points: line.node_points.clone(),
+        start_index: first_index,
+        end_index: line.end_index,
+        first_non_whitespace_index: line.first_non_whitespace_index,
+        count_of_precede_spaces: line.count_of_precede_spaces,
+    });
 
-    Some(FencedCodeToken {
-        consumed_lines,
-        value,
-        lang: opening.lang,
-        meta: opening.meta,
+    token.data = Arc::new(FencedCodeTokenData {
+        marker: data.marker,
+        marker_count: data.marker_count,
+        indent: data.indent,
+        info_string: data.info_string,
+        lines,
+    });
+    update_token_end_position(token, line);
+
+    EatContinuationTextResult::Opening {
+        next_index: line.end_index,
+    }
+}
+
+fn calc_line_position(line: &PhrasingContentLine) -> Option<yozora_ast::Position> {
+    if line.start_index >= line.end_index {
+        return None;
+    }
+
+    Some(yozora_ast::Position {
+        start: calc_start_point(line.node_points.as_ref(), line.start_index),
+        end: calc_end_point(line.node_points.as_ref(), line.end_index - 1),
+        indent: None,
     })
 }
 
-fn parse_opening_fence(line: &str) -> Option<OpeningFence> {
-    let indent = line.chars().take_while(|ch| *ch == ' ').count();
-    if indent >= 4 {
-        return None;
-    }
-
-    let remainder = &line[indent..];
-    let marker = remainder.chars().next()?;
-    if marker != '`' && marker != '~' {
-        return None;
-    }
-
-    let fence_len = remainder.chars().take_while(|ch| *ch == marker).count();
-    if fence_len < 3 {
-        return None;
-    }
-
-    let info = remainder[fence_len..].trim();
-    if marker == '`' && info.contains('`') {
-        return None;
-    }
-
-    let (lang, meta) = parse_info_string(info);
-    Some(OpeningFence {
-        marker,
-        fence_len,
-        indent,
-        lang,
-        meta,
-    })
-}
-
-fn parse_info_string(info: &str) -> (Option<String>, Option<String>) {
-    if info.is_empty() {
-        return (None, None);
-    }
-
-    let mut chunks = info.splitn(2, char::is_whitespace);
-    let lang = chunks
-        .next()
-        .map(decode_escaped_content)
-        .filter(|v| !v.is_empty());
-    let meta = chunks
-        .next()
-        .map(str::trim)
-        .map(decode_escaped_content)
-        .filter(|v| !v.is_empty());
-    (lang, meta)
-}
-
-fn decode_escaped_content(input: &str) -> String {
-    let chunks = create_node_point_generator(input);
-    let Some(points) = chunks.first() else {
-        return String::new();
+fn update_token_end_position(token: &mut BlockToken, line: &PhrasingContentLine) {
+    let Some(position) = token.position.as_mut() else {
+        return;
     };
-
-    calc_escaped_string_from_node_points(points, 0, points.len(), false)
-}
-
-fn is_closing_fence(line: &str, marker: char, min_len: usize) -> bool {
-    let indent = line.chars().take_while(|ch| *ch == ' ').count();
-    if indent >= 4 {
-        return false;
+    if line.start_index >= line.end_index {
+        return;
     }
 
-    let remainder = &line[indent..];
-    let fence_len = remainder.chars().take_while(|ch| *ch == marker).count();
-    if fence_len < min_len {
-        return false;
-    }
-
-    remainder[fence_len..].trim().is_empty()
-}
-
-fn strip_opening_indent<'a>(line: &'a str, indent: usize) -> &'a str {
-    let mut rest = line;
-    let mut removed = 0usize;
-    while removed < indent {
-        let Some(next) = rest.strip_prefix(' ') else {
-            break;
-        };
-        rest = next;
-        removed += 1;
-    }
-    rest
+    let end = line.node_points[line.end_index - 1];
+    position.end = yozora_ast::Point {
+        line: end.line,
+        column: end.column + 1,
+        offset: Some(end.offset + 1),
+    };
 }

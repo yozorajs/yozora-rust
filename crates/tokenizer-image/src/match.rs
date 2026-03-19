@@ -1,134 +1,249 @@
-use yozora_character::{calc_escaped_string_from_node_points, create_node_point_generator};
-use yozora_core_tokenizer::NodeInterval;
+use yozora_ast::IMAGE_TYPE;
+use yozora_character::{is_ascii_control_character, AsciiCodePoint, NodePoint, VirtualCodePoint};
+use yozora_core_tokenizer::{DelimiterType, InlineToken, NodeInterval, TokenDelimiter};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ImageToken {
-    Text(NodeInterval),
-    Image {
-        interval: NodeInterval,
-        url: String,
-        title: Option<String>,
-        alt: String,
-    },
+use crate::parse::ImageTokenData;
+
+#[derive(Debug, Clone)]
+pub(crate) struct ImageDelimiterData {
+    pub destination_content: Option<NodeInterval>,
+    pub title_content: Option<NodeInterval>,
 }
 
-pub(crate) fn match_image_tokens(input: &str) -> Option<Vec<ImageToken>> {
-    if !input.contains("![") {
-        return None;
-    }
+#[derive(Debug, Clone)]
+pub(crate) struct DelimiterEntry {
+    pub delimiter: TokenDelimiter,
+    pub data: Option<ImageDelimiterData>,
+}
 
-    let mut tokens = Vec::new();
-    let mut cursor = 0usize;
-    let mut last_emit = 0usize;
-    let mut matched = false;
+#[derive(Debug, Clone, Copy)]
+struct ByteInterval {
+    start_index: usize,
+    end_index: usize,
+}
 
-    while let Some(offset) = input[cursor..].find("![") {
-        let start = cursor + offset;
-
-        let Some((label_end, alt_raw)) = parse_image_label(input, start + 1) else {
-            cursor = start + 2;
-            continue;
+pub(crate) fn build_source(
+    node_points: &[NodePoint],
+    start_index: usize,
+    end_index: usize,
+) -> String {
+    let mut source = String::new();
+    for point in node_points
+        .iter()
+        .skip(start_index)
+        .take(end_index.saturating_sub(start_index))
+    {
+        let code_point = point.code_point;
+        let ch = if code_point == VirtualCodePoint::Space as i32 {
+            Some(' ')
+        } else if code_point == VirtualCodePoint::LineEnd as i32 {
+            Some('\n')
+        } else {
+            char::from_u32(code_point as u32)
         };
 
-        let open_paren = label_end + 1;
-        if input.as_bytes().get(open_paren).copied() != Some(b'(') {
-            cursor = start + 2;
+        if let Some(ch) = ch {
+            source.push(ch);
+        }
+    }
+    source
+}
+
+pub(crate) fn build_char_starts(source: &str) -> Vec<usize> {
+    source.char_indices().map(|(i, _)| i).collect()
+}
+
+pub(crate) fn find_image_delimiter_entry(
+    source: &str,
+    char_starts: &[usize],
+    node_points: &[NodePoint],
+    block_start_index: usize,
+    block_end_index: usize,
+    start_index: usize,
+    end_index: usize,
+) -> Option<DelimiterEntry> {
+    let mut i = start_index;
+
+    while i < end_index {
+        let code_point = node_points[i].code_point;
+
+        if code_point == AsciiCodePoint::BACKSLASH as i32 {
+            i = (i + 2).min(end_index);
             continue;
         }
 
-        let Some((url, title, end)) = parse_inline_image_tail(input, open_paren) else {
-            cursor = start + 2;
-            continue;
-        };
-
-        if start > last_emit {
-            tokens.push(ImageToken::Text(NodeInterval {
-                start_index: last_emit,
-                end_index: start,
-            }));
-        }
-
-        tokens.push(ImageToken::Image {
-            interval: NodeInterval {
-                start_index: start,
-                end_index: end,
-            },
-            url,
-            title,
-            alt: normalize_alt_text(alt_raw),
-        });
-
-        matched = true;
-        cursor = end;
-        last_emit = end;
-    }
-
-    if !matched {
-        return None;
-    }
-
-    if last_emit < input.len() {
-        tokens.push(ImageToken::Text(NodeInterval {
-            start_index: last_emit,
-            end_index: input.len(),
-        }));
-    }
-
-    Some(tokens)
-}
-
-fn parse_image_label(input: &str, bracket_start: usize) -> Option<(usize, &str)> {
-    if input.as_bytes().get(bracket_start).copied()? != b'[' {
-        return None;
-    }
-
-    let bytes = input.as_bytes();
-    let mut i = bracket_start + 1;
-    let mut depth = 1usize;
-    let mut code_ticks = 0usize;
-
-    while i < bytes.len() {
-        if code_ticks > 0 {
-            if bytes[i] == b'`' {
-                let run = count_repeat(bytes, i, b'`');
-                if run >= code_ticks {
-                    code_ticks = 0;
-                }
-                i += run;
-                continue;
+        if code_point == AsciiCodePoint::EXCLAMATION_MARK as i32 {
+            if i + 1 < end_index
+                && node_points[i + 1].code_point == AsciiCodePoint::OPEN_BRACKET as i32
+            {
+                return Some(DelimiterEntry {
+                    delimiter: create_delimiter(DelimiterType::Opener, i, i + 2),
+                    data: None,
+                });
             }
+
             i += 1;
             continue;
         }
 
-        match bytes[i] {
-            b'\\' => i = (i + 2).min(bytes.len()),
-            b'`' => {
-                code_ticks = count_repeat(bytes, i, b'`');
-                i += code_ticks;
-            }
-            b'[' => {
-                depth += 1;
+        if code_point == AsciiCodePoint::CLOSE_BRACKET as i32
+            && i + 1 < end_index
+            && node_points[i + 1].code_point == AsciiCodePoint::OPEN_PARENTHESIS as i32
+        {
+            let local_open_paren = (i + 1).saturating_sub(block_start_index);
+            let open_paren_byte = char_to_byte_index(char_starts, source.len(), local_open_paren);
+
+            let Some((destination_content, title_content, end_byte)) =
+                parse_inline_image_tail(source, open_paren_byte)
+            else {
                 i += 1;
-            }
-            b']' => {
-                depth = depth.saturating_sub(1);
-                if depth == 0 {
-                    return Some((i, &input[bracket_start + 1..i]));
-                }
+                continue;
+            };
+
+            let local_end = byte_to_char_index(char_starts, source.len(), end_byte);
+            let absolute_end = block_start_index + local_end;
+            if absolute_end > block_end_index {
                 i += 1;
+                continue;
             }
-            _ => i += 1,
+
+            return Some(DelimiterEntry {
+                delimiter: create_delimiter(DelimiterType::Closer, i, absolute_end),
+                data: Some(ImageDelimiterData {
+                    destination_content: destination_content.map(|interval| NodeInterval {
+                        start_index: block_start_index
+                            + byte_to_char_index(char_starts, source.len(), interval.start_index),
+                        end_index: block_start_index
+                            + byte_to_char_index(char_starts, source.len(), interval.end_index),
+                    }),
+                    title_content: title_content.map(|interval| NodeInterval {
+                        start_index: block_start_index
+                            + byte_to_char_index(char_starts, source.len(), interval.start_index),
+                        end_index: block_start_index
+                            + byte_to_char_index(char_starts, source.len(), interval.end_index),
+                    }),
+                }),
+            });
         }
+
+        i += 1;
     }
 
     None
 }
 
+pub(crate) fn create_image_token(
+    opener_delimiter: &TokenDelimiter,
+    closer_delimiter: &TokenDelimiter,
+    destination_content: Option<NodeInterval>,
+    title_content: Option<NodeInterval>,
+    children_tokens: Vec<InlineToken>,
+) -> InlineToken {
+    InlineToken::new(
+        "",
+        IMAGE_TYPE,
+        (opener_delimiter.start_index, closer_delimiter.end_index),
+    )
+    .with_data(ImageTokenData {
+        destination_content,
+        title_content,
+        children_tokens,
+    })
+}
+
+pub(crate) fn check_balanced_brackets_status(
+    start_index: usize,
+    end_index: usize,
+    internal_tokens: &[InlineToken],
+    node_points: &[NodePoint],
+) -> i8 {
+    let mut i = start_index;
+    let mut bracket_count = 0i32;
+
+    let update = |idx: usize, count: &mut i32, i_ref: &mut usize| match node_points[idx].code_point
+    {
+        x if x == AsciiCodePoint::BACKSLASH as i32 => {
+            *i_ref += 1;
+        }
+        x if x == AsciiCodePoint::OPEN_BRACKET as i32 => {
+            *count += 1;
+        }
+        x if x == AsciiCodePoint::CLOSE_BRACKET as i32 => {
+            *count -= 1;
+        }
+        _ => {}
+    };
+
+    for token in internal_tokens {
+        if token.start_index < start_index {
+            continue;
+        }
+        if token.end_index > end_index {
+            break;
+        }
+
+        while i < token.start_index {
+            update(i, &mut bracket_count, &mut i);
+            if bracket_count < 0 {
+                return -1;
+            }
+            i += 1;
+        }
+
+        i = token.end_index;
+    }
+
+    while i < end_index {
+        update(i, &mut bracket_count, &mut i);
+        if bracket_count < 0 {
+            return -1;
+        }
+        i += 1;
+    }
+
+    if bracket_count > 0 {
+        1
+    } else {
+        0
+    }
+}
+
+fn create_delimiter(
+    delimiter_type: DelimiterType,
+    start_index: usize,
+    end_index: usize,
+) -> TokenDelimiter {
+    TokenDelimiter {
+        delimiter_type,
+        start_index,
+        end_index,
+        thickness: end_index.saturating_sub(start_index),
+        original_thickness: end_index.saturating_sub(start_index),
+    }
+}
+
+fn char_to_byte_index(char_starts: &[usize], source_len: usize, char_index: usize) -> usize {
+    if char_index >= char_starts.len() {
+        source_len
+    } else {
+        char_starts[char_index]
+    }
+}
+
+fn byte_to_char_index(char_starts: &[usize], source_len: usize, byte_index: usize) -> usize {
+    if byte_index >= source_len {
+        return char_starts.len();
+    }
+
+    match char_starts.binary_search(&byte_index) {
+        Ok(i) | Err(i) => i,
+    }
+}
+
 fn parse_inline_image_tail(
     input: &str,
     open_paren: usize,
-) -> Option<(String, Option<String>, usize)> {
+) -> Option<(Option<ByteInterval>, Option<ByteInterval>, usize)> {
     if input.as_bytes().get(open_paren).copied()? != b'(' {
         return None;
     }
@@ -142,20 +257,29 @@ fn parse_inline_image_tail(
     }
 
     if bytes[i] == b')' {
-        return Some((String::new(), None, i + 1));
+        return Some((None, None, i + 1));
     }
 
-    let (url, destination_end) = parse_link_destination(input, i)?;
+    let destination_start = i;
+    let destination_end = parse_link_destination(input, destination_start)?;
     let title_start = eat_optional_ascii_whitespace(bytes, destination_end);
     let has_separating_whitespace = title_start > destination_end;
 
-    let (title, title_end) = if bytes.get(title_start).copied() == Some(b')') {
+    let (title_content, title_end) = if bytes.get(title_start).copied() == Some(b')') {
         (None, title_start)
     } else {
         if !has_separating_whitespace {
             return None;
         }
-        parse_link_title(input, title_start)?
+
+        let title_end = parse_link_title(input, title_start)?;
+        (
+            Some(ByteInterval {
+                start_index: title_start,
+                end_index: title_end,
+            }),
+            title_end,
+        )
     };
 
     let close_index = eat_optional_ascii_whitespace(bytes, title_end);
@@ -164,10 +288,17 @@ fn parse_inline_image_tail(
     }
 
     i = close_index + 1;
-    Some((url, title, i))
+    Some((
+        Some(ByteInterval {
+            start_index: destination_start,
+            end_index: destination_end,
+        }),
+        title_content,
+        i,
+    ))
 }
 
-fn parse_link_destination(input: &str, start: usize) -> Option<(String, usize)> {
+fn parse_link_destination(input: &str, start: usize) -> Option<usize> {
     let bytes = input.as_bytes();
     if start >= bytes.len() {
         return None;
@@ -179,11 +310,7 @@ fn parse_link_destination(input: &str, start: usize) -> Option<(String, usize)> 
             match bytes[i] {
                 b'\\' => i = (i + 2).min(bytes.len()),
                 b'<' | b'\n' | b'\r' => return None,
-                b'>' => {
-                    let raw = &input[start + 1..i];
-                    let decoded = decode_escaped_content(raw, false);
-                    return Some((encode_uri_like(&decoded), i + 1));
-                }
+                b'>' => return Some(i + 1),
                 _ => i += 1,
             }
         }
@@ -194,7 +321,7 @@ fn parse_link_destination(input: &str, start: usize) -> Option<(String, usize)> 
     let mut open_parens = 0i32;
     while i < bytes.len() {
         let b = bytes[i];
-        if b.is_ascii_whitespace() || b.is_ascii_control() {
+        if b.is_ascii_whitespace() || is_ascii_control_character(b as i32) {
             break;
         }
 
@@ -219,18 +346,12 @@ fn parse_link_destination(input: &str, start: usize) -> Option<(String, usize)> 
         return None;
     }
 
-    let raw = &input[start..i];
-    let decoded = decode_escaped_content(raw, false);
-    Some((encode_uri_like(&decoded), i))
+    Some(i)
 }
 
-fn parse_link_title(input: &str, start: usize) -> Option<(Option<String>, usize)> {
+fn parse_link_title(input: &str, start: usize) -> Option<usize> {
     let bytes = input.as_bytes();
     let open = *bytes.get(start)?;
-
-    if open == b')' {
-        return Some((None, start));
-    }
 
     match open {
         b'"' | b'\'' => {
@@ -243,8 +364,7 @@ fn parse_link_title(input: &str, start: usize) -> Option<(Option<String>, usize)
                         if contains_blank_line(raw) {
                             return None;
                         }
-                        let title = decode_escaped_content(raw, false);
-                        return Some((Some(title), i + 1));
+                        return Some(i + 1);
                     }
                     _ => i += 1,
                 }
@@ -268,8 +388,7 @@ fn parse_link_title(input: &str, start: usize) -> Option<(Option<String>, usize)
                             if contains_blank_line(raw) {
                                 return None;
                             }
-                            let title = decode_escaped_content(raw, false);
-                            return Some((Some(title), i + 1));
+                            return Some(i + 1);
                         }
                         i += 1;
                     }
@@ -313,204 +432,4 @@ fn eat_optional_ascii_whitespace(bytes: &[u8], mut index: usize) -> usize {
         index += 1;
     }
     index
-}
-
-fn count_repeat(bytes: &[u8], mut index: usize, target: u8) -> usize {
-    let mut count = 0usize;
-    while index < bytes.len() && bytes[index] == target {
-        count += 1;
-        index += 1;
-    }
-    count
-}
-
-fn decode_escaped_content(input: &str, trim: bool) -> String {
-    let chunks = create_node_point_generator(input);
-    let Some(points) = chunks.first() else {
-        return String::new();
-    };
-
-    calc_escaped_string_from_node_points(points, 0, points.len(), trim)
-}
-
-fn encode_uri_like(input: &str) -> String {
-    let mut out = String::new();
-    for &b in input.as_bytes() {
-        if is_allowed_uri_byte(b) {
-            out.push(b as char);
-        } else {
-            out.push('%');
-            out.push(hex_digit((b >> 4) & 0x0f));
-            out.push(hex_digit(b & 0x0f));
-        }
-    }
-    out
-}
-
-fn is_allowed_uri_byte(b: u8) -> bool {
-    b.is_ascii_alphanumeric()
-        || matches!(
-            b,
-            b';' | b','
-                | b'/'
-                | b'?'
-                | b':'
-                | b'@'
-                | b'&'
-                | b'='
-                | b'+'
-                | b'$'
-                | b'-'
-                | b'_'
-                | b'.'
-                | b'!'
-                | b'~'
-                | b'*'
-                | b'\''
-                | b'('
-                | b')'
-                | b'#'
-        )
-}
-
-fn hex_digit(v: u8) -> char {
-    match v {
-        0..=9 => (b'0' + v) as char,
-        10..=15 => (b'A' + (v - 10)) as char,
-        _ => '0',
-    }
-}
-
-fn normalize_alt_text(input: &str) -> String {
-    let decoded = decode_escaped_content(input, false);
-    let stripped = strip_link_like_syntax(&decoded);
-    strip_format_markers(&stripped)
-}
-
-fn strip_link_like_syntax(input: &str) -> String {
-    let mut out = String::new();
-    let mut cursor = 0usize;
-
-    while cursor < input.len() {
-        let Some(rel) = input[cursor..].find('[') else {
-            out.push_str(&input[cursor..]);
-            break;
-        };
-
-        let start = cursor + rel;
-        out.push_str(&input[cursor..start]);
-
-        let is_image = start > 0 && input.as_bytes()[start - 1] == b'!';
-        let bracket_start = start;
-
-        let Some((label_end, label_raw)) = parse_image_label(input, bracket_start) else {
-            out.push('[');
-            cursor = start + 1;
-            continue;
-        };
-
-        let open_paren = label_end + 1;
-        if input.as_bytes().get(open_paren).copied() != Some(b'(') {
-            out.push('[');
-            cursor = start + 1;
-            continue;
-        }
-
-        let Some((_, _, end)) = parse_inline_image_tail(input, open_paren) else {
-            out.push('[');
-            cursor = start + 1;
-            continue;
-        };
-
-        let normalized_label = normalize_alt_text(label_raw);
-        if is_image && out.ends_with('!') {
-            out.pop();
-        }
-
-        if !is_image && contains_valid_inline_link(label_raw) {
-            let destination = &input[open_paren + 1..end - 1];
-            out.push('[');
-            out.push_str(&normalized_label);
-            out.push_str("](");
-            out.push_str(destination.trim());
-            out.push(')');
-        } else {
-            out.push_str(&normalized_label);
-        }
-
-        cursor = end;
-    }
-
-    out
-}
-
-fn contains_valid_inline_link(input: &str) -> bool {
-    let mut cursor = 0usize;
-    while let Some(rel) = input[cursor..].find('[') {
-        let start = cursor + rel;
-        if is_escaped(input, start) || (start > 0 && input.as_bytes()[start - 1] == b'!') {
-            cursor = start + 1;
-            continue;
-        }
-
-        let Some((label_end, _)) = parse_image_label(input, start) else {
-            cursor = start + 1;
-            continue;
-        };
-
-        let open_paren = label_end + 1;
-        if input.as_bytes().get(open_paren).copied() != Some(b'(') {
-            cursor = start + 1;
-            continue;
-        }
-
-        if parse_inline_image_tail(input, open_paren).is_some() {
-            return true;
-        }
-
-        cursor = start + 1;
-    }
-
-    false
-}
-
-fn strip_format_markers(input: &str) -> String {
-    let mut out = String::new();
-    let mut chars = input.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '\\' {
-            if let Some(next) = chars.next() {
-                out.push(next);
-            }
-            continue;
-        }
-
-        if matches!(ch, '*' | '_' | '`') {
-            continue;
-        }
-
-        out.push(ch);
-    }
-    out
-}
-
-fn is_escaped(input: &str, byte_index: usize) -> bool {
-    if byte_index == 0 {
-        return false;
-    }
-
-    let bytes = input.as_bytes();
-    let mut idx = byte_index;
-    let mut slash_count = 0usize;
-
-    while idx > 0 {
-        idx -= 1;
-        if bytes[idx] == b'\\' {
-            slash_count += 1;
-        } else {
-            break;
-        }
-    }
-
-    slash_count % 2 == 1
 }

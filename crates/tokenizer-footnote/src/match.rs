@@ -1,152 +1,176 @@
-use yozora_core_tokenizer::NodeInterval;
+use yozora_ast::FOOTNOTE_TYPE;
+use yozora_character::{AsciiCodePoint, NodePoint};
+use yozora_core_tokenizer::{
+    DelimiterType, InlineToken, IsDelimiterPairResult, MatchInlinePhaseApi,
+    ProcessDelimiterPairResult, TokenDelimiter,
+};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum FootnoteToken {
-    Text(NodeInterval),
-    Literal(String),
-    Footnote {
-        interval: NodeInterval,
-        content: String,
-    },
+use crate::parse::FootnoteTokenData;
+
+#[derive(Debug, Clone)]
+pub(crate) struct DelimiterEntry {
+    pub delimiter: TokenDelimiter,
 }
 
-pub(crate) fn match_footnote_tokens(input: &str) -> Option<Vec<FootnoteToken>> {
-    if !input.contains("^[") {
-        return None;
-    }
-
-    let mut tokens = Vec::new();
-    let mut cursor = 0usize;
-    let mut matched = false;
-
-    while let Some(offset) = input[cursor..].find("^[") {
-        let start = cursor + offset;
-        if is_escaped(input, start) {
-            let escape_start = start.saturating_sub(1);
-            if escape_start > cursor {
-                tokens.push(FootnoteToken::Text(NodeInterval {
-                    start_index: cursor,
-                    end_index: escape_start,
-                }));
-            }
-
-            tokens.push(FootnoteToken::Literal("^[".to_string()));
-
-            matched = true;
-            cursor = start + 2;
-            continue;
-        }
-
-        let content_start = start + 2;
-        let Some(end) = find_matching_bracket(input, content_start) else {
-            break;
-        };
-
-        if start > cursor {
-            tokens.push(FootnoteToken::Text(NodeInterval {
-                start_index: cursor,
-                end_index: start,
-            }));
-        }
-
-        tokens.push(FootnoteToken::Footnote {
-            interval: NodeInterval {
-                start_index: start,
-                end_index: end + 1,
-            },
-            content: input[content_start..end].to_string(),
-        });
-
-        matched = true;
-        cursor = end + 1;
-    }
-
-    if !matched {
-        return None;
-    }
-
-    if cursor < input.len() {
-        tokens.push(FootnoteToken::Text(NodeInterval {
-            start_index: cursor,
-            end_index: input.len(),
-        }));
-    }
-
-    Some(tokens)
-}
-
-fn is_escaped(input: &str, byte_index: usize) -> bool {
-    if byte_index == 0 {
-        return false;
-    }
-
-    let bytes = input.as_bytes();
-    let mut idx = byte_index;
-    let mut slash_count = 0usize;
-    while idx > 0 {
-        idx -= 1;
-        if bytes[idx] == b'\\' {
-            slash_count += 1;
-        } else {
-            break;
-        }
-    }
-
-    slash_count % 2 == 1
-}
-
-fn find_matching_bracket(input: &str, content_start: usize) -> Option<usize> {
-    let bytes = input.as_bytes();
-    let mut depth = 1usize;
-    let mut index = content_start;
-    let mut code_ticks: usize = 0;
-
-    while index < bytes.len() {
-        if code_ticks > 0 {
-            if bytes[index] == b'`' {
-                let run = count_repeat(bytes, index, b'`');
-                if run >= code_ticks {
-                    code_ticks = 0;
-                }
-                index += run;
+pub(crate) fn find_delimiter_entry(
+    node_points: &[NodePoint],
+    start_index: usize,
+    end_index: usize,
+) -> Option<DelimiterEntry> {
+    let mut i = start_index;
+    while i < end_index {
+        let code_point = node_points[i].code_point;
+        match code_point {
+            x if x == AsciiCodePoint::BACKSLASH as i32 => {
+                i = (i + 2).min(end_index);
                 continue;
             }
-
-            index += 1;
-            continue;
-        }
-
-        match bytes[index] {
-            b'\\' => {
-                index = (index + 2).min(bytes.len());
-            }
-            b'`' => {
-                code_ticks = count_repeat(bytes, index, b'`');
-                index += code_ticks;
-            }
-            b'[' => {
-                depth += 1;
-                index += 1;
-            }
-            b']' => {
-                depth = depth.saturating_sub(1);
-                if depth == 0 {
-                    return Some(index);
+            x if x == AsciiCodePoint::CARET as i32 => {
+                if i + 1 < end_index
+                    && node_points[i + 1].code_point == AsciiCodePoint::OPEN_BRACKET as i32
+                {
+                    return Some(DelimiterEntry {
+                        delimiter: create_delimiter(DelimiterType::Opener, i, i + 2),
+                    });
                 }
-                index += 1;
             }
-            _ => index += 1,
+            x if x == AsciiCodePoint::CLOSE_BRACKET as i32 => {
+                return Some(DelimiterEntry {
+                    delimiter: create_delimiter(DelimiterType::Closer, i, i + 1),
+                });
+            }
+            _ => {}
         }
+
+        i += 1;
     }
 
     None
 }
 
-fn count_repeat(bytes: &[u8], mut index: usize, target: u8) -> usize {
-    let mut count = 0usize;
-    while index < bytes.len() && bytes[index] == target {
-        count += 1;
-        index += 1;
+pub(crate) fn is_delimiter_pair(
+    api: &dyn MatchInlinePhaseApi,
+    opener_delimiter: &TokenDelimiter,
+    closer_delimiter: &TokenDelimiter,
+    internal_tokens: &[InlineToken],
+) -> IsDelimiterPairResult {
+    let status = check_balanced_brackets_status(
+        opener_delimiter.end_index,
+        closer_delimiter.start_index,
+        internal_tokens,
+        api.get_node_points(),
+    );
+
+    match status {
+        -1 => IsDelimiterPairResult::NotPaired {
+            opener: false,
+            closer: true,
+        },
+        0 => IsDelimiterPairResult::Paired,
+        1 => IsDelimiterPairResult::NotPaired {
+            opener: true,
+            closer: false,
+        },
+        _ => IsDelimiterPairResult::NotPaired {
+            opener: false,
+            closer: false,
+        },
     }
-    count
+}
+
+pub(crate) fn process_delimiter_pair(
+    api: &dyn MatchInlinePhaseApi,
+    opener_delimiter: &TokenDelimiter,
+    closer_delimiter: &TokenDelimiter,
+    internal_tokens: &[InlineToken],
+) -> ProcessDelimiterPairResult {
+    let children_tokens = api.resolve_internal_tokens(
+        internal_tokens,
+        opener_delimiter.end_index,
+        closer_delimiter.start_index,
+    );
+
+    let token = InlineToken::new(
+        "",
+        FOOTNOTE_TYPE,
+        (opener_delimiter.start_index, closer_delimiter.end_index),
+    )
+    .with_data(FootnoteTokenData { children_tokens });
+
+    ProcessDelimiterPairResult {
+        tokens: vec![token],
+        remainOpenerDelimiter: None,
+        remainCloserDelimiter: None,
+    }
+}
+
+pub(crate) fn check_balanced_brackets_status(
+    start_index: usize,
+    end_index: usize,
+    internal_tokens: &[InlineToken],
+    node_points: &[NodePoint],
+) -> i8 {
+    let mut i = start_index;
+    let mut bracket_count = 0i32;
+
+    let update = |idx: usize, count: &mut i32, i_ref: &mut usize| match node_points[idx].code_point
+    {
+        x if x == AsciiCodePoint::BACKSLASH as i32 => {
+            *i_ref += 1;
+        }
+        x if x == AsciiCodePoint::OPEN_BRACKET as i32 => {
+            *count += 1;
+        }
+        x if x == AsciiCodePoint::CLOSE_BRACKET as i32 => {
+            *count -= 1;
+        }
+        _ => {}
+    };
+
+    for token in internal_tokens {
+        if token.start_index < start_index {
+            continue;
+        }
+        if token.end_index > end_index {
+            break;
+        }
+
+        while i < token.start_index {
+            update(i, &mut bracket_count, &mut i);
+            if bracket_count < 0 {
+                return -1;
+            }
+            i += 1;
+        }
+
+        i = token.end_index;
+    }
+
+    while i < end_index {
+        update(i, &mut bracket_count, &mut i);
+        if bracket_count < 0 {
+            return -1;
+        }
+        i += 1;
+    }
+
+    if bracket_count > 0 {
+        1
+    } else {
+        0
+    }
+}
+
+fn create_delimiter(
+    delimiter_type: DelimiterType,
+    start_index: usize,
+    end_index: usize,
+) -> TokenDelimiter {
+    TokenDelimiter {
+        delimiter_type,
+        start_index,
+        end_index,
+        thickness: end_index.saturating_sub(start_index),
+        original_thickness: end_index.saturating_sub(start_index),
+    }
 }

@@ -1,16 +1,8 @@
 use yozora_ast::Node;
 use yozora_ast::TEXT_TYPE;
 use yozora_character::calc_escaped_string_from_node_points;
-use yozora_core_tokenizer::engine::{
-    EngineInlineFallbackTokenizer, EngineInlineTokenizer, EngineTokenizer, InlineToken,
-    MatchInlineHook, MatchInlinePhaseApi as EngineMatchInlinePhaseApi, ParseInlineHook,
-    ParseInlinePhaseApi as EngineParseInlinePhaseApi, TokenDelimiter, TokenizerType,
-};
-use yozora_core_tokenizer::phase::NodeInterval;
-use yozora_core_tokenizer::{
-    InlineFallbackTokenizer, InlineTokenizer, MatchInlinePhaseApi, ParseInlinePhaseApi, Tokenizer,
-    TokenizerKind, TokenizerMeta,
-};
+use yozora_core_tokenizer::NodeInterval;
+use yozora_core_tokenizer::*;
 
 use crate::{parse, r#match};
 
@@ -34,52 +26,7 @@ impl Default for TextTokenizer {
 }
 
 impl Tokenizer for TextTokenizer {
-    fn meta(&self) -> &TokenizerMeta {
-        &self.meta
-    }
-}
-
-impl InlineTokenizer for TextTokenizer {
-    fn tokenize_inline_with_api(
-        &self,
-        input: &str,
-        position: Option<yozora_ast::Position>,
-        _api: &dyn MatchInlinePhaseApi,
-    ) -> Option<Vec<Node>> {
-        self.tokenize_inline(input, position)
-    }
-
-    fn tokenize_inline_with_apis(
-        &self,
-        input: &str,
-        position: Option<yozora_ast::Position>,
-        _match_api: &dyn MatchInlinePhaseApi,
-        _parse_api: &dyn ParseInlinePhaseApi,
-    ) -> Option<Vec<Node>> {
-        self.tokenize_inline(input, position)
-    }
-}
-
-impl InlineFallbackTokenizer for TextTokenizer {
-    fn build_inline(&self, value: &str, position: Option<yozora_ast::Position>) -> Node {
-        parse::parse_text_node(value, position)
-    }
-
-    fn find_and_handle_delimiter(
-        &self,
-        source: &str,
-        start_index: usize,
-        end_index: usize,
-        position: Option<yozora_ast::Position>,
-        _api: &dyn MatchInlinePhaseApi,
-    ) -> Node {
-        let value = r#match::match_text_slice(source, start_index, end_index);
-        parse::parse_text_node(value, position)
-    }
-}
-
-impl EngineTokenizer for TextTokenizer {
-    fn tokenizer_type(&self) -> TokenizerType {
+    fn r#type(&self) -> TokenizerType {
         TokenizerType::Inline
     }
 
@@ -92,16 +39,38 @@ impl EngineTokenizer for TextTokenizer {
     }
 }
 
-struct TextMatchHook;
+struct TextMatchHook {
+    last_end_index: Option<usize>,
+    last_delimiter: Option<TokenDelimiter>,
+}
 
 impl MatchInlineHook for TextMatchHook {
-    fn find_delimiter(&mut self, _start_index: usize, _end_index: usize) -> Option<TokenDelimiter> {
-        None
+    fn reset(&mut self) {
+        self.last_end_index = None;
+        self.last_delimiter = None;
+    }
+
+    fn findDelimiter(&mut self, range_index: (usize, usize)) -> Option<TokenDelimiter> {
+        let mut last_end_index = self.last_end_index;
+        let mut last_delimiter = self.last_delimiter.clone();
+        let delimiter = genFindDelimiter(
+            range_index,
+            &mut last_end_index,
+            &mut last_delimiter,
+            |start_index, end_index| Some(r#match::find_text_delimiter(start_index, end_index)),
+        );
+        self.last_end_index = last_end_index;
+        self.last_delimiter = last_delimiter;
+        delimiter
+    }
+
+    fn processSingleDelimiter(&self, delimiter: &TokenDelimiter) -> Vec<InlineToken> {
+        r#match::process_single_delimiter(delimiter)
     }
 }
 
 struct TextParseHook<'a> {
-    api: &'a dyn EngineParseInlinePhaseApi,
+    api: &'a dyn ParseInlinePhaseApi,
 }
 
 impl ParseInlineHook for TextParseHook<'_> {
@@ -125,6 +94,7 @@ impl ParseInlineHook for TextParseHook<'_> {
                 token.end_index,
                 false,
             );
+            let value = normalize_soft_line_break_whitespace(value);
             nodes.push(parse::parse_text_node(&value, position));
         }
 
@@ -132,28 +102,56 @@ impl ParseInlineHook for TextParseHook<'_> {
     }
 }
 
-impl EngineInlineTokenizer for TextTokenizer {
-    fn create_match_hook<'a>(
-        &'a self,
-        _api: &'a dyn EngineMatchInlinePhaseApi,
-    ) -> Box<dyn MatchInlineHook + 'a> {
-        Box::new(TextMatchHook)
+fn normalize_soft_line_break_whitespace(input: String) -> String {
+    if !input.contains('\n') {
+        return input;
     }
 
-    fn create_parse_hook<'a>(
-        &'a self,
-        api: &'a dyn EngineParseInlinePhaseApi,
-    ) -> Box<dyn ParseInlineHook + 'a> {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch != '\n' {
+            out.push(ch);
+            continue;
+        }
+
+        while out.ends_with(' ') || out.ends_with('\t') {
+            out.pop();
+        }
+
+        out.push('\n');
+
+        while chars
+            .peek()
+            .is_some_and(|next| *next == ' ' || *next == '\t')
+        {
+            chars.next();
+        }
+    }
+
+    out
+}
+
+impl InlineTokenizer for TextTokenizer {
+    fn r#match<'a>(&'a self, _api: &'a dyn MatchInlinePhaseApi) -> Box<dyn MatchInlineHook + 'a> {
+        Box::new(TextMatchHook {
+            last_end_index: None,
+            last_delimiter: None,
+        })
+    }
+
+    fn parse<'a>(&'a self, api: &'a dyn ParseInlinePhaseApi) -> Box<dyn ParseInlineHook + 'a> {
         Box::new(TextParseHook { api })
     }
 }
 
-impl EngineInlineFallbackTokenizer for TextTokenizer {
-    fn find_and_handle_delimiter(
+impl InlineFallbackTokenizer for TextTokenizer {
+    fn findAndHandleDelimiter(
         &self,
         start_index: usize,
         end_index: usize,
-        _api: &dyn EngineMatchInlinePhaseApi,
+        _api: &dyn MatchInlinePhaseApi,
     ) -> InlineToken {
         InlineToken::new(self.meta.name.clone(), TEXT_TYPE, (start_index, end_index))
     }
@@ -162,6 +160,7 @@ impl EngineInlineFallbackTokenizer for TextTokenizer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use yozora_character::{create_node_point_generator, NodePoint};
 
     struct DummyInlineApi;
 
@@ -175,22 +174,83 @@ mod tests {
         }
     }
 
-    #[test]
-    fn phase_fallback_should_build_text_from_slice() {
-        let tokenizer = TextTokenizer::default();
-        let api = DummyInlineApi;
+    struct DummyParseApi {
+        node_points: Vec<NodePoint>,
+    }
 
-        let node = yozora_core_tokenizer::InlineFallbackTokenizer::find_and_handle_delimiter(
-            &tokenizer,
-            "hello world",
-            6,
-            11,
-            None,
-            &api,
-        );
-        let Node::Text(text) = node else {
+    impl ParseInlinePhaseApi for DummyParseApi {
+        fn should_reserve_position(&self) -> bool {
+            false
+        }
+
+        fn calc_position(&self, _interval: NodeInterval) -> Option<yozora_ast::Position> {
+            None
+        }
+
+        fn format_url(&self, url: &str) -> String {
+            url.to_string()
+        }
+
+        fn get_node_points(&self) -> &[NodePoint] {
+            &self.node_points
+        }
+
+        fn has_definition(&self, _identifier: &str) -> bool {
+            false
+        }
+
+        fn has_footnote_definition(&self, _identifier: &str) -> bool {
+            false
+        }
+
+        fn parse_inline_tokens(&self, _tokens: &[InlineToken]) -> Vec<Node> {
+            Vec::new()
+        }
+    }
+
+    #[test]
+    fn phase_fallback_should_build_text_token_and_parse_node() {
+        let tokenizer = TextTokenizer::default();
+        let match_api = DummyInlineApi;
+        let token = tokenizer.findAndHandleDelimiter(6, 11, &match_api);
+
+        let parse_api = DummyParseApi {
+            node_points: create_node_point_generator("hello world")
+                .pop()
+                .expect("expected node points"),
+        };
+        let parse_hook = tokenizer.parse(&parse_api);
+        let nodes = parse_hook.parse(&[token]);
+
+        let Some(Node::Text(text)) = nodes.first() else {
             panic!("expected text node");
         };
         assert_eq!(text.value, "world");
+    }
+
+    #[test]
+    fn parse_should_trim_spaces_around_soft_line_break() {
+        let tokenizer = TextTokenizer::default();
+        let input = "foo \n baz";
+        let node_points = create_node_point_generator(input)
+            .pop()
+            .expect("expected node points");
+
+        let parse_api = DummyParseApi {
+            node_points: node_points.clone(),
+        };
+        let token = InlineToken::new(
+            tokenizer.name().to_string(),
+            TEXT_TYPE,
+            (0, node_points.len()),
+        );
+
+        let parse_hook = tokenizer.parse(&parse_api);
+        let nodes = parse_hook.parse(&[token]);
+
+        let Some(Node::Text(text)) = nodes.first() else {
+            panic!("expected text node");
+        };
+        assert_eq!(text.value, "foo\nbaz");
     }
 }

@@ -1,25 +1,32 @@
-use yozora_ast::{Html, Node, Text};
+use yozora_ast::{Html, Node};
+use yozora_character::calc_string_from_node_points;
+use yozora_core_tokenizer::{InlineToken, NodeInterval, ParseInlinePhaseApi};
 
-use crate::r#match::HtmlInlineToken;
-
-pub(crate) fn parse_html_inline_tokens(input: &str, tokens: &[HtmlInlineToken]) -> Vec<Node> {
+pub(crate) fn parse_html_inline_tokens(
+    tokens: &[InlineToken],
+    parse_api: &dyn ParseInlinePhaseApi,
+) -> Vec<Node> {
+    let node_points = parse_api.get_node_points();
     let mut nodes = Vec::with_capacity(tokens.len());
 
     for token in tokens {
-        match token {
-            HtmlInlineToken::Text(interval) => {
-                nodes.push(Node::Text(Text {
-                    position: None,
-                    value: input[interval.start_index..interval.end_index].to_string(),
-                }));
-            }
-            HtmlInlineToken::Html(interval) => {
-                nodes.push(Node::Html(Html {
-                    position: None,
-                    value: input[interval.start_index..interval.end_index].to_string(),
-                }));
-            }
+        if token.start_index >= token.end_index || token.end_index > node_points.len() {
+            continue;
         }
+
+        let value =
+            calc_string_from_node_points(node_points, token.start_index, token.end_index, false);
+
+        let position = if parse_api.should_reserve_position() {
+            parse_api.calc_position(NodeInterval {
+                start_index: token.start_index,
+                end_index: token.end_index,
+            })
+        } else {
+            None
+        };
+
+        nodes.push(Node::Html(Html { position, value }));
     }
 
     nodes

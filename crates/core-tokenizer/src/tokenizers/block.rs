@@ -1,7 +1,7 @@
 use std::fmt::{Display, Formatter};
 
-use crate::engine::constant::TokenizerType;
-use crate::engine::tokenizer::EngineTokenizer;
+use crate::constant::TokenizerType;
+use crate::types::tokenizer::Tokenizer;
 
 #[derive(Debug, Clone)]
 pub struct BaseBlockTokenizer {
@@ -18,8 +18,8 @@ impl BaseBlockTokenizer {
     }
 }
 
-impl EngineTokenizer for BaseBlockTokenizer {
-    fn tokenizer_type(&self) -> TokenizerType {
+impl Tokenizer for BaseBlockTokenizer {
+    fn r#type(&self) -> TokenizerType {
         TokenizerType::Block
     }
 

@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use yozora_ast::{NodeType, Position};
 
-use crate::engine::constant::DelimiterType;
+use crate::constant::DelimiterType;
 
 pub type TokenData = Arc<dyn Any + Send + Sync + 'static>;
 

@@ -1,65 +1,86 @@
-use yozora_core_tokenizer::NodeInterval;
+use yozora_ast::DELETE_TYPE;
+use yozora_character::{is_whitespace_character, AsciiCodePoint, NodePoint};
+use yozora_core_tokenizer::{DelimiterType, InlineToken, TokenDelimiter};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum DeleteToken {
-    Text(NodeInterval),
-    Delete {
-        interval: NodeInterval,
-        content: String,
-    },
-}
+use crate::parse::DeleteTokenData;
 
-pub(crate) fn match_delete_tokens(input: &str) -> Option<Vec<DeleteToken>> {
-    if !input.contains("~~") {
+pub(crate) fn find_delete_delimiter(
+    node_points: &[NodePoint],
+    start_index: usize,
+    end_index: usize,
+) -> Option<TokenDelimiter> {
+    if start_index >= end_index || end_index > node_points.len() {
         return None;
     }
 
-    let mut tokens = Vec::new();
-    let mut cursor = 0usize;
-    let mut matched = false;
-
-    while let Some(start_offset) = input[cursor..].find("~~") {
-        let start = cursor + start_offset;
-        let content_start = start + 2;
-
-        let Some(end_offset) = input[content_start..].find("~~") else {
-            break;
-        };
-        let end = content_start + end_offset;
-        if end == content_start {
-            cursor = end + 2;
+    let mut i = start_index;
+    while i < end_index {
+        let c = node_points[i].code_point;
+        if c == AsciiCodePoint::BACKSLASH as i32 {
+            i += 2;
             continue;
         }
 
-        if start > cursor {
-            tokens.push(DeleteToken::Text(NodeInterval {
-                start_index: cursor,
-                end_index: start,
-            }));
+        if c != AsciiCodePoint::TILDE as i32 {
+            i += 1;
+            continue;
         }
 
-        tokens.push(DeleteToken::Delete {
-            interval: NodeInterval {
-                start_index: start,
-                end_index: end + 2,
-            },
-            content: input[content_start..end].to_string(),
+        let start = i;
+        i += 1;
+        while i < end_index && node_points[i].code_point == c {
+            i += 1;
+        }
+
+        let end = i;
+        if end.saturating_sub(start) != 2 {
+            continue;
+        }
+
+        let mut delimiter_type = DelimiterType::Both;
+
+        let preceding = if start == start_index {
+            None
+        } else {
+            node_points.get(start - 1)
+        };
+        if preceding.is_some_and(|p| is_whitespace_character(p.code_point)) {
+            delimiter_type = DelimiterType::Opener;
+        }
+
+        let following = if end == end_index {
+            None
+        } else {
+            node_points.get(end)
+        };
+        if following.is_some_and(|p| is_whitespace_character(p.code_point)) {
+            if delimiter_type != DelimiterType::Both {
+                continue;
+            }
+            delimiter_type = DelimiterType::Closer;
+        }
+
+        return Some(TokenDelimiter {
+            delimiter_type,
+            start_index: start,
+            end_index: end,
+            thickness: 2,
+            original_thickness: 2,
         });
-
-        matched = true;
-        cursor = end + 2;
     }
 
-    if !matched {
-        return None;
-    }
+    None
+}
 
-    if cursor < input.len() {
-        tokens.push(DeleteToken::Text(NodeInterval {
-            start_index: cursor,
-            end_index: input.len(),
-        }));
-    }
-
-    Some(tokens)
+pub(crate) fn create_delete_token(
+    opener_delimiter: &TokenDelimiter,
+    closer_delimiter: &TokenDelimiter,
+    children: Vec<InlineToken>,
+) -> InlineToken {
+    InlineToken::new(
+        "",
+        DELETE_TYPE,
+        (opener_delimiter.start_index, closer_delimiter.end_index),
+    )
+    .with_data(DeleteTokenData { children })
 }

@@ -1,171 +1,247 @@
-use yozora_ast::ReferenceType;
-use yozora_core_tokenizer::{MatchInlinePhaseApi, NodeInterval};
+use yozora_ast::{ReferenceType, IMAGE_REFERENCE_TYPE};
+use yozora_character::{AsciiCodePoint, NodePoint};
+use yozora_core_tokenizer::{
+    eat_link_label, DelimiterType, InlineToken, MatchInlinePhaseApi, TokenDelimiter,
+};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ImageReferenceToken {
-    Text(NodeInterval),
-    ImageReference {
-        interval: NodeInterval,
-        identifier: String,
-        label: String,
-        reference_type: ReferenceType,
-        alt: String,
-    },
+use crate::parse::ImageReferenceTokenData;
+
+#[derive(Debug, Clone)]
+pub(crate) struct ImageReferenceDelimiterBracket {
+    pub end_index: usize,
+    pub label: Option<String>,
+    pub identifier: Option<String>,
 }
 
-pub(crate) fn match_image_reference_tokens(
-    input: &str,
-    match_api: Option<&dyn MatchInlinePhaseApi>,
-) -> Option<Vec<ImageReferenceToken>> {
-    if !input.contains("![") {
-        return None;
-    }
+#[derive(Debug, Clone)]
+pub(crate) struct DelimiterEntry {
+    pub delimiter: TokenDelimiter,
+    pub brackets: Vec<ImageReferenceDelimiterBracket>,
+}
 
-    let mut tokens = Vec::new();
-    let mut cursor = 0usize;
-    let mut last_emit = 0usize;
-    let mut matched = false;
+pub(crate) fn find_image_reference_delimiter_entry(
+    node_points: &[NodePoint],
+    start_index: usize,
+    end_index: usize,
+) -> Option<DelimiterEntry> {
+    let mut i = start_index;
 
-    while let Some(offset) = input[cursor..].find("![") {
-        let start = cursor + offset;
-        if is_escaped(input, start) {
-            cursor = start + 2;
+    while i < end_index {
+        let code_point = node_points[i].code_point;
+
+        if code_point == AsciiCodePoint::BACKSLASH as i32 {
+            i = (i + 2).min(end_index);
             continue;
         }
 
-        let Some(label_end_offset) = input[start + 2..].find(']') else {
-            break;
-        };
-        let label_end = start + 2 + label_end_offset;
-        let label = input[start + 2..label_end].trim();
-        if label.is_empty() {
-            cursor = start + 2;
+        if code_point == AsciiCodePoint::EXCLAMATION_MARK as i32 {
+            if i + 1 < end_index
+                && node_points[i + 1].code_point == AsciiCodePoint::OPEN_BRACKET as i32
+            {
+                return Some(DelimiterEntry {
+                    delimiter: create_delimiter(DelimiterType::Opener, i, i + 2),
+                    brackets: Vec::new(),
+                });
+            }
+
+            i += 1;
             continue;
         }
 
-        if input[label_end + 1..].starts_with('(') {
-            cursor = start + 2;
-            continue;
-        }
-
-        let (identifier_raw, label_for_node, reference_type, consumed_len) =
-            if input[label_end + 1..].starts_with("[]") {
-                (
-                    label.to_string(),
-                    label.to_string(),
-                    ReferenceType::Collapsed,
-                    label_end + 3 - start,
-                )
-            } else if input[label_end + 1..].starts_with('[') {
-                let Some(ref_end_offset) = input[label_end + 2..].find(']') else {
-                    cursor = start + 2;
-                    continue;
-                };
-                let ref_end = label_end + 2 + ref_end_offset;
-                let reference = input[label_end + 2..ref_end].trim();
-                if reference.is_empty() {
-                    cursor = start + 2;
-                    continue;
-                }
-                (
-                    reference.to_string(),
-                    reference.to_string(),
-                    ReferenceType::Full,
-                    ref_end + 1 - start,
-                )
-            } else {
-                (
-                    label.to_string(),
-                    label.to_string(),
-                    ReferenceType::Shortcut,
-                    label_end + 1 - start,
-                )
+        if code_point == AsciiCodePoint::CLOSE_BRACKET as i32 {
+            let mut delimiter = DelimiterEntry {
+                delimiter: create_delimiter(DelimiterType::Closer, i, i + 1),
+                brackets: Vec::new(),
             };
 
-        let identifier = normalize_identifier(&identifier_raw);
-        if match_api.is_some_and(|api| !api.has_definition(&identifier)) {
-            cursor = start + 2;
-            continue;
-        }
-
-        if start > last_emit {
-            tokens.push(ImageReferenceToken::Text(NodeInterval {
-                start_index: last_emit,
-                end_index: start,
-            }));
-        }
-
-        tokens.push(ImageReferenceToken::ImageReference {
-            interval: NodeInterval {
-                start_index: start,
-                end_index: start + consumed_len,
-            },
-            identifier,
-            label: label_for_node,
-            reference_type,
-            alt: normalize_alt_text(label),
-        });
-
-        matched = true;
-        cursor = start + consumed_len;
-        last_emit = cursor;
-    }
-
-    if !matched {
-        return None;
-    }
-
-    if last_emit < input.len() {
-        tokens.push(ImageReferenceToken::Text(NodeInterval {
-            start_index: last_emit,
-            end_index: input.len(),
-        }));
-    }
-
-    Some(tokens)
-}
-
-fn normalize_identifier(label: &str) -> String {
-    label.trim().to_ascii_lowercase()
-}
-
-fn normalize_alt_text(input: &str) -> String {
-    let mut out = String::new();
-    let mut chars = input.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '\\' {
-            if let Some(next) = chars.next() {
-                out.push(next);
+            if i + 1 >= end_index
+                || node_points[i + 1].code_point != AsciiCodePoint::OPEN_BRACKET as i32
+            {
+                return Some(delimiter);
             }
-            continue;
+
+            let (next_index, label_and_identifier) = eat_link_label(node_points, i + 1, end_index);
+            if next_index < 0 {
+                return Some(delimiter);
+            }
+
+            let next_index = next_index as usize;
+            delimiter.delimiter = create_delimiter(DelimiterType::Closer, i, next_index);
+
+            let mut bracket = ImageReferenceDelimiterBracket {
+                end_index: next_index,
+                label: None,
+                identifier: None,
+            };
+
+            if let Some((label, identifier)) = label_and_identifier {
+                bracket.label = Some(label);
+                bracket.identifier = Some(identifier);
+            }
+
+            delimiter.brackets.push(bracket);
+            return Some(delimiter);
         }
 
-        if matches!(ch, '*' | '_' | '`') {
-            continue;
-        }
-
-        out.push(ch);
+        i += 1;
     }
 
-    out
+    None
 }
 
-fn is_escaped(input: &str, byte_index: usize) -> bool {
-    if byte_index == 0 {
-        return false;
-    }
+pub(crate) fn check_balanced_brackets_status(
+    start_index: usize,
+    end_index: usize,
+    internal_tokens: &[InlineToken],
+    node_points: &[NodePoint],
+) -> i8 {
+    let mut i = start_index;
+    let mut bracket_count = 0i32;
 
-    let bytes = input.as_bytes();
-    let mut idx = byte_index;
-    let mut slash_count = 0usize;
-    while idx > 0 {
-        idx -= 1;
-        if bytes[idx] == b'\\' {
-            slash_count += 1;
-        } else {
+    let update = |idx: usize, count: &mut i32, i_ref: &mut usize| match node_points[idx].code_point
+    {
+        x if x == AsciiCodePoint::BACKSLASH as i32 => {
+            *i_ref += 1;
+        }
+        x if x == AsciiCodePoint::OPEN_BRACKET as i32 => {
+            *count += 1;
+        }
+        x if x == AsciiCodePoint::CLOSE_BRACKET as i32 => {
+            *count -= 1;
+        }
+        _ => {}
+    };
+
+    for token in internal_tokens {
+        if token.start_index < start_index {
+            continue;
+        }
+        if token.end_index > end_index {
             break;
         }
+
+        while i < token.start_index {
+            update(i, &mut bracket_count, &mut i);
+            if bracket_count < 0 {
+                return -1;
+            }
+            i += 1;
+        }
+
+        i = token.end_index;
     }
 
-    slash_count % 2 == 1
+    while i < end_index {
+        update(i, &mut bracket_count, &mut i);
+        if bracket_count < 0 {
+            return -1;
+        }
+        i += 1;
+    }
+
+    if bracket_count > 0 {
+        1
+    } else {
+        0
+    }
+}
+
+pub(crate) fn process_delimiter_pair(
+    api: &dyn MatchInlinePhaseApi,
+    opener_delimiter: &TokenDelimiter,
+    closer_delimiter: &TokenDelimiter,
+    closer_brackets: &[ImageReferenceDelimiterBracket],
+    internal_tokens: &[InlineToken],
+    node_points: &[NodePoint],
+) -> Vec<InlineToken> {
+    let bracket = closer_brackets.first();
+    if let Some(bracket) = bracket {
+        if let (Some(label), Some(identifier)) = (bracket.label.clone(), bracket.identifier.clone())
+        {
+            if api.has_definition(&identifier) {
+                let children_tokens = api.resolve_internal_tokens(
+                    internal_tokens,
+                    opener_delimiter.end_index,
+                    closer_delimiter.start_index,
+                );
+                return vec![create_reference_token(
+                    opener_delimiter.start_index,
+                    bracket.end_index,
+                    ReferenceType::Full,
+                    label,
+                    identifier,
+                    children_tokens,
+                )];
+            }
+
+            return internal_tokens.to_vec();
+        }
+    }
+
+    let (next_index, label_and_identifier) = eat_link_label(
+        node_points,
+        opener_delimiter.end_index.saturating_sub(1),
+        closer_delimiter.start_index + 1,
+    );
+
+    if next_index >= 0 && next_index as usize == closer_delimiter.start_index + 1 {
+        if let Some((label, identifier)) = label_and_identifier {
+            if api.has_definition(&identifier) {
+                let reference_type = if bracket.is_none() {
+                    ReferenceType::Shortcut
+                } else {
+                    ReferenceType::Collapsed
+                };
+
+                let children_tokens = api.resolve_internal_tokens(
+                    internal_tokens,
+                    opener_delimiter.end_index,
+                    closer_delimiter.start_index,
+                );
+
+                return vec![create_reference_token(
+                    opener_delimiter.start_index,
+                    closer_delimiter.end_index,
+                    reference_type,
+                    label,
+                    identifier,
+                    children_tokens,
+                )];
+            }
+        }
+    }
+
+    internal_tokens.to_vec()
+}
+
+fn create_reference_token(
+    start_index: usize,
+    end_index: usize,
+    reference_type: ReferenceType,
+    label: String,
+    identifier: String,
+    children_tokens: Vec<InlineToken>,
+) -> InlineToken {
+    InlineToken::new("", IMAGE_REFERENCE_TYPE, (start_index, end_index)).with_data(
+        ImageReferenceTokenData {
+            identifier,
+            label,
+            reference_type,
+            children_tokens,
+        },
+    )
+}
+
+fn create_delimiter(
+    delimiter_type: DelimiterType,
+    start_index: usize,
+    end_index: usize,
+) -> TokenDelimiter {
+    TokenDelimiter {
+        delimiter_type,
+        start_index,
+        end_index,
+        thickness: end_index.saturating_sub(start_index),
+        original_thickness: end_index.saturating_sub(start_index),
+    }
 }

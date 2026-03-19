@@ -1,289 +1,267 @@
-#[derive(Debug, Clone)]
-pub(crate) struct DelimiterRun {
-    pub marker: char,
-    pub start: usize,
-    pub end: usize,
-    pub original_len: usize,
-    pub consumed_left: usize,
-    pub consumed_right: usize,
-    pub can_open: bool,
-    pub can_close: bool,
-}
+use yozora_ast::{EMPHASIS_TYPE, STRONG_TYPE};
+use yozora_character::{
+    is_punctuation_character, is_unicode_whitespace_character, AsciiCodePoint, NodePoint,
+};
+use yozora_core_tokenizer::*;
 
-#[derive(Debug, Clone)]
-pub(crate) struct EmphasisSpan {
-    pub open: usize,
-    pub close: usize,
-    pub thickness: usize,
-}
+use crate::parse::EmphasisTokenData;
 
-impl EmphasisSpan {
-    pub(crate) fn end_marker(&self) -> usize {
-        self.close + self.thickness
-    }
-}
+pub(crate) fn find_delimiter(
+    api: &dyn MatchInlinePhaseApi,
+    start_index: usize,
+    end_index: usize,
+) -> Option<TokenDelimiter> {
+    let node_points = api.get_node_points();
+    let block_start_index = api.get_block_start_index();
+    let block_end_index = api.get_block_end_index();
 
-impl DelimiterRun {
-    pub(crate) fn available_len(&self) -> usize {
-        self.end
-            .saturating_sub(self.start)
-            .saturating_sub(self.consumed_left + self.consumed_right)
-    }
-
-    pub(crate) fn is_both(&self) -> bool {
-        self.can_open && self.can_close
-    }
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct SpanTree {
-    pub spans: Vec<EmphasisSpan>,
-    pub children: Vec<Vec<usize>>,
-    pub roots: Vec<usize>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct EmphasisMatchResult {
-    pub char_starts: Vec<usize>,
-    pub total_chars: usize,
-    pub tree: SpanTree,
-}
-
-pub(crate) fn match_emphasis(input: &str) -> Option<EmphasisMatchResult> {
-    if !input.contains('*') && !input.contains('_') {
+    if start_index >= end_index || end_index > node_points.len() {
         return None;
     }
 
-    let chars: Vec<char> = input.chars().collect();
-    let char_starts: Vec<usize> = input.char_indices().map(|(idx, _)| idx).collect();
-    let mut runs = collect_delimiter_runs(&chars);
-    if runs.is_empty() {
-        return None;
-    }
-
-    let spans = pair_emphasis_spans(&mut runs);
-    if spans.is_empty() {
-        return None;
-    }
-
-    let total_chars = chars.len();
-    let tree = build_span_tree(&spans);
-
-    Some(EmphasisMatchResult {
-        char_starts,
-        total_chars,
-        tree,
-    })
-}
-
-fn collect_delimiter_runs(chars: &[char]) -> Vec<DelimiterRun> {
-    let mut runs = Vec::new();
-    let mut i = 0usize;
-
-    while i < chars.len() {
-        let ch = chars[i];
-        if ch == '\\' {
+    let mut i = start_index;
+    while i < end_index {
+        let c = node_points[i].code_point;
+        if c == AsciiCodePoint::BACKSLASH as i32 {
             i += 2;
             continue;
         }
 
-        if ch != '*' && ch != '_' {
+        if c != AsciiCodePoint::ASTERISK as i32 && c != AsciiCodePoint::UNDERSCORE as i32 {
             i += 1;
             continue;
         }
 
-        let start = i;
-        while i < chars.len() && chars[i] == ch {
+        let delimiter_start_index = i;
+        i += 1;
+        while i < end_index && node_points[i].code_point == c {
             i += 1;
         }
-        let end = i;
+        let delimiter_end_index = i;
 
-        let prev = if start > 0 {
-            Some(chars[start - 1])
-        } else {
-            None
-        };
-        let next = if end < chars.len() {
-            Some(chars[end])
-        } else {
-            None
-        };
+        let is_left_flanking = is_opener_delimiter(
+            node_points,
+            delimiter_start_index,
+            delimiter_end_index,
+            block_end_index,
+            start_index,
+            end_index,
+        );
+        let is_right_flanking = is_closer_delimiter(
+            node_points,
+            delimiter_start_index,
+            delimiter_end_index,
+            block_start_index,
+            start_index,
+            end_index,
+        );
 
-        let left_flanking = is_left_flanking(prev, next);
-        let right_flanking = is_right_flanking(prev, next);
+        let mut is_opener = is_left_flanking;
+        let mut is_closer = is_right_flanking;
 
-        let (can_open, can_close) = if ch == '_' && left_flanking && right_flanking {
-            (
-                prev.is_some_and(is_punctuation_char),
-                next.is_some_and(is_punctuation_char),
-            )
-        } else {
-            (left_flanking, right_flanking)
-        };
+        if c == AsciiCodePoint::UNDERSCORE as i32 && is_left_flanking && is_right_flanking {
+            if delimiter_start_index > start_index
+                && !is_punctuation_character(node_points[delimiter_start_index - 1].code_point)
+            {
+                is_opener = false;
+            }
 
-        if can_open || can_close {
-            runs.push(DelimiterRun {
-                marker: ch,
-                start,
-                end,
-                original_len: end - start,
-                consumed_left: 0,
-                consumed_right: 0,
-                can_open,
-                can_close,
-            });
+            let next_is_punctuation = node_points
+                .get(delimiter_end_index)
+                .is_some_and(|point| is_punctuation_character(point.code_point));
+            if !next_is_punctuation {
+                is_closer = false;
+            }
         }
+
+        if !is_opener && !is_closer {
+            continue;
+        }
+
+        let thickness = delimiter_end_index - delimiter_start_index;
+        return Some(TokenDelimiter {
+            delimiter_type: match (is_opener, is_closer) {
+                (true, true) => DelimiterType::Both,
+                (true, false) => DelimiterType::Opener,
+                (false, true) => DelimiterType::Closer,
+                (false, false) => unreachable!(),
+            },
+            start_index: delimiter_start_index,
+            end_index: delimiter_end_index,
+            thickness,
+            original_thickness: thickness,
+        });
     }
 
-    runs
+    None
 }
 
-fn pair_emphasis_spans(runs: &mut [DelimiterRun]) -> Vec<EmphasisSpan> {
-    let mut spans = Vec::new();
+pub(crate) fn is_delimiter_pair(
+    api: &dyn MatchInlinePhaseApi,
+    opener_delimiter: &TokenDelimiter,
+    closer_delimiter: &TokenDelimiter,
+) -> IsDelimiterPairResult {
+    let node_points = api.get_node_points();
 
-    for closer_idx in 0..runs.len() {
-        if !runs[closer_idx].can_close {
-            continue;
-        }
+    let Some(opener) = node_points.get(opener_delimiter.start_index) else {
+        return IsDelimiterPairResult::NotPaired {
+            opener: true,
+            closer: true,
+        };
+    };
+    let Some(closer) = node_points.get(closer_delimiter.start_index) else {
+        return IsDelimiterPairResult::NotPaired {
+            opener: true,
+            closer: true,
+        };
+    };
 
-        while runs[closer_idx].available_len() > 0 {
-            let mut opener_idx = closer_idx;
-            let mut matched = false;
+    let is_same_marker = opener.code_point == closer.code_point;
+    let violates_mod_three = (matches!(opener_delimiter.delimiter_type, DelimiterType::Both)
+        || matches!(closer_delimiter.delimiter_type, DelimiterType::Both))
+        && (opener_delimiter.original_thickness + closer_delimiter.original_thickness) % 3 == 0
+        && opener_delimiter.original_thickness % 3 != 0;
 
-            while opener_idx > 0 {
-                opener_idx -= 1;
-
-                if runs[opener_idx].marker != runs[closer_idx].marker {
-                    continue;
-                }
-                if !runs[opener_idx].can_open || runs[opener_idx].available_len() == 0 {
-                    continue;
-                }
-
-                if (runs[opener_idx].is_both() || runs[closer_idx].is_both())
-                    && (runs[opener_idx].original_len + runs[closer_idx].original_len) % 3 == 0
-                    && (runs[opener_idx].original_len % 3 != 0
-                        || runs[closer_idx].original_len % 3 != 0)
-                {
-                    continue;
-                }
-
-                let thickness = if runs[opener_idx].available_len() > 1
-                    && runs[closer_idx].available_len() > 1
-                {
-                    2
-                } else {
-                    1
-                };
-
-                let open = runs[opener_idx].end - runs[opener_idx].consumed_right - thickness;
-                let close = runs[closer_idx].start + runs[closer_idx].consumed_left;
-
-                if would_cross_existing_span(&spans, open, close) {
-                    continue;
-                }
-
-                spans.push(EmphasisSpan {
-                    open,
-                    close,
-                    thickness,
-                });
-
-                runs[opener_idx].consumed_right += thickness;
-                runs[closer_idx].consumed_left += thickness;
-                matched = true;
-                break;
-            }
-
-            if !matched {
-                break;
-            }
-        }
+    if !is_same_marker || violates_mod_three {
+        return IsDelimiterPairResult::NotPaired {
+            opener: true,
+            closer: true,
+        };
     }
 
-    spans.sort_by(|a, b| {
-        if a.open == b.open {
-            b.close.cmp(&a.close)
-        } else {
-            a.open.cmp(&b.open)
-        }
+    IsDelimiterPairResult::Paired
+}
+
+pub(crate) fn process_delimiter_pair(
+    api: &dyn MatchInlinePhaseApi,
+    opener_delimiter: &TokenDelimiter,
+    closer_delimiter: &TokenDelimiter,
+    internal_tokens: &[InlineToken],
+) -> ProcessDelimiterPairResult {
+    let thickness = if opener_delimiter.thickness > 1 && closer_delimiter.thickness > 1 {
+        2
+    } else {
+        1
+    };
+
+    let resolved_children = api.resolve_internal_tokens(
+        internal_tokens,
+        opener_delimiter.end_index,
+        closer_delimiter.start_index,
+    );
+
+    let node_type = if thickness == 2 {
+        STRONG_TYPE
+    } else {
+        EMPHASIS_TYPE
+    };
+
+    let token = InlineToken::new(
+        "",
+        node_type,
+        (
+            opener_delimiter.end_index - thickness,
+            closer_delimiter.start_index + thickness,
+        ),
+    )
+    .with_data(EmphasisTokenData {
+        thickness,
+        children: resolved_children,
     });
-    spans
-}
 
-fn would_cross_existing_span(spans: &[EmphasisSpan], open: usize, close: usize) -> bool {
-    spans.iter().any(|span| {
-        let inner_start = span.open + span.thickness;
-        let inner_end = span.close;
-
-        (open >= inner_start && open < inner_end && close >= span.end_marker())
-            || (close >= inner_start && close < inner_end && open < span.open)
-    })
-}
-
-fn build_span_tree(spans: &[EmphasisSpan]) -> SpanTree {
-    let mut children = vec![Vec::new(); spans.len()];
-    let mut roots = Vec::new();
-    let mut stack: Vec<usize> = Vec::new();
-
-    for idx in 0..spans.len() {
-        while let Some(last) = stack.last().copied() {
-            if spans[last].end_marker() <= spans[idx].open {
-                stack.pop();
-            } else {
-                break;
-            }
-        }
-
-        if let Some(parent) = stack.last().copied() {
-            children[parent].push(idx);
-        } else {
-            roots.push(idx);
-        }
-        stack.push(idx);
-    }
-
-    SpanTree {
-        spans: spans.to_vec(),
-        children,
-        roots,
-    }
-}
-
-fn is_left_flanking(prev: Option<char>, next: Option<char>) -> bool {
-    let Some(next_char) = next else {
-        return false;
+    let remain_opener_delimiter = if opener_delimiter.thickness > thickness {
+        Some(TokenDelimiter {
+            delimiter_type: opener_delimiter.delimiter_type,
+            start_index: opener_delimiter.start_index,
+            end_index: opener_delimiter.end_index - thickness,
+            thickness: opener_delimiter.thickness - thickness,
+            original_thickness: opener_delimiter.original_thickness,
+        })
+    } else {
+        None
     };
-    if next_char.is_whitespace() {
+
+    let remain_closer_delimiter = if closer_delimiter.thickness > thickness {
+        Some(TokenDelimiter {
+            delimiter_type: closer_delimiter.delimiter_type,
+            start_index: closer_delimiter.start_index + thickness,
+            end_index: closer_delimiter.end_index,
+            thickness: closer_delimiter.thickness - thickness,
+            original_thickness: closer_delimiter.original_thickness,
+        })
+    } else {
+        None
+    };
+
+    ProcessDelimiterPairResult {
+        tokens: vec![token],
+        remainOpenerDelimiter: remain_opener_delimiter,
+        remainCloserDelimiter: remain_closer_delimiter,
+    }
+}
+
+fn is_opener_delimiter(
+    node_points: &[NodePoint],
+    delimiter_start_index: usize,
+    delimiter_end_index: usize,
+    block_end_index: usize,
+    start_index: usize,
+    end_index: usize,
+) -> bool {
+    if delimiter_end_index == block_end_index {
         return false;
     }
-    if !is_punctuation_char(next_char) {
+    if delimiter_end_index == end_index {
         return true;
     }
 
-    match prev {
-        None => true,
-        Some(ch) => ch.is_whitespace() || is_punctuation_char(ch),
-    }
-}
-
-fn is_right_flanking(prev: Option<char>, next: Option<char>) -> bool {
-    let Some(prev_char) = prev else {
+    let Some(next) = node_points.get(delimiter_end_index) else {
         return false;
     };
-    if prev_char.is_whitespace() {
+    if is_unicode_whitespace_character(next.code_point) {
         return false;
     }
-    if !is_punctuation_char(prev_char) {
+
+    if !is_punctuation_character(next.code_point) {
         return true;
     }
 
-    match next {
-        None => true,
-        Some(ch) => ch.is_whitespace() || is_punctuation_char(ch),
+    if delimiter_start_index <= start_index {
+        return true;
     }
+
+    let prev = node_points[delimiter_start_index - 1].code_point;
+    is_unicode_whitespace_character(prev) || is_punctuation_character(prev)
 }
 
-fn is_punctuation_char(ch: char) -> bool {
-    ch.is_ascii_punctuation() || (!ch.is_alphanumeric() && !ch.is_whitespace())
+fn is_closer_delimiter(
+    node_points: &[NodePoint],
+    delimiter_start_index: usize,
+    delimiter_end_index: usize,
+    block_start_index: usize,
+    start_index: usize,
+    end_index: usize,
+) -> bool {
+    if delimiter_start_index == block_start_index {
+        return false;
+    }
+    if delimiter_start_index == start_index {
+        return true;
+    }
+
+    let prev = node_points[delimiter_start_index - 1].code_point;
+    if is_unicode_whitespace_character(prev) {
+        return false;
+    }
+
+    if !is_punctuation_character(prev) {
+        return true;
+    }
+
+    if delimiter_end_index >= end_index {
+        return true;
+    }
+
+    let next = node_points[delimiter_end_index].code_point;
+    is_unicode_whitespace_character(next) || is_punctuation_character(next)
 }

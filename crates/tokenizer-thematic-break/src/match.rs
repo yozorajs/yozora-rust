@@ -1,45 +1,89 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ThematicBreakToken;
+use yozora_ast::THEMATIC_BREAK_TYPE;
+use yozora_character::{is_whitespace_character, AsciiCodePoint};
+use yozora_core_tokenizer::{
+    calc_end_point, calc_start_point, BlockToken, EatAndInterruptPreviousSiblingResult,
+    EatOpenerResult, PhrasingContentLine, RemainingSibling,
+};
 
-pub(crate) fn match_thematic_break_token(input: &str) -> Option<ThematicBreakToken> {
-    if input.contains('\n') {
+pub(crate) fn eat_opener(line: &PhrasingContentLine) -> Option<EatOpenerResult> {
+    if line.count_of_precede_spaces >= 4 {
         return None;
     }
 
-    let leading_spaces = input.chars().take_while(|ch| *ch == ' ').count();
-    if leading_spaces >= 4 {
+    if line.first_non_whitespace_index + 2 >= line.end_index {
         return None;
     }
 
-    let line = input.trim();
-    if line.is_empty() {
-        return None;
-    }
-
-    let mut marker: Option<char> = None;
+    let node_points = line.node_points.as_ref();
+    let mut marker: Option<i32> = None;
     let mut count = 0usize;
-    for ch in line.chars() {
-        if ch == ' ' || ch == '\t' {
+    let mut continuous = true;
+    let mut has_potential_internal_space = false;
+
+    for i in line.first_non_whitespace_index..line.end_index {
+        let code_point = node_points[i].code_point;
+        if is_whitespace_character(code_point) {
+            has_potential_internal_space = true;
             continue;
         }
 
-        if ch != '-' && ch != '*' && ch != '_' {
-            return None;
+        if has_potential_internal_space {
+            continuous = false;
         }
 
-        if let Some(m) = marker {
-            if m != ch {
-                return None;
+        match code_point {
+            x if x == AsciiCodePoint::MINUS_SIGN as i32
+                || x == AsciiCodePoint::UNDERSCORE as i32
+                || x == AsciiCodePoint::ASTERISK as i32 =>
+            {
+                if let Some(existed) = marker {
+                    if existed != x {
+                        return None;
+                    }
+                } else {
+                    marker = Some(x);
+                }
+                count += 1;
             }
-        } else {
-            marker = Some(ch);
+            _ => return None,
         }
-        count += 1;
     }
 
     if count < 3 {
         return None;
     }
 
-    Some(ThematicBreakToken)
+    let _ = (marker, continuous);
+    let token = BlockToken::new("", THEMATIC_BREAK_TYPE, calc_line_position(line));
+
+    Some(EatOpenerResult {
+        token,
+        next_index: line.end_index,
+        saturated: true,
+    })
+}
+
+pub(crate) fn eat_and_interrupt_previous_sibling(
+    line: &PhrasingContentLine,
+    prev_sibling_token: &BlockToken,
+) -> Option<EatAndInterruptPreviousSiblingResult> {
+    let opener = eat_opener(line)?;
+    Some(EatAndInterruptPreviousSiblingResult {
+        token: opener.token,
+        next_index: opener.next_index,
+        saturated: opener.saturated,
+        remaining_sibling: RemainingSibling::One(prev_sibling_token.clone()),
+    })
+}
+
+fn calc_line_position(line: &PhrasingContentLine) -> Option<yozora_ast::Position> {
+    if line.start_index >= line.end_index {
+        return None;
+    }
+
+    Some(yozora_ast::Position {
+        start: calc_start_point(line.node_points.as_ref(), line.start_index),
+        end: calc_end_point(line.node_points.as_ref(), line.end_index - 1),
+        indent: None,
+    })
 }

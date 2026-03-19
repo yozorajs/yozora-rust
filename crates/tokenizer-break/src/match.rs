@@ -1,74 +1,64 @@
-use yozora_core_tokenizer::NodeInterval;
+use yozora_character::{AsciiCodePoint, VirtualCodePoint};
+use yozora_core_tokenizer::{DelimiterType, MatchInlinePhaseApi, TokenDelimiter};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum BreakToken {
-    Text(NodeInterval),
-    Break(NodeInterval),
-}
-
-pub(crate) fn match_break_tokens(input: &str) -> Option<Vec<BreakToken>> {
-    if !input.contains('\n') {
+pub(crate) fn find_break_delimiter(
+    api: &dyn MatchInlinePhaseApi,
+    start_index: usize,
+    end_index: usize,
+) -> Option<TokenDelimiter> {
+    let node_points = api.get_node_points();
+    if start_index + 1 >= end_index || end_index > node_points.len() {
         return None;
     }
 
-    let bytes = input.as_bytes();
-    let mut tokens = Vec::new();
-    let mut cursor = 0usize;
-    let mut index = 0usize;
-    let mut matched = false;
-
-    while index < bytes.len() {
-        if bytes[index] != b'\n' {
-            index += 1;
+    for i in (start_index + 1)..end_index {
+        if node_points[i].code_point != VirtualCodePoint::LineEnd as i32 {
             continue;
         }
 
-        let marker_start = if index > 0 && bytes[index - 1] == b'\\' {
-            Some(index - 1)
-        } else {
-            let mut spaces_start = index;
-            while spaces_start > 0 && bytes[spaces_start - 1] == b' ' {
-                spaces_start -= 1;
+        let prev = node_points[i - 1].code_point;
+        let marker_start = if prev == AsciiCodePoint::BACKSLASH as i32 {
+            let mut x = i.saturating_sub(2) as isize;
+            while x >= start_index as isize
+                && node_points[x as usize].code_point == AsciiCodePoint::BACKSLASH as i32
+            {
+                x -= 1;
             }
-            if index - spaces_start >= 2 {
-                Some(spaces_start)
+
+            if ((i as isize - x) & 1) == 0 {
+                Some(i - 1)
             } else {
                 None
             }
+        } else if prev == AsciiCodePoint::SPACE as i32 {
+            let mut x = i.saturating_sub(2) as isize;
+            while x >= start_index as isize
+                && node_points[x as usize].code_point == AsciiCodePoint::SPACE as i32
+            {
+                x -= 1;
+            }
+
+            if i as isize - x > 2 {
+                Some((x + 1) as usize)
+            } else {
+                None
+            }
+        } else {
+            None
         };
 
         let Some(marker_start) = marker_start else {
-            index += 1;
             continue;
         };
 
-        if marker_start > cursor {
-            tokens.push(BreakToken::Text(NodeInterval {
-                start_index: cursor,
-                end_index: marker_start,
-            }));
-        }
-
-        tokens.push(BreakToken::Break(NodeInterval {
+        return Some(TokenDelimiter {
+            delimiter_type: DelimiterType::Full,
             start_index: marker_start,
-            end_index: index + 1,
-        }));
-
-        matched = true;
-        cursor = index;
-        index += 1;
+            end_index: i,
+            thickness: i.saturating_sub(marker_start),
+            original_thickness: i.saturating_sub(marker_start),
+        });
     }
 
-    if !matched {
-        return None;
-    }
-
-    if cursor < input.len() {
-        tokens.push(BreakToken::Text(NodeInterval {
-            start_index: cursor,
-            end_index: input.len(),
-        }));
-    }
-
-    Some(tokens)
+    None
 }

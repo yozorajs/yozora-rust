@@ -161,6 +161,7 @@ dependencies = [
  "yozora-tokenizer-math",
  "yozora-tokenizer-paragraph",
  "yozora-tokenizer-setext-heading",
+ "yozora-tokenizer-soft-break",
  "yozora-tokenizer-table",
  "yozora-tokenizer-text",
  "yozora-tokenizer-thematic-break",
@@ -191,6 +192,7 @@ dependencies = [
  "yozora-tokenizer-list",
  "yozora-tokenizer-paragraph",
  "yozora-tokenizer-setext-heading",
+ "yozora-tokenizer-soft-break",
  "yozora-tokenizer-text",
  "yozora-tokenizer-thematic-break",
 ]
@@ -222,6 +224,7 @@ dependencies = [
  "yozora-tokenizer-list",
  "yozora-tokenizer-paragraph",
  "yozora-tokenizer-setext-heading",
+ "yozora-tokenizer-soft-break",
  "yozora-tokenizer-table",
  "yozora-tokenizer-text",
  "yozora-tokenizer-thematic-break",
@@ -371,6 +374,7 @@ dependencies = [
  "yozora-ast",
  "yozora-character",
  "yozora-core-tokenizer",
+ "yozora-tokenizer-footnote-definition",
 ]
 
 [[package]]
@@ -416,6 +420,7 @@ dependencies = [
  "yozora-ast",
  "yozora-character",
  "yozora-core-tokenizer",
+ "yozora-tokenizer-image",
 ]
 
 [[package]]

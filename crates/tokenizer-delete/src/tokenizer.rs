@@ -1,16 +1,8 @@
-use yozora_ast::{DeleteNode, Node, DELETE_TYPE};
-use yozora_character::{is_whitespace_character, AsciiCodePoint};
-use yozora_core_tokenizer::engine::{
-    DelimiterType, EngineInlineTokenizer, EngineTokenizer, InlineToken, MatchInlineHook,
-    MatchInlinePhaseApi as EngineMatchInlinePhaseApi, ParseInlineHook,
-    ParseInlinePhaseApi as EngineParseInlinePhaseApi, ProcessDelimiterPairResult, TokenDelimiter,
-    TokenizerType,
-};
-use yozora_core_tokenizer::phase::NodeInterval;
-use yozora_core_tokenizer::{
-    InlineTokenizer, MatchInlinePhaseApi, ParseInlinePhaseApi, Tokenizer, TokenizerKind,
-    TokenizerMeta,
-};
+use yozora_ast::Node;
+use yozora_core_tokenizer::*;
+
+#[cfg(test)]
+use yozora_core_tokenizer::NodeInterval;
 
 use crate::{parse, r#match};
 
@@ -27,55 +19,14 @@ impl Default for DeleteTokenizer {
             meta: TokenizerMeta {
                 name: DELETE_TOKENIZER_NAME.to_string(),
                 kind: TokenizerKind::Inline,
-                priority: 3,
+                priority: 2,
             },
         }
     }
 }
 
 impl Tokenizer for DeleteTokenizer {
-    fn meta(&self) -> &TokenizerMeta {
-        &self.meta
-    }
-}
-
-impl InlineTokenizer for DeleteTokenizer {
-    fn tokenize_inline(
-        &self,
-        input: &str,
-        _position: Option<yozora_ast::Position>,
-    ) -> Option<Vec<Node>> {
-        let tokens = r#match::match_delete_tokens(input)?;
-        Some(parse::parse_delete_tokens(input, &tokens))
-    }
-
-    fn tokenize_inline_with_api(
-        &self,
-        input: &str,
-        position: Option<yozora_ast::Position>,
-        _api: &dyn MatchInlinePhaseApi,
-    ) -> Option<Vec<Node>> {
-        self.tokenize_inline(input, position)
-    }
-
-    fn tokenize_inline_with_apis(
-        &self,
-        input: &str,
-        position: Option<yozora_ast::Position>,
-        _match_api: &dyn MatchInlinePhaseApi,
-        _parse_api: &dyn ParseInlinePhaseApi,
-    ) -> Option<Vec<Node>> {
-        self.tokenize_inline(input, position)
-    }
-}
-
-#[derive(Debug, Clone)]
-struct DeleteTokenData {
-    children: Vec<InlineToken>,
-}
-
-impl EngineTokenizer for DeleteTokenizer {
-    fn tokenizer_type(&self) -> TokenizerType {
+    fn r#type(&self) -> TokenizerType {
         TokenizerType::Inline
     }
 
@@ -89,76 +40,9 @@ impl EngineTokenizer for DeleteTokenizer {
 }
 
 struct DeleteMatchHook<'a> {
-    api: &'a dyn EngineMatchInlinePhaseApi,
+    api: &'a dyn MatchInlinePhaseApi,
     last_end_index: Option<usize>,
     last_delimiter: Option<TokenDelimiter>,
-}
-
-impl DeleteMatchHook<'_> {
-    fn find_delimiter_impl(&self, start_index: usize, end_index: usize) -> Option<TokenDelimiter> {
-        let node_points = self.api.get_node_points();
-        if start_index >= end_index || end_index > node_points.len() {
-            return None;
-        }
-
-        let mut i = start_index;
-        while i < end_index {
-            let c = node_points[i].code_point;
-            if c == AsciiCodePoint::BACKSLASH as i32 {
-                i += 2;
-                continue;
-            }
-
-            if c != AsciiCodePoint::TILDE as i32 {
-                i += 1;
-                continue;
-            }
-
-            let start = i;
-            i += 1;
-            while i < end_index && node_points[i].code_point == c {
-                i += 1;
-            }
-
-            let end = i;
-            if end.saturating_sub(start) != 2 {
-                continue;
-            }
-
-            let mut delimiter_type = DelimiterType::Both;
-
-            let preceding = if start == start_index {
-                None
-            } else {
-                node_points.get(start - 1)
-            };
-            if preceding.is_some_and(|p| is_whitespace_character(p.code_point)) {
-                delimiter_type = DelimiterType::Opener;
-            }
-
-            let following = if end == end_index {
-                None
-            } else {
-                node_points.get(end)
-            };
-            if following.is_some_and(|p| is_whitespace_character(p.code_point)) {
-                if delimiter_type != DelimiterType::Both {
-                    continue;
-                }
-                delimiter_type = DelimiterType::Closer;
-            }
-
-            return Some(TokenDelimiter {
-                delimiter_type,
-                start_index: start,
-                end_index: end,
-                thickness: 2,
-                original_thickness: 2,
-            });
-        }
-
-        None
-    }
 }
 
 impl MatchInlineHook for DeleteMatchHook<'_> {
@@ -167,23 +51,27 @@ impl MatchInlineHook for DeleteMatchHook<'_> {
         self.last_delimiter = None;
     }
 
-    fn find_delimiter(&mut self, start_index: usize, end_index: usize) -> Option<TokenDelimiter> {
-        if self.last_end_index == Some(end_index) {
-            match &self.last_delimiter {
-                Some(delimiter) if delimiter.start_index >= start_index => {
-                    return Some(delimiter.clone());
-                }
-                None => return None,
-                _ => {}
-            }
-        }
-
-        self.last_end_index = Some(end_index);
-        self.last_delimiter = self.find_delimiter_impl(start_index, end_index);
-        self.last_delimiter.clone()
+    fn findDelimiter(&mut self, range_index: (usize, usize)) -> Option<TokenDelimiter> {
+        let mut last_end_index = self.last_end_index;
+        let mut last_delimiter = self.last_delimiter.clone();
+        let delimiter = genFindDelimiter(
+            range_index,
+            &mut last_end_index,
+            &mut last_delimiter,
+            |start_index, end_index| {
+                r#match::find_delete_delimiter(
+                    self.api.get_node_points(),
+                    start_index,
+                    end_index,
+                )
+            },
+        );
+        self.last_end_index = last_end_index;
+        self.last_delimiter = last_delimiter;
+        delimiter
     }
 
-    fn process_delimiter_pair(
+    fn processDelimiterPair(
         &self,
         opener_delimiter: &TokenDelimiter,
         closer_delimiter: &TokenDelimiter,
@@ -196,52 +84,31 @@ impl MatchInlineHook for DeleteMatchHook<'_> {
         );
 
         ProcessDelimiterPairResult {
-            tokens: vec![InlineToken::new(
-                "",
-                DELETE_TYPE,
-                (opener_delimiter.start_index, closer_delimiter.end_index),
-            )
-            .with_data(DeleteTokenData { children })],
-            remain_opener_delimiter: None,
-            remain_closer_delimiter: None,
+            tokens: vec![r#match::create_delete_token(
+                opener_delimiter,
+                closer_delimiter,
+                children,
+            )],
+            remainOpenerDelimiter: None,
+            remainCloserDelimiter: None,
         }
     }
 }
 
 struct DeleteParseHook<'a> {
-    api: &'a dyn EngineParseInlinePhaseApi,
+    api: &'a dyn ParseInlinePhaseApi,
 }
 
 impl ParseInlineHook for DeleteParseHook<'_> {
     fn parse(&self, tokens: &[InlineToken]) -> Vec<Node> {
-        let mut nodes = Vec::with_capacity(tokens.len());
-
-        for token in tokens {
-            let Some(data) = token.data_as::<DeleteTokenData>() else {
-                continue;
-            };
-
-            let children = self.api.parse_inline_tokens(&data.children);
-            let position = if self.api.should_reserve_position() {
-                self.api.calc_position(NodeInterval {
-                    start_index: token.start_index,
-                    end_index: token.end_index,
-                })
-            } else {
-                None
-            };
-
-            nodes.push(Node::Delete(DeleteNode { position, children }));
-        }
-
-        nodes
+        parse::parse_delete_tokens(tokens, self.api)
     }
 }
 
-impl EngineInlineTokenizer for DeleteTokenizer {
-    fn create_match_hook<'a>(
+impl InlineTokenizer for DeleteTokenizer {
+    fn r#match<'a>(
         &'a self,
-        api: &'a dyn EngineMatchInlinePhaseApi,
+        api: &'a dyn MatchInlinePhaseApi,
     ) -> Box<dyn MatchInlineHook + 'a> {
         Box::new(DeleteMatchHook {
             api,
@@ -250,9 +117,9 @@ impl EngineInlineTokenizer for DeleteTokenizer {
         })
     }
 
-    fn create_parse_hook<'a>(
+    fn parse<'a>(
         &'a self,
-        api: &'a dyn EngineParseInlinePhaseApi,
+        api: &'a dyn ParseInlinePhaseApi,
     ) -> Box<dyn ParseInlineHook + 'a> {
         Box::new(DeleteParseHook { api })
     }
@@ -260,16 +127,17 @@ impl EngineInlineTokenizer for DeleteTokenizer {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use yozora_ast::TEXT_TYPE;
+    use yozora_ast::{Node, DELETE_TYPE, TEXT_TYPE};
     use yozora_character::{create_node_point_generator, NodePoint};
+
+    use super::*;
 
     struct DummyMatchApi {
         node_points: Vec<NodePoint>,
         resolved_tokens: Vec<InlineToken>,
     }
 
-    impl EngineMatchInlinePhaseApi for DummyMatchApi {
+    impl MatchInlinePhaseApi for DummyMatchApi {
         fn has_definition(&self, _identifier: &str) -> bool {
             false
         }
@@ -311,7 +179,7 @@ mod tests {
 
     struct DummyParseApi;
 
-    impl EngineParseInlinePhaseApi for DummyParseApi {
+    impl ParseInlinePhaseApi for DummyParseApi {
         fn should_reserve_position(&self) -> bool {
             false
         }
@@ -360,9 +228,9 @@ mod tests {
             resolved_tokens: Vec::new(),
         };
 
-        let mut hook = tokenizer.create_match_hook(&api);
+        let mut hook = tokenizer.r#match(&api);
         let delimiter = hook
-            .find_delimiter(0, api.get_block_end_index())
+            .findDelimiter((0, api.get_block_end_index()))
             .expect("expected delimiter");
 
         assert_eq!(delimiter.delimiter_type, DelimiterType::Both);
@@ -374,10 +242,10 @@ mod tests {
     fn engine_parse_should_parse_delete_children() {
         let tokenizer = DeleteTokenizer::default();
         let api = DummyParseApi;
-        let parse_hook = tokenizer.create_parse_hook(&api);
+        let parse_hook = tokenizer.parse(&api);
 
         let token = InlineToken::new(DELETE_TOKENIZER_NAME, DELETE_TYPE, (0, 6)).with_data(
-            DeleteTokenData {
+            parse::DeleteTokenData {
                 children: vec![InlineToken::new("text", TEXT_TYPE, (2, 4))],
             },
         );

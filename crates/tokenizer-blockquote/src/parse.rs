@@ -1,24 +1,21 @@
-use yozora_ast::{Blockquote, Node, Text};
+use yozora_ast::{Blockquote, Node};
+use yozora_core_tokenizer::{BlockToken, ParseBlockPhaseApi};
 
-use crate::r#match::BlockquoteToken;
+pub(crate) fn parse_blockquote_tokens(
+    tokens: &[BlockToken],
+    parse_api: &dyn ParseBlockPhaseApi,
+) -> Vec<Node> {
+    let mut nodes = Vec::with_capacity(tokens.len());
 
-pub(crate) fn parse_blockquote_token(
-    token: BlockquoteToken,
-) -> yozora_core_tokenizer::BlockTokenizeResult {
-    let children = if token.value.trim().is_empty() {
-        Vec::new()
-    } else {
-        vec![Node::Text(Text {
-            position: None,
-            value: token.value,
-        })]
-    };
-
-    yozora_core_tokenizer::BlockTokenizeResult {
-        node: Node::Blockquote(Blockquote {
-            position: None,
-            children,
-        }),
-        consumed_lines: token.consumed_lines,
+    for token in tokens {
+        let children = parse_api.parse_block_tokens(&token.children);
+        let position = if parse_api.should_reserve_position() {
+            token.position.clone()
+        } else {
+            None
+        };
+        nodes.push(Node::Blockquote(Blockquote { position, children }));
     }
+
+    nodes
 }

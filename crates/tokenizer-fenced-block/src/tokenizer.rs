@@ -1,13 +1,5 @@
 use yozora_ast::Node;
-use yozora_core_tokenizer::engine::{
-    BlockToken, EngineBlockTokenizer, EngineTokenizer, MatchBlockHook,
-    MatchBlockPhaseApi as EngineMatchBlockPhaseApi, ParseBlockHook,
-    ParseBlockPhaseApi as EngineParseBlockPhaseApi, TokenizerType,
-};
-use yozora_core_tokenizer::{
-    BlockTokenizeResult, BlockTokenizer, MatchBlockPhaseApi, Tokenizer, TokenizerKind,
-    TokenizerMeta,
-};
+use yozora_core_tokenizer::*;
 
 use crate::{parse, r#match};
 
@@ -30,43 +22,10 @@ impl Default for FencedBlockTokenizer {
     }
 }
 
+
+
 impl Tokenizer for FencedBlockTokenizer {
-    fn meta(&self) -> &TokenizerMeta {
-        &self.meta
-    }
-}
-
-impl BlockTokenizer for FencedBlockTokenizer {
-    fn tokenize_block_lines(
-        &self,
-        lines: &[&str],
-        position: Option<yozora_ast::Position>,
-    ) -> Option<BlockTokenizeResult> {
-        let first = *lines.first()?;
-        let node = self.tokenize_block(first, position)?;
-        Some(BlockTokenizeResult {
-            node,
-            consumed_lines: 1,
-        })
-    }
-
-    fn tokenize_block_lines_with_api(
-        &self,
-        lines: &[&str],
-        position: Option<yozora_ast::Position>,
-        _api: &mut dyn MatchBlockPhaseApi,
-    ) -> Option<BlockTokenizeResult> {
-        self.tokenize_block_lines(lines, position)
-    }
-
-    fn tokenize_block(&self, input: &str, position: Option<yozora_ast::Position>) -> Option<Node> {
-        let token = r#match::match_fenced_block_token(input)?;
-        parse::parse_fenced_block_token(token, position)
-    }
-}
-
-impl EngineTokenizer for FencedBlockTokenizer {
-    fn tokenizer_type(&self) -> TokenizerType {
+    fn r#type(&self) -> TokenizerType {
         TokenizerType::Block
     }
 
@@ -88,9 +47,9 @@ impl MatchBlockHook for EmptyMatchHook {
 
     fn eat_opener(
         &mut self,
-        _line: &yozora_core_tokenizer::engine::PhrasingContentLine,
+        _line: &yozora_core_tokenizer::PhrasingContentLine,
         _parent_token: &BlockToken,
-    ) -> Option<yozora_core_tokenizer::engine::EatOpenerResult> {
+    ) -> Option<yozora_core_tokenizer::EatOpenerResult> {
         None
     }
 }
@@ -103,17 +62,17 @@ impl ParseBlockHook for EmptyParseHook {
     }
 }
 
-impl EngineBlockTokenizer for FencedBlockTokenizer {
-    fn create_match_hook<'a>(
+impl BlockTokenizer for FencedBlockTokenizer {
+    fn r#match<'a>(
         &'a self,
-        _api: &'a dyn EngineMatchBlockPhaseApi,
+        _api: &'a dyn MatchBlockPhaseApi,
     ) -> Box<dyn MatchBlockHook + 'a> {
         Box::new(EmptyMatchHook)
     }
 
-    fn create_parse_hook<'a>(
+    fn parse<'a>(
         &'a self,
-        _api: &'a dyn EngineParseBlockPhaseApi,
+        _api: &'a dyn ParseBlockPhaseApi,
     ) -> Box<dyn ParseBlockHook + 'a> {
         Box::new(EmptyParseHook)
     }

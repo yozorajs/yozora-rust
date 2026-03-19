@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 
 use yozora_ast::Root;
-use yozora_core_parser::{DefaultParser, ParseContents, ParseOptions};
+use yozora_core_parser::{DefaultParser, DefaultParserProps, ParseContents, ParseOptions};
 use yozora_core_tokenizer::{AnyFallbackTokenizer, AnyTokenizer};
 use yozora_tokenizer_autolink::AutolinkTokenizer;
 use yozora_tokenizer_autolink_extension::AutolinkExtensionTokenizer;
@@ -33,15 +33,12 @@ pub struct GfmExParser {
 
 impl Default for GfmExParser {
     fn default() -> Self {
-        let mut inner = DefaultParser::new();
+        let mut inner = DefaultParser::new(DefaultParserProps {
+            blockFallbackTokenizer: Some(Box::new(ParagraphTokenizer::default())),
+            inlineFallbackTokenizer: Some(Box::new(TextTokenizer::default())),
+            defaultParseOptions: None,
+        });
         register_gfm_ex_tokenizers(&mut inner);
-        inner
-            .useFallbackTokenizer(AnyFallbackTokenizer::Block(Box::new(
-                ParagraphTokenizer::default(),
-            )))
-            .useFallbackTokenizer(AnyFallbackTokenizer::Inline(Box::new(
-                TextTokenizer::default(),
-            )));
 
         Self { inner }
     }
@@ -52,32 +49,27 @@ fn register_gfm_ex_tokenizers(inner: &mut DefaultParser) {
         .useTokenizer(
             AnyTokenizer::Block(Box::new(IndentedCodeTokenizer::default())),
             None,
-        )
-        .expect("failed to register tokenizer-indented-code");
+        );
     inner
         .useTokenizer(
             AnyTokenizer::Block(Box::new(HtmlBlockTokenizer::default())),
             None,
-        )
-        .expect("failed to register tokenizer-html-block");
+        );
     inner
         .useTokenizer(
             AnyTokenizer::Block(Box::new(SetextHeadingTokenizer::default())),
             None,
-        )
-        .expect("failed to register tokenizer-setext-heading");
+        );
     inner
         .useTokenizer(
             AnyTokenizer::Block(Box::new(ThematicBreakTokenizer::default())),
             None,
-        )
-        .expect("failed to register tokenizer-thematic-break");
+        );
     inner
         .useTokenizer(
             AnyTokenizer::Block(Box::new(BlockquoteTokenizer::default())),
             None,
-        )
-        .expect("failed to register tokenizer-blockquote");
+        );
     inner
         .useTokenizer(
             AnyTokenizer::Block(Box::new(ListTokenizer::new(ListTokenizerOptions {
@@ -85,99 +77,83 @@ fn register_gfm_ex_tokenizers(inner: &mut DefaultParser) {
                 ..ListTokenizerOptions::default()
             }))),
             None,
-        )
-        .expect("failed to register tokenizer-list");
+        );
     inner
         .useTokenizer(
             AnyTokenizer::Block(Box::new(HeadingTokenizer::default())),
             None,
-        )
-        .expect("failed to register tokenizer-heading");
+        );
     inner
         .useTokenizer(
             AnyTokenizer::Block(Box::new(FencedCodeTokenizer::default())),
             None,
-        )
-        .expect("failed to register tokenizer-fenced-code");
+        );
     inner
         .useTokenizer(
             AnyTokenizer::Block(Box::new(DefinitionTokenizer::default())),
             None,
-        )
-        .expect("failed to register tokenizer-definition");
+        );
     inner
         .useTokenizer(
             AnyTokenizer::Block(Box::new(TableTokenizer::default())),
             None,
-        )
-        .expect("failed to register tokenizer-table");
+        );
 
     inner
         .useTokenizer(
             AnyTokenizer::Inline(Box::new(HtmlInlineTokenizer::default())),
             None,
-        )
-        .expect("failed to register tokenizer-html-inline");
+        );
     inner
         .useTokenizer(
             AnyTokenizer::Inline(Box::new(InlineCodeTokenizer::default())),
             None,
-        )
-        .expect("failed to register tokenizer-inline-code");
+        );
     inner
         .useTokenizer(
             AnyTokenizer::Inline(Box::new(AutolinkTokenizer::default())),
             None,
-        )
-        .expect("failed to register tokenizer-autolink");
+        );
     inner
         .useTokenizer(
             AnyTokenizer::Inline(Box::new(AutolinkExtensionTokenizer::default())),
             None,
-        )
-        .expect("failed to register tokenizer-autolink-extension");
+        );
     inner
         .useTokenizer(
             AnyTokenizer::Inline(Box::new(BreakTokenizer::default())),
             None,
-        )
-        .expect("failed to register tokenizer-break");
+        );
     inner
         .useTokenizer(
             AnyTokenizer::Inline(Box::new(ImageTokenizer::default())),
             None,
-        )
-        .expect("failed to register tokenizer-image");
+        );
     inner
         .useTokenizer(
             AnyTokenizer::Inline(Box::new(ImageReferenceTokenizer::default())),
             None,
-        )
-        .expect("failed to register tokenizer-image-reference");
+        );
     inner
         .useTokenizer(
             AnyTokenizer::Inline(Box::new(LinkTokenizer::default())),
             None,
-        )
-        .expect("failed to register tokenizer-link");
+        );
     inner
         .useTokenizer(
             AnyTokenizer::Inline(Box::new(LinkReferenceTokenizer::default())),
             None,
-        )
-        .expect("failed to register tokenizer-link-reference");
+        );
     inner
         .useTokenizer(
             AnyTokenizer::Inline(Box::new(EmphasisTokenizer::default())),
             None,
-        )
-        .expect("failed to register tokenizer-emphasis");
+        );
     inner
         .useTokenizer(
             AnyTokenizer::Inline(Box::new(DeleteTokenizer::default())),
             None,
-        )
-        .expect("failed to register tokenizer-delete");
+        );
 }
 
 impl GfmExParser {
@@ -185,20 +161,18 @@ impl GfmExParser {
         &mut self,
         tokenizer: AnyTokenizer,
         registerBeforeTokenizer: Option<&str>,
-    ) -> Result<&mut Self, String> {
-        self.inner
-            .useTokenizer(tokenizer, registerBeforeTokenizer)?;
-        Ok(self)
+    ) -> &mut Self {
+        self.inner.useTokenizer(tokenizer, registerBeforeTokenizer);
+        self
     }
 
     pub fn replaceTokenizer(
         &mut self,
         tokenizer: AnyTokenizer,
         registerBeforeTokenizer: Option<&str>,
-    ) -> Result<&mut Self, String> {
-        self.inner
-            .replaceTokenizer(tokenizer, registerBeforeTokenizer)?;
-        Ok(self)
+    ) -> &mut Self {
+        self.inner.replaceTokenizer(tokenizer, registerBeforeTokenizer);
+        self
     }
 
     pub fn unmountTokenizer(&mut self, tokenizerName: &str) -> &mut Self {
@@ -211,7 +185,7 @@ impl GfmExParser {
         self
     }
 
-    pub fn setDefaultParseOptions(&mut self, options: ParseOptions) {
+    pub fn setDefaultParseOptions(&mut self, options: Option<ParseOptions>) {
         self.inner.setDefaultParseOptions(options);
     }
 

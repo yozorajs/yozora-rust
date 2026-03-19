@@ -1,10 +1,58 @@
-use yozora_ast::EcmaImportNamedImport;
+use yozora_ast::{EcmaImportNamedImport, ECMA_IMPORT_TYPE};
+use yozora_character::{
+    calc_string_from_node_points, calc_trim_boundary_of_code_points, AsciiCodePoint,
+};
+use yozora_core_tokenizer::{
+    calc_end_point, calc_start_point, BlockToken, EatOpenerResult, PhrasingContentLine,
+};
+
+use crate::parse::EcmaImportTokenData;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct EcmaImportToken {
     pub module_name: String,
     pub default_import: Option<String>,
     pub named_imports: Vec<EcmaImportNamedImport>,
+}
+
+pub(crate) fn eat_opener(line: &PhrasingContentLine) -> Option<EatOpenerResult> {
+    if line.count_of_precede_spaces >= 4 || line.first_non_whitespace_index + 8 >= line.end_index {
+        return None;
+    }
+
+    let node_points = line.node_points.as_ref();
+    let i = line.first_non_whitespace_index;
+    if node_points[i].code_point != AsciiCodePoint::LOWERCASE_I as i32
+        || node_points[i + 1].code_point != AsciiCodePoint::LOWERCASE_M as i32
+        || node_points[i + 2].code_point != AsciiCodePoint::LOWERCASE_P as i32
+        || node_points[i + 3].code_point != AsciiCodePoint::LOWERCASE_O as i32
+        || node_points[i + 4].code_point != AsciiCodePoint::LOWERCASE_R as i32
+        || node_points[i + 5].code_point != AsciiCodePoint::LOWERCASE_T as i32
+    {
+        return None;
+    }
+
+    let (left, right) = calc_trim_boundary_of_code_points(
+        node_points,
+        line.first_non_whitespace_index,
+        line.end_index,
+    );
+    let source = calc_string_from_node_points(node_points, left, right, false);
+    let matched = match_ecma_import_token(&source)?;
+
+    let token = BlockToken::new("", ECMA_IMPORT_TYPE, calc_line_position(line)).with_data(
+        EcmaImportTokenData {
+            module_name: matched.module_name,
+            default_import: matched.default_import,
+            named_imports: matched.named_imports,
+        },
+    );
+
+    Some(EatOpenerResult {
+        token,
+        next_index: line.end_index,
+        saturated: true,
+    })
 }
 
 pub(crate) fn match_ecma_import_token(input: &str) -> Option<EcmaImportToken> {
@@ -32,6 +80,18 @@ pub(crate) fn match_ecma_import_token(input: &str) -> Option<EcmaImportToken> {
         module_name,
         default_import,
         named_imports,
+    })
+}
+
+fn calc_line_position(line: &PhrasingContentLine) -> Option<yozora_ast::Position> {
+    if line.start_index >= line.end_index {
+        return None;
+    }
+
+    Some(yozora_ast::Position {
+        start: calc_start_point(line.node_points.as_ref(), line.start_index),
+        end: calc_end_point(line.node_points.as_ref(), line.end_index - 1),
+        indent: None,
     })
 }
 

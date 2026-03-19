@@ -1,26 +1,31 @@
-use crate::engine::constant::TokenizerType;
-use crate::engine::match_block::{MatchBlockHook, MatchBlockPhaseApi};
-use crate::engine::match_inline::{MatchInlineHook, MatchInlinePhaseApi};
-use crate::engine::parse_block::{ParseBlockHook, ParseBlockPhaseApi};
-use crate::engine::parse_inline::{ParseInlineHook, ParseInlinePhaseApi};
-use crate::engine::phrasing_content::PhrasingContentLine;
-use crate::engine::token::{BlockToken, InlineToken};
+use crate::constant::TokenizerType;
+use crate::types::match_block::{MatchBlockHook, MatchBlockPhaseApi};
+use crate::types::match_inline::{MatchInlineHook, MatchInlinePhaseApi};
+use crate::types::parse_block::{ParseBlockHook, ParseBlockPhaseApi};
+use crate::types::parse_inline::{ParseInlineHook, ParseInlinePhaseApi};
+use crate::types::phrasing_content::PhrasingContentLine;
+use crate::types::token::{BlockToken, InlineToken};
 
-pub trait EngineTokenizer {
-    fn tokenizer_type(&self) -> TokenizerType;
+pub trait Tokenizer {
+    fn r#type(&self) -> TokenizerType;
 
     fn name(&self) -> &str;
 
     fn priority(&self) -> i32;
+
+    #[allow(non_snake_case)]
+    fn toString(&self) -> String {
+        self.name().to_string()
+    }
 }
 
-pub trait EngineBlockTokenizer: EngineTokenizer {
-    fn create_match_hook<'a>(
+pub trait BlockTokenizer: Tokenizer {
+    fn r#match<'a>(
         &'a self,
         api: &'a dyn MatchBlockPhaseApi,
     ) -> Box<dyn MatchBlockHook + 'a>;
 
-    fn create_parse_hook<'a>(
+    fn parse<'a>(
         &'a self,
         api: &'a dyn ParseBlockPhaseApi,
     ) -> Box<dyn ParseBlockHook + 'a>;
@@ -41,20 +46,21 @@ pub trait EngineBlockTokenizer: EngineTokenizer {
     }
 }
 
-pub trait EngineInlineTokenizer: EngineTokenizer {
-    fn create_match_hook<'a>(
+pub trait InlineTokenizer: Tokenizer {
+    fn r#match<'a>(
         &'a self,
         api: &'a dyn MatchInlinePhaseApi,
     ) -> Box<dyn MatchInlineHook + 'a>;
 
-    fn create_parse_hook<'a>(
+    fn parse<'a>(
         &'a self,
         api: &'a dyn ParseInlinePhaseApi,
     ) -> Box<dyn ParseInlineHook + 'a>;
 }
 
-pub trait EngineInlineFallbackTokenizer: EngineInlineTokenizer {
-    fn find_and_handle_delimiter(
+pub trait InlineFallbackTokenizer: InlineTokenizer {
+    #[allow(non_snake_case)]
+    fn findAndHandleDelimiter(
         &self,
         start_index: usize,
         end_index: usize,

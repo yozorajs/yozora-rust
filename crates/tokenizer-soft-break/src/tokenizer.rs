@@ -1,15 +1,5 @@
-use yozora_ast::{Node, Text, TEXT_TYPE};
-use yozora_character::{NodePoint, VirtualCodePoint};
-use yozora_core_tokenizer::engine::{
-    DelimiterType, EngineInlineTokenizer, EngineTokenizer, InlineToken, MatchInlineHook,
-    MatchInlinePhaseApi as EngineMatchInlinePhaseApi, ParseInlineHook,
-    ParseInlinePhaseApi as EngineParseInlinePhaseApi, TokenDelimiter, TokenizerType,
-};
-use yozora_core_tokenizer::phase::NodeInterval;
-use yozora_core_tokenizer::{
-    InlineTokenizer, MatchInlinePhaseApi, ParseInlinePhaseApi, Tokenizer, TokenizerKind,
-    TokenizerMeta,
-};
+use yozora_ast::{Node, TEXT_TYPE};
+use yozora_core_tokenizer::*;
 
 use crate::{parse, r#match};
 
@@ -33,48 +23,7 @@ impl Default for SoftBreakTokenizer {
 }
 
 impl Tokenizer for SoftBreakTokenizer {
-    fn meta(&self) -> &TokenizerMeta {
-        &self.meta
-    }
-}
-
-impl InlineTokenizer for SoftBreakTokenizer {
-    fn tokenize_inline(
-        &self,
-        input: &str,
-        _position: Option<yozora_ast::Position>,
-    ) -> Option<Vec<Node>> {
-        let value = r#match::match_soft_break_text(input)?;
-        Some(parse::parse_soft_break_text(value))
-    }
-
-    fn tokenize_inline_with_api(
-        &self,
-        input: &str,
-        position: Option<yozora_ast::Position>,
-        _api: &dyn MatchInlinePhaseApi,
-    ) -> Option<Vec<Node>> {
-        self.tokenize_inline(input, position)
-    }
-
-    fn tokenize_inline_with_apis(
-        &self,
-        input: &str,
-        position: Option<yozora_ast::Position>,
-        _match_api: &dyn MatchInlinePhaseApi,
-        _parse_api: &dyn ParseInlinePhaseApi,
-    ) -> Option<Vec<Node>> {
-        self.tokenize_inline(input, position)
-    }
-}
-
-#[derive(Debug, Clone)]
-struct SoftBreakTokenData {
-    value: String,
-}
-
-impl EngineTokenizer for SoftBreakTokenizer {
-    fn tokenizer_type(&self) -> TokenizerType {
+    fn r#type(&self) -> TokenizerType {
         TokenizerType::Inline
     }
 
@@ -87,50 +36,49 @@ impl EngineTokenizer for SoftBreakTokenizer {
     }
 }
 
-struct SoftBreakMatchHook {
-    delimiter: Option<TokenDelimiter>,
-    data: Option<SoftBreakTokenData>,
+struct SoftBreakMatchHook<'a> {
+    api: &'a dyn MatchInlinePhaseApi,
+    last_delimiter: Option<TokenDelimiter>,
+    last_data: Option<parse::SoftBreakTokenData>,
 }
 
-impl SoftBreakMatchHook {
-    fn new(api: &dyn EngineMatchInlinePhaseApi) -> Self {
-        let start_index = api.get_block_start_index();
-        let end_index = api.get_block_end_index();
-        let source = build_source(api.get_node_points(), start_index, end_index);
+impl MatchInlineHook for SoftBreakMatchHook<'_> {
+    fn reset(&mut self) {
+        self.last_delimiter = None;
+        self.last_data = None;
+    }
 
-        let Some(value) = r#match::match_soft_break_text(&source) else {
-            return Self {
-                delimiter: None,
-                data: None,
-            };
+    fn findDelimiter(&mut self, range_index: (usize, usize)) -> Option<TokenDelimiter> {
+        let (start_index, end_index) = range_index;
+        if let Some(delimiter) = &self.last_delimiter {
+            if delimiter.start_index >= start_index && delimiter.end_index <= end_index {
+                return Some(delimiter.clone());
+            }
+        }
+
+        let Some(value) =
+            r#match::match_soft_break_value(self.api.get_node_points(), start_index, end_index)
+        else {
+            self.last_delimiter = None;
+            self.last_data = None;
+            return None;
         };
 
-        Self {
-            delimiter: Some(TokenDelimiter {
-                delimiter_type: DelimiterType::Full,
-                start_index,
-                end_index,
-                thickness: end_index.saturating_sub(start_index),
-                original_thickness: end_index.saturating_sub(start_index),
-            }),
-            data: Some(SoftBreakTokenData { value }),
-        }
-    }
-}
+        let delimiter = TokenDelimiter {
+            delimiter_type: DelimiterType::Full,
+            start_index,
+            end_index,
+            thickness: end_index.saturating_sub(start_index),
+            original_thickness: end_index.saturating_sub(start_index),
+        };
 
-impl MatchInlineHook for SoftBreakMatchHook {
-    fn find_delimiter(&mut self, start_index: usize, end_index: usize) -> Option<TokenDelimiter> {
-        let delimiter = self.delimiter.clone()?;
-        if delimiter.start_index < start_index || delimiter.end_index > end_index {
-            return None;
-        }
-
-        self.delimiter = None;
+        self.last_delimiter = Some(delimiter.clone());
+        self.last_data = Some(parse::SoftBreakTokenData { value });
         Some(delimiter)
     }
 
-    fn process_single_delimiter(&self, delimiter: &TokenDelimiter) -> Vec<InlineToken> {
-        let Some(data) = self.data.as_ref() else {
+    fn processSingleDelimiter(&self, delimiter: &TokenDelimiter) -> Vec<InlineToken> {
+        let Some(data) = self.last_data.as_ref() else {
             return Vec::new();
         };
 
@@ -142,72 +90,31 @@ impl MatchInlineHook for SoftBreakMatchHook {
 }
 
 struct SoftBreakParseHook<'a> {
-    api: &'a dyn EngineParseInlinePhaseApi,
+    api: &'a dyn ParseInlinePhaseApi,
 }
 
 impl ParseInlineHook for SoftBreakParseHook<'_> {
     fn parse(&self, tokens: &[InlineToken]) -> Vec<Node> {
-        let mut nodes = Vec::with_capacity(tokens.len());
-
-        for token in tokens {
-            let Some(data) = token.data_as::<SoftBreakTokenData>() else {
-                continue;
-            };
-
-            let position = if self.api.should_reserve_position() {
-                self.api.calc_position(NodeInterval {
-                    start_index: token.start_index,
-                    end_index: token.end_index,
-                })
-            } else {
-                None
-            };
-
-            nodes.push(Node::Text(Text {
-                position,
-                value: data.value.clone(),
-            }));
-        }
-
-        nodes
+        parse::parse_soft_break_tokens(tokens, self.api)
     }
 }
 
-impl EngineInlineTokenizer for SoftBreakTokenizer {
-    fn create_match_hook<'a>(
+impl InlineTokenizer for SoftBreakTokenizer {
+    fn r#match<'a>(
         &'a self,
-        api: &'a dyn EngineMatchInlinePhaseApi,
+        api: &'a dyn MatchInlinePhaseApi,
     ) -> Box<dyn MatchInlineHook + 'a> {
-        Box::new(SoftBreakMatchHook::new(api))
+        Box::new(SoftBreakMatchHook {
+            api,
+            last_delimiter: None,
+            last_data: None,
+        })
     }
 
-    fn create_parse_hook<'a>(
+    fn parse<'a>(
         &'a self,
-        api: &'a dyn EngineParseInlinePhaseApi,
+        api: &'a dyn ParseInlinePhaseApi,
     ) -> Box<dyn ParseInlineHook + 'a> {
         Box::new(SoftBreakParseHook { api })
     }
-}
-
-fn build_source(node_points: &[NodePoint], start_index: usize, end_index: usize) -> String {
-    let mut source = String::new();
-    for point in node_points
-        .iter()
-        .skip(start_index)
-        .take(end_index.saturating_sub(start_index))
-    {
-        let code_point = point.code_point;
-        let ch = if code_point == VirtualCodePoint::Space as i32 {
-            Some(' ')
-        } else if code_point == VirtualCodePoint::LineEnd as i32 {
-            Some('\n')
-        } else {
-            char::from_u32(code_point as u32)
-        };
-
-        if let Some(ch) = ch {
-            source.push(ch);
-        }
-    }
-    source
 }

@@ -1,28 +1,34 @@
+pub mod block;
+pub mod inline;
+pub mod types;
+
+pub use types::{Processor, ProcessorOptions};
+
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::rc::Rc;
 
 use yozora_ast::{Node, Point, Position, Root, ROOT_TYPE};
 use yozora_character::NodePoint;
-use yozora_core_tokenizer::engine::{
+use yozora_core_tokenizer::NodeInterval;
+use yozora_core_tokenizer::{
     BlockToken, InlineToken, MatchBlockPhaseApi, MatchInlinePhaseApi, ParseBlockPhaseApi,
     ParseInlinePhaseApi, PhrasingContentLine,
 };
-use yozora_core_tokenizer::phase::NodeInterval;
 
-use crate::engine::block::{create_block_content_processor, MatchBlockProcessorHook};
-use crate::engine::inline::{match_inline_tokens, MatchInlineProcessorHook};
-use crate::engine::types::{Processor, ProcessorOptions};
+use crate::processor::block::{create_block_content_processor, MatchBlockProcessorHook};
+use crate::processor::inline::{match_inline_tokens, MatchInlineProcessorHook};
 
 pub fn create_processor<'a>(options: ProcessorOptions<'a>) -> impl Processor + 'a {
-    EngineProcessor {
+    ParserProcessor {
         options,
         definition_identifiers: HashSet::new(),
         footnote_definition_identifiers: HashSet::new(),
     }
 }
 
-struct EngineProcessor<'a> {
+struct ParserProcessor<'a> {
     options: ProcessorOptions<'a>,
     definition_identifiers: HashSet<String>,
     footnote_definition_identifiers: HashSet<String>,
@@ -36,8 +42,9 @@ struct IdentifierState {
 }
 
 struct MatchBlockApiShared<'a> {
-    block_tokenizers: &'a [Box<dyn yozora_core_tokenizer::engine::EngineBlockTokenizer>],
-    block_fallback_tokenizer: Option<&'a dyn yozora_core_tokenizer::engine::EngineBlockTokenizer>,
+    block_tokenizers: &'a [Box<dyn yozora_core_tokenizer::BlockTokenizer>],
+    block_tokenizer_map: &'a HashMap<String, usize>,
+    block_fallback_tokenizer: Option<&'a dyn yozora_core_tokenizer::BlockTokenizer>,
     identifiers: Rc<RefCell<IdentifierState>>,
 }
 
@@ -50,6 +57,7 @@ impl MatchBlockPhaseApi for MatchBlockApiAdapter<'_> {
     fn extract_phrasing_lines(&self, token: &BlockToken) -> Option<Vec<PhrasingContentLine>> {
         find_block_tokenizer_by_name(
             self.shared.block_tokenizers,
+            self.shared.block_tokenizer_map,
             self.shared.block_fallback_tokenizer,
             &token.tokenizer,
         )
@@ -64,6 +72,7 @@ impl MatchBlockPhaseApi for MatchBlockApiAdapter<'_> {
         if let Some(original_token) = original_token {
             if let Some(tokenizer) = find_block_tokenizer_by_name(
                 self.shared.block_tokenizers,
+                self.shared.block_tokenizer_map,
                 self.shared.block_fallback_tokenizer,
                 &original_token.tokenizer,
             ) {
@@ -235,7 +244,7 @@ impl MatchInlinePhaseApi for MatchInlineApiAdapter<'_, '_> {
     }
 }
 
-impl EngineProcessor<'_> {
+impl ParserProcessor<'_> {
     fn match_block_tokens(
         &self,
         lines: &[Vec<PhrasingContentLine>],
@@ -243,6 +252,7 @@ impl EngineProcessor<'_> {
     ) -> BlockToken {
         let shared = Rc::new(MatchBlockApiShared {
             block_tokenizers: self.options.block_tokenizers,
+            block_tokenizer_map: self.options.block_tokenizer_map,
             block_fallback_tokenizer: self.options.block_fallback_tokenizer,
             identifiers,
         });
@@ -289,7 +299,7 @@ impl EngineProcessor<'_> {
     }
 }
 
-impl Processor for EngineProcessor<'_> {
+impl Processor for ParserProcessor<'_> {
     fn process(&mut self, lines: &[Vec<PhrasingContentLine>]) -> Root {
         self.definition_identifiers.clear();
         self.footnote_definition_identifiers.clear();
@@ -334,12 +344,13 @@ impl Processor for EngineProcessor<'_> {
 }
 
 fn find_block_tokenizer_by_name<'a>(
-    tokenizers: &'a [Box<dyn yozora_core_tokenizer::engine::EngineBlockTokenizer>],
-    fallback_tokenizer: Option<&'a dyn yozora_core_tokenizer::engine::EngineBlockTokenizer>,
+    tokenizers: &'a [Box<dyn yozora_core_tokenizer::BlockTokenizer>],
+    tokenizer_map: &HashMap<String, usize>,
+    fallback_tokenizer: Option<&'a dyn yozora_core_tokenizer::BlockTokenizer>,
     name: &str,
-) -> Option<&'a dyn yozora_core_tokenizer::engine::EngineBlockTokenizer> {
-    for tokenizer in tokenizers {
-        if tokenizer.name() == name {
+) -> Option<&'a dyn yozora_core_tokenizer::BlockTokenizer> {
+    if let Some(index) = tokenizer_map.get(name) {
+        if let Some(tokenizer) = tokenizers.get(*index) {
             return Some(tokenizer.as_ref());
         }
     }
@@ -354,14 +365,13 @@ fn find_block_tokenizer_by_name<'a>(
 }
 
 fn find_inline_tokenizer_by_name<'a>(
-    tokenizers: &'a [Box<dyn yozora_core_tokenizer::engine::EngineInlineTokenizer>],
-    fallback_tokenizer: Option<
-        &'a dyn yozora_core_tokenizer::engine::EngineInlineFallbackTokenizer,
-    >,
+    tokenizers: &'a [Box<dyn yozora_core_tokenizer::InlineTokenizer>],
+    tokenizer_map: &HashMap<String, usize>,
+    fallback_tokenizer: Option<&'a dyn yozora_core_tokenizer::InlineFallbackTokenizer>,
     name: &str,
-) -> Option<&'a dyn yozora_core_tokenizer::engine::EngineInlineTokenizer> {
-    for tokenizer in tokenizers {
-        if tokenizer.name() == name {
+) -> Option<&'a dyn yozora_core_tokenizer::InlineTokenizer> {
+    if let Some(index) = tokenizer_map.get(name) {
+        if let Some(tokenizer) = tokenizers.get(*index) {
             return Some(tokenizer.as_ref());
         }
     }
@@ -385,7 +395,7 @@ fn match_block_tokens_with_shared(
 
     let mut hooks = Vec::with_capacity(shared.block_tokenizers.len());
     for tokenizer in shared.block_tokenizers {
-        let hook = tokenizer.create_match_hook(&api);
+        let hook = tokenizer.r#match(&api);
         hooks.push(MatchBlockProcessorHook::new(
             tokenizer.name(),
             tokenizer.priority(),
@@ -394,7 +404,7 @@ fn match_block_tokens_with_shared(
     }
 
     let fallback_hook = shared.block_fallback_tokenizer.map(|tokenizer| {
-        let hook = tokenizer.create_match_hook(&api);
+        let hook = tokenizer.r#match(&api);
         MatchBlockProcessorHook::new(tokenizer.name(), tokenizer.priority(), hook)
     });
 
@@ -426,11 +436,12 @@ fn parse_block_tokens_with_context(
 
         if let Some(tokenizer) = find_block_tokenizer_by_name(
             context.options.block_tokenizers,
+            context.options.block_tokenizer_map,
             context.options.block_fallback_tokenizer,
             tokenizer_name,
         ) {
             let api = ParseBlockApiAdapter { context };
-            let hook = tokenizer.create_parse_hook(&api);
+            let hook = tokenizer.parse(&api);
             results.extend(hook.parse(&tokens[i0..i1]));
         }
 
@@ -521,7 +532,7 @@ fn match_inline_tokens_from_index(
 
         let mut hooks = Vec::with_capacity(group_end - group_start);
         for tokenizer in &tokenizers[group_start..group_end] {
-            let hook = tokenizer.create_match_hook(&api);
+            let hook = tokenizer.r#match(&api);
             hooks.push(MatchInlineProcessorHook::new(
                 tokenizer.name(),
                 tokenizer.priority(),
@@ -536,7 +547,7 @@ fn match_inline_tokens_from_index(
 }
 
 fn resolve_fallback_tokens_with_api(
-    fallback_tokenizer: Option<&dyn yozora_core_tokenizer::engine::EngineInlineFallbackTokenizer>,
+    fallback_tokenizer: Option<&dyn yozora_core_tokenizer::InlineFallbackTokenizer>,
     api: &dyn MatchInlinePhaseApi,
     tokens: &[InlineToken],
     token_start_index: usize,
@@ -552,7 +563,7 @@ fn resolve_fallback_tokens_with_api(
     for token in tokens {
         if i < token.start_index {
             let mut fallback_token =
-                fallback_tokenizer.find_and_handle_delimiter(i, token.start_index, api);
+                fallback_tokenizer.findAndHandleDelimiter(i, token.start_index, api);
             fallback_token.tokenizer = fallback_tokenizer.name().to_string();
             results.push(fallback_token);
         }
@@ -563,7 +574,7 @@ fn resolve_fallback_tokens_with_api(
 
     if i < token_end_index {
         let mut fallback_token =
-            fallback_tokenizer.find_and_handle_delimiter(i, token_end_index, api);
+            fallback_tokenizer.findAndHandleDelimiter(i, token_end_index, api);
         fallback_token.tokenizer = fallback_tokenizer.name().to_string();
         results.push(fallback_token);
     }
@@ -591,6 +602,7 @@ fn parse_inline_tokens_with_context(
 
         if let Some(tokenizer) = find_inline_tokenizer_by_name(
             context.options.inline_tokenizers,
+            context.options.inline_tokenizer_map,
             context.options.inline_fallback_tokenizer,
             tokenizer_name,
         ) {
@@ -598,7 +610,7 @@ fn parse_inline_tokens_with_context(
                 context,
                 node_points,
             };
-            let hook = tokenizer.create_parse_hook(&api);
+            let hook = tokenizer.parse(&api);
             results.extend(hook.parse(&tokens[i0..i1]));
         }
 
@@ -636,7 +648,7 @@ fn calc_position_from_node_points(
 
 #[allow(dead_code)]
 fn _sanity_check_inline_entry_points(
-    processor: &EngineProcessor<'_>,
+    processor: &ParserProcessor<'_>,
     node_points: &[NodePoint],
 ) -> (Vec<InlineToken>, Vec<Node>) {
     let tokens = processor.match_inline_tokens(&[], 0, node_points.len(), node_points);

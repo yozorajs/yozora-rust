@@ -1,651 +1,395 @@
-use yozora_ast::ReferenceType;
-use yozora_character::fold_case;
-use yozora_core_tokenizer::{MatchInlinePhaseApi, NodeInterval};
+use yozora_ast::{ReferenceType, LINK_REFERENCE_TYPE};
+use yozora_character::{calc_escaped_string_from_node_points, AsciiCodePoint, NodePoint};
+use yozora_core_tokenizer::{
+    eat_link_label, DelimiterType, InlineToken, MatchInlinePhaseApi, TokenDelimiter,
+};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum LinkReferenceToken {
-    Text(NodeInterval),
-    Link {
-        interval: NodeInterval,
-        child_interval: NodeInterval,
-        identifier: String,
-        label: String,
-        reference_type: ReferenceType,
-        child_text: String,
-    },
+use crate::parse::LinkReferenceTokenData;
+
+#[derive(Debug, Clone)]
+pub(crate) struct LinkReferenceDelimiterBracket {
+    pub start_index: usize,
+    pub end_index: usize,
+    pub label: Option<String>,
+    pub identifier: Option<String>,
 }
 
-pub(crate) fn match_link_reference_tokens(
-    input: &str,
-    match_api: Option<&dyn MatchInlinePhaseApi>,
-) -> Option<Vec<LinkReferenceToken>> {
-    if !input.contains('[') {
-        return None;
-    }
+#[derive(Debug, Clone)]
+pub(crate) struct DelimiterEntry {
+    pub delimiter: TokenDelimiter,
+    pub brackets: Vec<LinkReferenceDelimiterBracket>,
+}
 
-    let mut tokens = Vec::new();
-    let mut cursor = 0usize;
-    let mut last_emit = 0usize;
-    let mut matched = false;
+pub(crate) fn find_link_reference_delimiter_entry(
+    node_points: &[NodePoint],
+    start_index: usize,
+    end_index: usize,
+) -> Option<DelimiterEntry> {
+    let mut i = start_index;
 
-    while let Some(offset) = input[cursor..].find('[') {
-        let start = cursor + offset;
+    while i < end_index {
+        let code_point = node_points[i].code_point;
 
-        if is_escaped(input, start)
-            || (start > 0 && input.as_bytes()[start - 1] == b'!' && !is_escaped(input, start - 1))
-        {
-            cursor = start + 1;
+        if code_point == AsciiCodePoint::BACKSLASH as i32 {
+            i = (i + 2).min(end_index);
             continue;
         }
 
-        let preceded_by_emphasis_marker =
-            start > 0 && matches!(input.as_bytes()[start - 1], b'*' | b'_');
-        if is_inside_unmatched_emphasis(input, start) && !preceded_by_emphasis_marker {
-            cursor = start + 1;
-            continue;
-        }
+        if code_point == AsciiCodePoint::OPEN_BRACKET as i32 {
+            let mut brackets: Vec<LinkReferenceDelimiterBracket> = Vec::new();
 
-        let Some((first_close, first_raw)) = parse_link_text(input, start) else {
-            cursor = start + 1;
-            continue;
-        };
+            let (next_index, label_and_identifier) = eat_link_label(node_points, i, end_index);
+            if next_index < 0 {
+                return Some(DelimiterEntry {
+                    delimiter: create_delimiter(DelimiterType::Opener, i, i + 1),
+                    brackets,
+                });
+            }
 
-        let first_label_raw = first_raw.to_string();
-        if first_label_raw.trim().is_empty() {
-            cursor = start + 1;
-            continue;
-        }
-
-        if contains_valid_inline_link(first_raw) || contains_valid_link_reference(first_raw) {
-            // Links may not contain links. Prefer parsing inner link-like structures.
-            cursor = start + 1;
-            continue;
-        }
-
-        let first_text = decode_escapes(first_raw);
-
-        let after_first = first_close + 1;
-        if after_first < input.len()
-            && input.as_bytes()[after_first] == b'('
-            && has_valid_inline_link_after(input, after_first)
-        {
-            // Valid inline link has higher precedence.
-            cursor = start + 1;
-            continue;
-        }
-
-        let (identifier, label, reference_type, consumed_len) =
-            if after_first < input.len() && input.as_bytes()[after_first] == b'[' {
-                let Some((second_close, second_raw, second_has_non_ws)) =
-                    parse_link_label(input, after_first)
-                else {
-                    cursor = start + 1;
-                    continue;
-                };
-
-                let consumed = second_close + 1 - start;
-                if second_has_non_ws {
-                    let second_label = second_raw.to_string();
-                    (
-                        normalize_identifier(&second_label),
-                        second_label,
-                        ReferenceType::Full,
-                        consumed,
-                    )
-                } else {
-                    // Yozora custom supplementary accepts `[foo][  ]` as collapsed.
-                    (
-                        normalize_identifier(&first_label_raw),
-                        first_label_raw.clone(),
-                        ReferenceType::Collapsed,
-                        consumed,
-                    )
-                }
+            let next_index = next_index as usize;
+            if let Some((label, identifier)) = label_and_identifier {
+                brackets.push(LinkReferenceDelimiterBracket {
+                    start_index: i,
+                    end_index: next_index,
+                    label: Some(label),
+                    identifier: Some(identifier),
+                });
             } else {
-                (
-                    normalize_identifier(&first_label_raw),
-                    first_label_raw.clone(),
-                    ReferenceType::Shortcut,
-                    first_close + 1 - start,
-                )
-            };
-
-        if reference_type == ReferenceType::Shortcut
-            && first_label_raw.starts_with('[')
-            && first_label_raw.ends_with(']')
-        {
-            // For nested brackets like `[[*foo* bar]]`, defer to inner shortcut label.
-            cursor = start + 1;
-            continue;
-        }
-
-        if reference_type == ReferenceType::Shortcut
-            && followed_by_outer_inline_link_closer(input, after_first)
-        {
-            // Prefer the outer inline-link pair over an inner shortcut reference.
-            cursor = start + 1;
-            continue;
-        }
-
-        if match_api.is_some_and(|ctx| !ctx.has_definition(&identifier)) {
-            cursor = start + 1;
-            continue;
-        }
-
-        if start > last_emit {
-            tokens.push(LinkReferenceToken::Text(NodeInterval {
-                start_index: last_emit,
-                end_index: start,
-            }));
-        }
-
-        tokens.push(LinkReferenceToken::Link {
-            interval: NodeInterval {
-                start_index: start,
-                end_index: start + consumed_len,
-            },
-            child_interval: NodeInterval {
-                start_index: start + 1,
-                end_index: first_close,
-            },
-            identifier,
-            label,
-            reference_type,
-            child_text: first_text,
-        });
-
-        matched = true;
-        cursor = start + consumed_len;
-        last_emit = cursor;
-    }
-
-    if !matched {
-        return None;
-    }
-
-    if last_emit < input.len() {
-        tokens.push(LinkReferenceToken::Text(NodeInterval {
-            start_index: last_emit,
-            end_index: input.len(),
-        }));
-    }
-
-    Some(tokens)
-}
-
-fn parse_link_text(input: &str, start: usize) -> Option<(usize, &str)> {
-    if input.as_bytes().get(start).copied()? != b'[' {
-        return None;
-    }
-
-    let bytes = input.as_bytes();
-    let mut i = start + 1;
-    let mut depth = 1usize;
-    let mut code_ticks = 0usize;
-
-    while i < bytes.len() {
-        if code_ticks > 0 {
-            if bytes[i] == b'`' {
-                let run = count_repeat(bytes, i, b'`');
-                if run >= code_ticks {
-                    code_ticks = 0;
-                }
-                i += run;
+                // Preceding `[]` is useless.
+                i = next_index;
                 continue;
             }
-            i += 1;
-            continue;
-        }
 
-        match bytes[i] {
-            b'\\' => i = (i + 2).min(bytes.len()),
-            b'`' => {
-                code_ticks = count_repeat(bytes, i, b'`');
-                i += code_ticks;
-            }
-            b'<' => {
-                if let Some(next) = skip_angle_segment(bytes, i) {
-                    i = next;
-                } else {
-                    i += 1;
+            let mut delimiter_type = DelimiterType::Opener;
+            let mut delimiter_end = i + 1;
+            let mut j = next_index;
+
+            while j < end_index && node_points[j].code_point == AsciiCodePoint::OPEN_BRACKET as i32 {
+                let (next_j, label_and_identifier) = eat_link_label(node_points, j, end_index);
+
+                if next_j < 0 {
+                    delimiter_type = DelimiterType::Opener;
+                    delimiter_end = j + 1;
+                    break;
                 }
-            }
-            b'[' => {
-                depth += 1;
-                i += 1;
-            }
-            b']' => {
-                depth = depth.saturating_sub(1);
-                if depth == 0 {
-                    return Some((i, &input[start + 1..i]));
+
+                let next_j = next_j as usize;
+                let mut bracket = LinkReferenceDelimiterBracket {
+                    start_index: j,
+                    end_index: next_j,
+                    label: None,
+                    identifier: None,
+                };
+
+                delimiter_type = DelimiterType::Full;
+                delimiter_end = next_j;
+
+                if let Some((label, identifier)) = label_and_identifier {
+                    bracket.label = Some(label);
+                    bracket.identifier = Some(identifier);
+                    brackets.push(bracket);
+                    j = next_j;
+                    continue;
                 }
-                i += 1;
+
+                brackets.push(bracket);
+                break;
             }
-            _ => i += 1,
-        }
-    }
 
-    None
-}
-
-fn parse_link_label(input: &str, start: usize) -> Option<(usize, &str, bool)> {
-    if input.as_bytes().get(start).copied()? != b'[' {
-        return None;
-    }
-
-    let bytes = input.as_bytes();
-    let mut i = start + 1;
-    let mut char_count = 0usize;
-    let mut has_non_whitespace = false;
-
-    while i < bytes.len() {
-        char_count += 1;
-        if char_count > 1000 {
-            return None;
+            return Some(DelimiterEntry {
+                delimiter: create_delimiter(delimiter_type, i, delimiter_end),
+                brackets,
+            });
         }
 
-        match bytes[i] {
-            b'\\' => {
-                if i + 1 >= bytes.len() {
-                    return None;
+        if code_point == AsciiCodePoint::CLOSE_BRACKET as i32
+            && i + 1 < end_index
+            && node_points[i + 1].code_point == AsciiCodePoint::OPEN_BRACKET as i32
+        {
+            let (next_index, label_and_identifier) = eat_link_label(node_points, i + 1, end_index);
+
+            if next_index < 0 {
+                return Some(DelimiterEntry {
+                    delimiter: create_delimiter(DelimiterType::Opener, i + 1, i + 2),
+                    brackets: Vec::new(),
+                });
+            }
+
+            let next_index = next_index as usize;
+            let Some((label, identifier)) = label_and_identifier else {
+                // It's `][]`, which is useless here.
+                i = next_index;
+                continue;
+            };
+
+            let mut brackets = vec![LinkReferenceDelimiterBracket {
+                start_index: i + 1,
+                end_index: next_index,
+                label: Some(label),
+                identifier: Some(identifier),
+            }];
+
+            let mut delimiter_type = DelimiterType::Closer;
+            let mut delimiter_end = next_index;
+            let mut j = next_index;
+
+            while j < end_index && node_points[j].code_point == AsciiCodePoint::OPEN_BRACKET as i32 {
+                let (next_j, label_and_identifier) = eat_link_label(node_points, j, end_index);
+                if next_j < 0 {
+                    delimiter_type = DelimiterType::Both;
+                    delimiter_end = j + 1;
+                    break;
                 }
-                has_non_whitespace = true;
-                i += 2;
-            }
-            b'[' => return None,
-            b']' => return Some((i, &input[start + 1..i], has_non_whitespace)),
-            ch => {
-                if ch != 0x1F && !(ch as char).is_whitespace() {
-                    has_non_whitespace = true;
+
+                let next_j = next_j as usize;
+                let mut bracket = LinkReferenceDelimiterBracket {
+                    start_index: j,
+                    end_index: next_j,
+                    label: None,
+                    identifier: None,
+                };
+
+                delimiter_type = DelimiterType::Full;
+                delimiter_end = next_j;
+
+                if let Some((label, identifier)) = label_and_identifier {
+                    bracket.label = Some(label);
+                    bracket.identifier = Some(identifier);
+                    brackets.push(bracket);
+                    j = next_j;
+                    continue;
                 }
-                i += 1;
+
+                brackets.push(bracket);
+                break;
             }
-        }
-    }
 
-    None
-}
-
-fn count_repeat(bytes: &[u8], mut index: usize, target: u8) -> usize {
-    let mut count = 0usize;
-    while index < bytes.len() && bytes[index] == target {
-        count += 1;
-        index += 1;
-    }
-    count
-}
-
-fn skip_angle_segment(bytes: &[u8], start: usize) -> Option<usize> {
-    if bytes.get(start).copied()? != b'<' {
-        return None;
-    }
-
-    let mut i = start + 1;
-    let mut quote: Option<u8> = None;
-
-    while i < bytes.len() {
-        if let Some(q) = quote {
-            match bytes[i] {
-                b'\\' => i = (i + 2).min(bytes.len()),
-                b if b == q => {
-                    quote = None;
-                    i += 1;
-                }
-                _ => i += 1,
-            }
-            continue;
-        }
-
-        match bytes[i] {
-            b'"' | b'\'' => {
-                quote = Some(bytes[i]);
-                i += 1;
-            }
-            b'>' => return Some(i + 1),
-            b'\n' | b'\r' => return None,
-            _ => i += 1,
-        }
-    }
-
-    None
-}
-
-fn is_escaped(input: &str, byte_index: usize) -> bool {
-    if byte_index == 0 {
-        return false;
-    }
-
-    let bytes = input.as_bytes();
-    let mut idx = byte_index;
-    let mut slash_count = 0usize;
-    while idx > 0 {
-        idx -= 1;
-        if bytes[idx] == b'\\' {
-            slash_count += 1;
-        } else {
-            break;
-        }
-    }
-
-    slash_count % 2 == 1
-}
-
-fn is_inside_unmatched_emphasis(input: &str, byte_index: usize) -> bool {
-    let bytes = input.as_bytes();
-    let mut star_count = 0usize;
-    let mut underscore_count = 0usize;
-    let mut i = 0usize;
-
-    while i < byte_index && i < bytes.len() {
-        if bytes[i] == b'\\' {
-            i = (i + 2).min(byte_index);
-            continue;
-        }
-
-        if bytes[i] == b'*' {
-            star_count += 1;
-        } else if bytes[i] == b'_' {
-            underscore_count += 1;
+            return Some(DelimiterEntry {
+                delimiter: create_delimiter(delimiter_type, i, delimiter_end),
+                brackets,
+            });
         }
 
         i += 1;
     }
 
-    star_count % 2 == 1 || underscore_count % 2 == 1
+    None
 }
 
-fn decode_escapes(input: &str) -> String {
-    let mut out = String::new();
-    let mut chars = input.chars().peekable();
+pub(crate) fn process_single_delimiter(
+    api: &dyn MatchInlinePhaseApi,
+    delimiter: &TokenDelimiter,
+    brackets: &[LinkReferenceDelimiterBracket],
+    node_points: &[NodePoint],
+) -> Vec<InlineToken> {
+    if brackets.is_empty() {
+        return Vec::new();
+    }
 
-    while let Some(ch) = chars.next() {
-        if ch == '\\' {
-            if let Some(next) = chars.next() {
-                if is_escapable_char(next) {
-                    out.push(next);
-                } else {
-                    out.push('\\');
-                    out.push(next);
+    let mut tokens = Vec::new();
+    let mut bracket_index = 0usize;
+    let mut last_bracket_index: isize = -1;
+
+    while bracket_index < brackets.len() {
+        let mut found_index: Option<usize> = None;
+        while bracket_index < brackets.len() {
+            let bracket = &brackets[bracket_index];
+            if let Some(identifier) = &bracket.identifier {
+                if api.has_definition(identifier) {
+                    found_index = Some(bracket_index);
+                    break;
                 }
-            } else {
-                out.push('\\');
             }
-            continue;
-        }
-        out.push(ch);
-    }
-
-    out
-}
-
-fn normalize_identifier(label: &str) -> String {
-    let mut collapsed = String::new();
-    for (idx, part) in label.split_whitespace().enumerate() {
-        if idx > 0 {
-            collapsed.push(' ');
-        }
-        collapsed.push_str(part);
-    }
-    fold_case(&collapsed)
-}
-
-fn is_escapable_char(ch: char) -> bool {
-    ch.is_ascii_punctuation()
-}
-
-fn has_valid_inline_link_after(input: &str, open_paren: usize) -> bool {
-    parse_inline_link_tail(input, open_paren).is_some()
-}
-
-fn contains_valid_inline_link(input: &str) -> bool {
-    let mut cursor = 0usize;
-    while let Some(offset) = input[cursor..].find('[') {
-        let start = cursor + offset;
-        if is_escaped(input, start) || (start > 0 && input.as_bytes()[start - 1] == b'!') {
-            cursor = start + 1;
-            continue;
+            bracket_index += 1;
         }
 
-        let Some((label_end, _)) = parse_link_text(input, start) else {
-            cursor = start + 1;
+        let Some(current_index) = found_index else {
+            break;
+        };
+
+        let bracket = &brackets[current_index];
+        let (Some(label), Some(identifier)) = (bracket.label.clone(), bracket.identifier.clone())
+        else {
+            bracket_index += 1;
             continue;
         };
 
-        let open_paren = label_end + 1;
-        if input.as_bytes().get(open_paren).copied() != Some(b'(') {
-            cursor = start + 1;
+        // Full reference: `[label0][label1]` where the second bracket resolves.
+        if (last_bracket_index + 1) < current_index as isize {
+            let previous = &brackets[current_index - 1];
+            let children_tokens = api.resolve_internal_tokens(
+                &[],
+                previous.start_index + 1,
+                previous.end_index.saturating_sub(1),
+            );
+
+            tokens.push(create_reference_token(
+                node_points,
+                previous.start_index,
+                bracket.end_index,
+                ReferenceType::Full,
+                label,
+                identifier,
+                previous.start_index + 1,
+                previous.end_index.saturating_sub(1),
+                children_tokens,
+            ));
+
+            last_bracket_index = current_index as isize;
+            bracket_index = current_index + 1;
             continue;
         }
 
-        if parse_inline_link_tail(input, open_paren).is_some() {
-            return true;
-        }
+        // Shortcut reference: `[label]`.
+        if current_index + 1 == brackets.len() {
+            let children_tokens = api.resolve_internal_tokens(
+                &[],
+                bracket.start_index + 1,
+                bracket.end_index.saturating_sub(1),
+            );
 
-        cursor = start + 1;
-    }
-
-    false
-}
-
-fn contains_valid_link_reference(input: &str) -> bool {
-    let mut cursor = 0usize;
-    while let Some(offset) = input[cursor..].find('[') {
-        let start = cursor + offset;
-        if is_escaped(input, start) || (start > 0 && input.as_bytes()[start - 1] == b'!') {
-            cursor = start + 1;
-            continue;
-        }
-
-        let Some((first_close, first_raw)) = parse_link_text(input, start) else {
-            cursor = start + 1;
-            continue;
-        };
-        if first_raw.trim().is_empty() {
-            cursor = start + 1;
-            continue;
-        }
-
-        let after_first = first_close + 1;
-        if input.as_bytes().get(after_first).copied() != Some(b'[') {
-            cursor = start + 1;
-            continue;
-        }
-
-        if parse_link_label(input, after_first).is_some() {
-            return true;
-        }
-
-        cursor = start + 1;
-    }
-
-    false
-}
-
-fn parse_inline_link_tail(input: &str, open_paren: usize) -> Option<usize> {
-    if input.as_bytes().get(open_paren).copied()? != b'(' {
-        return None;
-    }
-
-    let bytes = input.as_bytes();
-    let len = bytes.len();
-
-    let i = eat_optional_ascii_whitespace(bytes, open_paren + 1);
-    if i >= len {
-        return None;
-    }
-
-    if bytes[i] == b')' {
-        return Some(i + 1);
-    }
-
-    let destination_end = parse_link_destination(input, i)?;
-    let title_start = eat_optional_ascii_whitespace(bytes, destination_end);
-    let has_separating_whitespace = title_start > destination_end;
-
-    let title_end = if bytes.get(title_start).copied() == Some(b')') {
-        title_start
-    } else {
-        if !has_separating_whitespace {
-            return None;
-        }
-        parse_link_title(input, title_start)?
-    };
-
-    let close_index = eat_optional_ascii_whitespace(bytes, title_end);
-    if bytes.get(close_index).copied() != Some(b')') {
-        return None;
-    }
-
-    Some(close_index + 1)
-}
-
-fn parse_link_destination(input: &str, start: usize) -> Option<usize> {
-    let bytes = input.as_bytes();
-    if start >= bytes.len() {
-        return None;
-    }
-
-    if bytes[start] == b'<' {
-        let mut i = start + 1;
-        while i < bytes.len() {
-            match bytes[i] {
-                b'\\' => i = (i + 2).min(bytes.len()),
-                b'<' | b'\n' | b'\r' => return None,
-                b'>' => return Some(i + 1),
-                _ => i += 1,
-            }
-        }
-        return None;
-    }
-
-    let mut i = start;
-    let mut open_parens = 0i32;
-    while i < bytes.len() {
-        let b = bytes[i];
-        if b.is_ascii_whitespace() || b.is_ascii_control() {
+            tokens.push(create_reference_token(
+                node_points,
+                bracket.start_index,
+                bracket.end_index,
+                ReferenceType::Shortcut,
+                label,
+                identifier,
+                bracket.start_index + 1,
+                bracket.end_index.saturating_sub(1),
+                children_tokens,
+            ));
             break;
         }
 
-        match b {
-            b'\\' => i = (i + 2).min(bytes.len()),
-            b'(' => {
-                open_parens += 1;
-                i += 1;
-            }
-            b')' => {
-                if open_parens == 0 {
-                    break;
-                }
-                open_parens -= 1;
-                i += 1;
-            }
-            _ => i += 1,
+        // Collapsed reference: `[label][]`.
+        if current_index + 1 < brackets.len() && brackets[current_index + 1].identifier.is_none() {
+            let collapsed_tail = &brackets[current_index + 1];
+            let children_tokens = api.resolve_internal_tokens(
+                &[],
+                bracket.start_index + 1,
+                bracket.end_index.saturating_sub(1),
+            );
+
+            tokens.push(create_reference_token(
+                node_points,
+                bracket.start_index,
+                collapsed_tail.end_index,
+                ReferenceType::Collapsed,
+                label,
+                identifier,
+                bracket.start_index + 1,
+                bracket.end_index.saturating_sub(1),
+                children_tokens,
+            ));
+            break;
         }
+
+        bracket_index = current_index + 1;
     }
 
-    if i == start || open_parens != 0 {
-        return None;
+    if delimiter.start_index == delimiter.end_index {
+        return Vec::new();
     }
 
-    Some(i)
+    tokens
 }
 
-fn parse_link_title(input: &str, start: usize) -> Option<usize> {
-    let bytes = input.as_bytes();
-    let open = *bytes.get(start)?;
+pub(crate) fn create_reference_token(
+    node_points: &[NodePoint],
+    start_index: usize,
+    end_index: usize,
+    reference_type: ReferenceType,
+    label: String,
+    identifier: String,
+    child_start_index: usize,
+    child_end_index: usize,
+    children_tokens: Vec<InlineToken>,
+) -> InlineToken {
+    let child_text = calc_escaped_string_from_node_points(
+        node_points,
+        child_start_index,
+        child_end_index,
+        false,
+    );
 
-    if open == b')' {
-        return Some(start);
-    }
-
-    match open {
-        b'"' | b'\'' => {
-            let mut i = start + 1;
-            while i < bytes.len() {
-                match bytes[i] {
-                    b'\\' => i = (i + 2).min(bytes.len()),
-                    b if b == open => {
-                        if contains_blank_line(&input[start + 1..i]) {
-                            return None;
-                        }
-                        return Some(i + 1);
-                    }
-                    _ => i += 1,
-                }
-            }
-            None
-        }
-        b'(' => {
-            let mut i = start + 1;
-            let mut open_parens = 1i32;
-            while i < bytes.len() {
-                match bytes[i] {
-                    b'\\' => i = (i + 2).min(bytes.len()),
-                    b'(' => {
-                        open_parens += 1;
-                        i += 1;
-                    }
-                    b')' => {
-                        open_parens -= 1;
-                        if open_parens == 0 {
-                            if contains_blank_line(&input[start + 1..i]) {
-                                return None;
-                            }
-                            return Some(i + 1);
-                        }
-                        i += 1;
-                    }
-                    _ => i += 1,
-                }
-            }
-            None
-        }
-        _ => None,
-    }
+    InlineToken::new("", LINK_REFERENCE_TYPE, (start_index, end_index)).with_data(
+        LinkReferenceTokenData {
+            identifier,
+            label,
+            reference_type,
+            child_text,
+            children_tokens,
+        },
+    )
 }
 
-fn eat_optional_ascii_whitespace(bytes: &[u8], mut index: usize) -> usize {
-    while index < bytes.len() && bytes[index].is_ascii_whitespace() {
-        index += 1;
-    }
-    index
-}
+pub(crate) fn check_balanced_brackets_status(
+    start_index: usize,
+    end_index: usize,
+    internal_tokens: &[InlineToken],
+    node_points: &[NodePoint],
+) -> i8 {
+    let mut i = start_index;
+    let mut bracket_count = 0i32;
 
-fn contains_blank_line(raw: &str) -> bool {
-    let normalized = raw.replace("\r\n", "\n").replace('\r', "\n");
-    let bytes = normalized.as_bytes();
+    let update = |idx: usize, count: &mut i32, i_ref: &mut usize| match node_points[idx].code_point {
+        x if x == AsciiCodePoint::BACKSLASH as i32 => {
+            *i_ref += 1;
+        }
+        x if x == AsciiCodePoint::OPEN_BRACKET as i32 => {
+            *count += 1;
+        }
+        x if x == AsciiCodePoint::CLOSE_BRACKET as i32 => {
+            *count -= 1;
+        }
+        _ => {}
+    };
 
-    let mut i = 0usize;
-    while i < bytes.len() {
-        if bytes[i] != b'\n' {
-            i += 1;
+    for token in internal_tokens {
+        if token.start_index < start_index {
             continue;
         }
-
-        let mut j = i + 1;
-        while j < bytes.len() && (bytes[j] == b' ' || bytes[j] == b'\t') {
-            j += 1;
+        if token.end_index > end_index {
+            break;
         }
 
-        if j < bytes.len() && bytes[j] == b'\n' {
-            return true;
+        while i < token.start_index {
+            update(i, &mut bracket_count, &mut i);
+            if bracket_count < 0 {
+                return -1;
+            }
+            i += 1;
         }
 
-        i = j;
+        i = token.end_index;
     }
 
-    false
+    while i < end_index {
+        update(i, &mut bracket_count, &mut i);
+        if bracket_count < 0 {
+            return -1;
+        }
+        i += 1;
+    }
+
+    if bracket_count > 0 {
+        1
+    } else {
+        0
+    }
 }
 
-fn followed_by_outer_inline_link_closer(input: &str, mut index: usize) -> bool {
-    let bytes = input.as_bytes();
-    if index >= bytes.len() || bytes[index] != b']' {
-        return false;
+fn create_delimiter(
+    delimiter_type: DelimiterType,
+    start_index: usize,
+    end_index: usize,
+) -> TokenDelimiter {
+    TokenDelimiter {
+        delimiter_type,
+        start_index,
+        end_index,
+        thickness: end_index.saturating_sub(start_index),
+        original_thickness: end_index.saturating_sub(start_index),
     }
-
-    while index < bytes.len() && bytes[index] == b']' {
-        index += 1;
-    }
-
-    index < bytes.len() && bytes[index] == b'(' && has_valid_inline_link_after(input, index)
 }

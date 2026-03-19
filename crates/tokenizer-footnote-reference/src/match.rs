@@ -1,80 +1,91 @@
-use yozora_core_tokenizer::{MatchInlinePhaseApi, NodeInterval};
+use yozora_ast::FOOTNOTE_REFERENCE_TYPE;
+use yozora_character::AsciiCodePoint;
+use yozora_core_tokenizer::{
+    resolve_link_label_and_identifier, DelimiterType, InlineToken, MatchInlinePhaseApi,
+    TokenDelimiter,
+};
+use yozora_tokenizer_footnote_definition::eat_footnote_label;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum FootnoteReferenceToken {
-    Text(NodeInterval),
-    Reference {
-        interval: NodeInterval,
-        identifier: String,
-        label: String,
-    },
+use crate::parse::FootnoteReferenceTokenData;
+
+#[derive(Debug, Clone)]
+pub(crate) struct DelimiterEntry {
+    pub delimiter: TokenDelimiter,
 }
 
-pub(crate) fn match_footnote_reference_tokens(
-    input: &str,
-    match_api: Option<&dyn MatchInlinePhaseApi>,
-) -> Option<Vec<FootnoteReferenceToken>> {
-    if !input.contains("[^") {
-        return None;
-    }
+pub(crate) fn find_delimiter_entry(
+    api: &dyn MatchInlinePhaseApi,
+    start_index: usize,
+    end_index: usize,
+) -> Option<DelimiterEntry> {
+    let node_points = api.get_node_points();
+    let mut i = start_index;
 
-    let mut tokens = Vec::new();
-    let mut cursor = 0usize;
-    let mut matched = false;
-
-    while let Some(offset) = input[cursor..].find("[^") {
-        let start = cursor + offset;
-        let content_start = start + 2;
-        let Some(end_offset) = input[content_start..].find(']') else {
-            break;
-        };
-        let end = content_start + end_offset;
-        let label = input[content_start..end].trim();
-        if label.is_empty() {
-            cursor = start + 2;
-            continue;
+    while i < end_index {
+        let code_point = node_points[i].code_point;
+        match code_point {
+            x if x == AsciiCodePoint::BACKSLASH as i32 => {
+                i = (i + 2).min(end_index);
+                continue;
+            }
+            x if x == AsciiCodePoint::OPEN_BRACKET as i32 => {
+                let next_index = eat_footnote_label(node_points, i, end_index);
+                if next_index >= 0 {
+                    return Some(DelimiterEntry {
+                        delimiter: create_delimiter(DelimiterType::Full, i, next_index as usize),
+                    });
+                }
+            }
+            _ => {}
         }
 
-        let identifier = normalize_identifier(label);
-        if match_api.is_some_and(|ctx| !ctx.has_footnote_definition(&identifier)) {
-            cursor = start + 2;
-            continue;
-        }
-
-        if start > cursor {
-            tokens.push(FootnoteReferenceToken::Text(NodeInterval {
-                start_index: cursor,
-                end_index: start,
-            }));
-        }
-
-        tokens.push(FootnoteReferenceToken::Reference {
-            interval: NodeInterval {
-                start_index: start,
-                end_index: end + 1,
-            },
-            identifier,
-            label: label.to_string(),
-        });
-
-        matched = true;
-        cursor = end + 1;
+        i += 1;
     }
 
-    if !matched {
-        return None;
-    }
-
-    if cursor < input.len() {
-        tokens.push(FootnoteReferenceToken::Text(NodeInterval {
-            start_index: cursor,
-            end_index: input.len(),
-        }));
-    }
-
-    Some(tokens)
+    None
 }
 
-fn normalize_identifier(label: &str) -> String {
-    label.trim().to_ascii_lowercase()
+pub(crate) fn process_single_delimiter(
+    api: &dyn MatchInlinePhaseApi,
+    delimiter: &TokenDelimiter,
+) -> Vec<InlineToken> {
+    if delimiter.end_index <= delimiter.start_index + 2 {
+        return Vec::new();
+    }
+
+    let node_points = api.get_node_points();
+    let Some((label, identifier)) = resolve_link_label_and_identifier(
+        node_points,
+        delimiter.start_index + 2,
+        delimiter.end_index - 1,
+    ) else {
+        return Vec::new();
+    };
+
+    if !api.has_footnote_definition(&identifier) {
+        return Vec::new();
+    }
+
+    let token = InlineToken::new(
+        "",
+        FOOTNOTE_REFERENCE_TYPE,
+        (delimiter.start_index, delimiter.end_index),
+    )
+    .with_data(FootnoteReferenceTokenData { identifier, label });
+
+    vec![token]
+}
+
+fn create_delimiter(
+    delimiter_type: DelimiterType,
+    start_index: usize,
+    end_index: usize,
+) -> TokenDelimiter {
+    TokenDelimiter {
+        delimiter_type,
+        start_index,
+        end_index,
+        thickness: end_index.saturating_sub(start_index),
+        original_thickness: end_index.saturating_sub(start_index),
+    }
 }

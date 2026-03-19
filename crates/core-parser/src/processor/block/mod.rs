@@ -1,31 +1,13 @@
-use std::cell::RefCell;
-use std::rc::Rc;
+mod types;
 
-use yozora_ast::{Point, Position, ROOT_TYPE};
+pub use types::{MatchBlockProcessorHook, SharedMatchBlockHook};
+
+use yozora_ast::{Point, Position, PARAGRAPH_TYPE, ROOT_TYPE};
 use yozora_character::{is_space_character, is_whitespace_character};
-use yozora_core_tokenizer::engine::{
-    BlockToken, EatContinuationTextResult, EatLazyContinuationTextResult, MatchBlockHook,
-    OnCloseResult, PhrasingContentLine, RemainingSibling,
+use yozora_core_tokenizer::{
+    BlockToken, EatContinuationTextResult, EatLazyContinuationTextResult, OnCloseResult,
+    PhrasingContentLine, RemainingSibling,
 };
-
-pub type SharedMatchBlockHook<'a> = Rc<RefCell<Box<dyn MatchBlockHook + 'a>>>;
-
-#[derive(Clone)]
-pub struct MatchBlockProcessorHook<'a> {
-    pub name: String,
-    pub priority: i32,
-    pub hook: SharedMatchBlockHook<'a>,
-}
-
-impl<'a> MatchBlockProcessorHook<'a> {
-    pub fn new(name: impl Into<String>, priority: i32, hook: Box<dyn MatchBlockHook + 'a>) -> Self {
-        Self {
-            name: name.into(),
-            priority,
-            hook: Rc::new(RefCell::new(hook)),
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 struct MatchBlockState {
@@ -212,7 +194,9 @@ impl<'a> BlockContentProcessor<'a> {
                             rolled_back =
                                 self.rollback(current_hook_idx, &lines, self.current_stack_index);
                         }
-                        finished = true;
+                        if !rolled_back {
+                            finished = true;
+                        }
                     }
                     EatContinuationTextResult::ClosingAndRollback { lines } => {
                         self.cut_stale_branch(self.current_stack_index);
@@ -221,7 +205,9 @@ impl<'a> BlockContentProcessor<'a> {
                             rolled_back =
                                 self.rollback(current_hook_idx, &lines, self.current_stack_index);
                         }
-                        finished = true;
+                        if !rolled_back {
+                            finished = true;
+                        }
                     }
                     EatContinuationTextResult::NotMatched => {
                         self.current_stack_index = self.current_stack_index.saturating_sub(1);
@@ -264,6 +250,7 @@ impl<'a> BlockContentProcessor<'a> {
 
         // Step 2
         if i < end_index_of_line {
+            let mut skip_step2 = false;
             if self.current_stack_index < self.state_stack.len() {
                 let eating_info = self.eating_info(
                     line,
@@ -272,40 +259,47 @@ impl<'a> BlockContentProcessor<'a> {
                     first_non_whitespace_index,
                     count_of_precede_spaces,
                 );
-                if eating_info.count_of_precede_spaces >= 4 {
-                    return;
+                let last_state_is_lazy_continuation = self
+                    .state_stack
+                    .last()
+                    .is_some_and(|state| token_ref(&self.root, &state.path).node_type == PARAGRAPH_TYPE);
+
+                if last_state_is_lazy_continuation && eating_info.count_of_precede_spaces >= 4 {
+                    skip_step2 = true;
                 }
             } else {
                 self.current_stack_index = self.state_stack.len().saturating_sub(1);
             }
 
-            while i < end_index_of_line
-                && self.state_stack[self.current_stack_index].is_containing_block
-            {
-                let mut has_new_opener = false;
-                let eating_info = self.eating_info(
-                    line,
-                    i,
-                    end_index_of_line,
-                    first_non_whitespace_index,
-                    count_of_precede_spaces,
-                );
+            if !skip_step2 {
+                while i < end_index_of_line
+                    && self.state_stack[self.current_stack_index].is_containing_block
+                {
+                    let mut has_new_opener = false;
+                    let eating_info = self.eating_info(
+                        line,
+                        i,
+                        end_index_of_line,
+                        first_non_whitespace_index,
+                        count_of_precede_spaces,
+                    );
 
-                for hook_idx in 0..self.normal_hook_len {
-                    if self.consume_new_opener(
-                        hook_idx,
-                        &eating_info,
-                        &mut i,
-                        &mut first_non_whitespace_index,
-                        &mut count_of_precede_spaces,
-                        &move_forward,
-                    ) {
-                        has_new_opener = true;
+                    for hook_idx in 0..self.normal_hook_len {
+                        if self.consume_new_opener(
+                            hook_idx,
+                            &eating_info,
+                            &mut i,
+                            &mut first_non_whitespace_index,
+                            &mut count_of_precede_spaces,
+                            &move_forward,
+                        ) {
+                            has_new_opener = true;
+                            break;
+                        }
+                    }
+                    if !has_new_opener {
                         break;
                     }
-                }
-                if !has_new_opener {
-                    break;
                 }
             }
         }
@@ -723,7 +717,7 @@ mod tests {
 
     use yozora_ast::Position;
     use yozora_character::{create_node_point_generator, AsciiCodePoint};
-    use yozora_core_tokenizer::engine::{
+    use yozora_core_tokenizer::{
         BlockToken, EatContinuationTextResult, EatOpenerResult, MatchBlockHook, OnCloseResult,
         PhrasingContentLine,
     };
@@ -984,17 +978,17 @@ mod tests {
             line: &PhrasingContentLine,
             _prev_sibling_token: &BlockToken,
             _parent_token: &BlockToken,
-        ) -> Option<yozora_core_tokenizer::engine::EatAndInterruptPreviousSiblingResult> {
+        ) -> Option<yozora_core_tokenizer::EatAndInterruptPreviousSiblingResult> {
             if !starts_with(line, AsciiCodePoint::LOWERCASE_H as i32) {
                 return None;
             }
 
             Some(
-                yozora_core_tokenizer::engine::EatAndInterruptPreviousSiblingResult {
+                yozora_core_tokenizer::EatAndInterruptPreviousSiblingResult {
                     token: make_token("high", "container", line),
                     next_index: line.end_index,
                     saturated: true,
-                    remaining_sibling: yozora_core_tokenizer::engine::RemainingSibling::None,
+                    remaining_sibling: yozora_core_tokenizer::RemainingSibling::None,
                 },
             )
         }
@@ -1028,12 +1022,12 @@ mod tests {
             line: &PhrasingContentLine,
             _token: &mut BlockToken,
             _parent_token: &BlockToken,
-        ) -> yozora_core_tokenizer::engine::EatLazyContinuationTextResult {
+        ) -> yozora_core_tokenizer::EatLazyContinuationTextResult {
             if !starts_with(line, AsciiCodePoint::LOWERCASE_X as i32) {
-                return yozora_core_tokenizer::engine::EatLazyContinuationTextResult::NotMatched;
+                return yozora_core_tokenizer::EatLazyContinuationTextResult::NotMatched;
             }
 
-            yozora_core_tokenizer::engine::EatLazyContinuationTextResult::Opening {
+            yozora_core_tokenizer::EatLazyContinuationTextResult::Opening {
                 next_index: line.end_index,
             }
         }

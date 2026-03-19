@@ -1,434 +1,797 @@
+use yozora_ast::{Point, Position, DEFINITION_TYPE};
 use yozora_character::{
-    calc_escaped_string_from_node_points, create_node_point_generator, fold_case,
+    calc_string_from_node_points, fold_case, is_ascii_control_character,
+    is_whitespace_character, AsciiCodePoint, NodePoint, VirtualCodePoint,
 };
+use yozora_core_tokenizer::*;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct DefinitionBlockToken {
-    pub identifier: String,
-    pub label: String,
-    pub url: String,
-    pub title: Option<String>,
-    pub consumed_lines: usize,
+#[derive(Debug, Clone)]
+pub(crate) struct LinkLabelCollectingState {
+    pub saturated: bool,
+    pub node_points: Vec<NodePoint>,
+    pub has_non_whitespace_character: bool,
 }
 
-pub(crate) fn match_definition(lines: &[&str]) -> Option<DefinitionBlockToken> {
-    let first = *lines.first()?;
-    if count_leading_spaces(first) >= 4 {
+#[derive(Debug, Clone)]
+pub(crate) struct LinkDestinationCollectingState {
+    pub saturated: bool,
+    pub node_points: Vec<NodePoint>,
+    pub has_open_angle_bracket: bool,
+    pub open_parens_count: i32,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct LinkTitleCollectingState {
+    pub saturated: bool,
+    pub node_points: Vec<NodePoint>,
+    pub wrap_symbol: Option<i32>,
+}
+
+#[derive(Debug, Clone)]
+struct CollectResult<T> {
+    next_index: isize,
+    state: T,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct TokenData {
+    pub lines: Vec<PhrasingContentLine>,
+    pub label: LinkLabelCollectingState,
+    pub destination: Option<LinkDestinationCollectingState>,
+    pub title: Option<LinkTitleCollectingState>,
+    pub line_no_of_label: usize,
+    pub line_no_of_destination: isize,
+    pub line_no_of_title: isize,
+}
+
+pub(crate) fn eat_opener(line: &PhrasingContentLine) -> Option<EatOpenerResult> {
+    if line.count_of_precede_spaces >= 4 || line.first_non_whitespace_index >= line.end_index {
         return None;
     }
 
-    let (label, mut consumed_lines, mut tail) = parse_definition_head(lines)?;
-    let mut cursor_line_index = consumed_lines - 1;
+    let node_points = line.node_points.as_ref();
+    let start_index = line.start_index;
+    let end_index = line.end_index;
 
-    if tail.trim().is_empty() {
-        let next_line = *lines.get(cursor_line_index + 1)?;
-        if next_line.trim().is_empty() {
-            return None;
-        }
-
-        tail = next_line.trim_start().to_string();
-        consumed_lines += 1;
-        cursor_line_index += 1;
+    let label_result = eat_and_collect_link_label(
+        node_points,
+        line.first_non_whitespace_index,
+        end_index,
+        None,
+    );
+    if label_result.next_index < 0 {
+        return None;
     }
 
-    let (url, rest_after_destination) = parse_destination(&tail)?;
+    let line_no = node_points[start_index].line;
+    let mut data = TokenData {
+        lines: vec![line.clone()],
+        label: label_result.state,
+        destination: None,
+        title: None,
+        line_no_of_label: line_no,
+        line_no_of_destination: -1,
+        line_no_of_title: -1,
+    };
 
-    let mut title: Option<String> = None;
-    let rest_trimmed = rest_after_destination.trim();
+    if !data.label.saturated {
+        let token = BlockToken::new("", DEFINITION_TYPE, calc_line_position(line)).with_data(data);
+        return Some(EatOpenerResult {
+            token,
+            next_index: end_index,
+            saturated: false,
+        });
+    }
 
-    if !rest_trimmed.is_empty() {
-        if !starts_with_whitespace(rest_after_destination) {
+    let label_end_index = label_result.next_index as usize;
+    if label_end_index + 1 >= end_index
+        || node_points[label_end_index].code_point != AsciiCodePoint::COLON as i32
+    {
+        return None;
+    }
+
+    let mut i = eat_optional_whitespaces(node_points, label_end_index + 1, end_index);
+    if i >= end_index {
+        let token = BlockToken::new("", DEFINITION_TYPE, calc_line_position(line)).with_data(data);
+        return Some(EatOpenerResult {
+            token,
+            next_index: end_index,
+            saturated: false,
+        });
+    }
+
+    let destination_result = eat_and_collect_link_destination(node_points, i, end_index, None);
+    if destination_result.next_index < 0 {
+        return None;
+    }
+
+    let destination_end_index = destination_result.next_index as usize;
+    if !destination_result.state.saturated && destination_end_index != end_index {
+        return None;
+    }
+
+    i = eat_optional_whitespaces(node_points, destination_end_index, end_index);
+    if i >= end_index {
+        data.destination = Some(destination_result.state);
+        data.line_no_of_destination = line_no as isize;
+
+        let token = BlockToken::new("", DEFINITION_TYPE, calc_line_position(line)).with_data(data);
+        return Some(EatOpenerResult {
+            token,
+            next_index: end_index,
+            saturated: false,
+        });
+    }
+
+    if i == destination_end_index {
+        return None;
+    }
+
+    let title_result = eat_and_collect_link_title(node_points, i, end_index, None);
+    if title_result.next_index >= 0 {
+        i = title_result.next_index as usize;
+    }
+
+    if i < end_index {
+        let k = eat_optional_whitespaces(node_points, i, end_index);
+        if k < end_index {
             return None;
-        }
-
-        let title_start = rest_after_destination.trim_start();
-        let following = if cursor_line_index + 1 < lines.len() {
-            &lines[cursor_line_index + 1..]
-        } else {
-            &[][..]
-        };
-        let (parsed_title, consumed_following) =
-            parse_title_with_following(title_start, following)?;
-        title = Some(parsed_title);
-        consumed_lines += consumed_following;
-    } else if cursor_line_index + 1 < lines.len() {
-        let next = lines[cursor_line_index + 1];
-        let next_trimmed = next.trim_start();
-        if starts_title(next_trimmed) {
-            let following = if cursor_line_index + 2 < lines.len() {
-                &lines[cursor_line_index + 2..]
-            } else {
-                &[][..]
-            };
-
-            if let Some((parsed_title, consumed_following)) =
-                parse_title_with_following(next_trimmed, following)
-            {
-                title = Some(parsed_title);
-                consumed_lines += 1 + consumed_following;
-            }
         }
     }
 
-    Some(DefinitionBlockToken {
-        identifier: normalize_identifier(&label),
-        label,
-        url,
-        title,
-        consumed_lines,
+    data.destination = Some(destination_result.state);
+    data.title = Some(title_result.state);
+    data.line_no_of_destination = line_no as isize;
+    data.line_no_of_title = line_no as isize;
+
+    let token = BlockToken::new("", DEFINITION_TYPE, calc_line_position(line)).with_data(data);
+    Some(EatOpenerResult {
+        token,
+        next_index: end_index,
+        saturated: false,
     })
 }
 
-fn count_leading_spaces(line: &str) -> usize {
-    line.chars().take_while(|ch| *ch == ' ').count()
-}
-
-fn starts_with_whitespace(input: &str) -> bool {
-    input.chars().next().is_some_and(|ch| ch.is_whitespace())
-}
-
-fn parse_definition_head(lines: &[&str]) -> Option<(String, usize, String)> {
-    let first = lines.first()?.trim_start();
-    if !first.starts_with('[') {
-        return None;
-    }
-
-    let mut label = String::new();
-    let mut has_non_whitespace = false;
-
-    for line_idx in 0..lines.len() {
-        let line = if line_idx == 0 {
-            first
-        } else {
-            lines[line_idx].trim_start()
-        };
-
-        if line_idx > 0 {
-            if line.trim().is_empty() {
-                return None;
-            }
-            label.push('\n');
-        }
-
-        let start = if line_idx == 0 { 1 } else { 0 };
-        let mut chars = line[start..].char_indices().peekable();
-
-        while let Some((rel, ch)) = chars.next() {
-            let abs = start + rel;
-            match ch {
-                '\\' => {
-                    let Some((_, next_ch)) = chars.next() else {
-                        return None;
-                    };
-                    label.push('\\');
-                    label.push(next_ch);
-                    has_non_whitespace = true;
-                }
-                '[' => return None,
-                ']' => {
-                    let after = abs + 1;
-                    if !line[after..].starts_with(':') || !has_non_whitespace {
-                        return None;
-                    }
-                    return Some((label, line_idx + 1, line[after + 1..].to_string()));
-                }
-                _ => {
-                    if !ch.is_whitespace() {
-                        has_non_whitespace = true;
-                    }
-                    label.push(ch);
-                }
-            }
-        }
-    }
-
-    None
-}
-
-fn parse_destination(input: &str) -> Option<(String, &str)> {
-    let src = input.trim_start();
-    if src.is_empty() {
-        return None;
-    }
-
-    if let Some(rest) = src.strip_prefix('<') {
-        let mut destination = String::new();
-        let mut chars = rest.char_indices().peekable();
-
-        while let Some((idx, ch)) = chars.next() {
-            match ch {
-                '\\' => {
-                    let Some((_, next_ch)) = chars.next() else {
-                        return None;
-                    };
-                    push_escaped_char(&mut destination, next_ch);
-                }
-                '<' | '\n' => return None,
-                '>' => {
-                    let consumed = 1 + idx + ch.len_utf8();
-                    let decoded = decode_escaped_content(&destination);
-                    return Some((encode_link_destination(&decoded), &src[consumed..]));
-                }
-                _ => destination.push(ch),
-            }
-        }
-
-        return None;
-    }
-
-    let mut destination = String::new();
-    let mut depth = 0i32;
-    let mut end_byte = 0usize;
-    let mut chars = src.char_indices().peekable();
-
-    while let Some((idx, ch)) = chars.next() {
-        if ch.is_whitespace() || ch.is_control() {
-            break;
-        }
-
-        match ch {
-            '\\' => {
-                if let Some((next_idx, next_ch)) = chars.next() {
-                    push_escaped_char(&mut destination, next_ch);
-                    end_byte = next_idx + next_ch.len_utf8();
-                } else {
-                    destination.push('\\');
-                    end_byte = idx + ch.len_utf8();
-                }
-            }
-            '(' => {
-                depth += 1;
-                destination.push(ch);
-                end_byte = idx + ch.len_utf8();
-            }
-            ')' => {
-                if depth == 0 {
-                    break;
-                }
-                depth -= 1;
-                destination.push(ch);
-                end_byte = idx + ch.len_utf8();
-            }
-            _ => {
-                destination.push(ch);
-                end_byte = idx + ch.len_utf8();
-            }
-        }
-    }
-
-    if destination.is_empty() || end_byte == 0 {
-        return None;
-    }
-
-    let decoded = decode_escaped_content(&destination);
-    Some((encode_link_destination(&decoded), &src[end_byte..]))
-}
-
-fn starts_title(input: &str) -> bool {
-    input
-        .chars()
-        .next()
-        .is_some_and(|ch| ch == '"' || ch == '\'' || ch == '(')
-}
-
-fn parse_title_with_following(start: &str, following: &[&str]) -> Option<(String, usize)> {
-    let mut chars = start.chars();
-    let opener = chars.next()?;
-    if opener != '"' && opener != '\'' && opener != '(' {
-        return None;
-    }
-
-    let mut value = String::new();
-    let mut current_line = start;
-    let mut line_index = 0usize;
-    let mut start_offset = opener.len_utf8();
-
-    loop {
-        if line_index > 0 && current_line.trim().is_empty() {
-            return None;
-        }
-
-        let mut escaped = false;
-        let segment = &current_line[start_offset..];
-        let mut consumed_on_line = None;
-
-        for (idx, ch) in segment.char_indices() {
-            if escaped {
-                push_escaped_char(&mut value, ch);
-                escaped = false;
-                continue;
-            }
-
-            if ch == '\\' {
-                escaped = true;
-                continue;
-            }
-
-            if opener == '(' {
-                if ch == '(' {
-                    return None;
-                }
-                if ch == ')' {
-                    consumed_on_line = Some(idx + ch.len_utf8());
-                    break;
-                }
-            } else if ch == opener {
-                consumed_on_line = Some(idx + ch.len_utf8());
-                break;
-            }
-
-            value.push(ch);
-        }
-
-        if escaped {
-            value.push('\\');
-        }
-
-        if let Some(consumed) = consumed_on_line {
-            let trailing = &segment[consumed..];
-            if !trailing.trim().is_empty() {
-                return None;
-            }
-            return Some((decode_escaped_content(&value), line_index));
-        }
-
-        let Some(next) = following.get(line_index).copied() else {
-            return None;
-        };
-
-        value.push('\n');
-        current_line = next;
-        line_index += 1;
-        start_offset = 0;
-    }
-}
-
-fn decode_escaped_content(input: &str) -> String {
-    let chunks = create_node_point_generator(input);
-    let Some(points) = chunks.first() else {
-        return String::new();
+pub(crate) fn eat_continuation_text(
+    line: &PhrasingContentLine,
+    token: &mut BlockToken,
+) -> EatContinuationTextResult {
+    let Some(mut data) = token.data_as::<TokenData>().cloned() else {
+        return EatContinuationTextResult::NotMatched;
     };
 
-    calc_escaped_string_from_node_points(points, 0, points.len(), false)
-}
+    if data.title.as_ref().is_some_and(|title| title.saturated) {
+        return EatContinuationTextResult::NotMatched;
+    }
 
-fn push_escaped_char(out: &mut String, ch: char) {
-    if is_escapable_char(ch) {
-        out.push(ch);
+    let node_points = line.node_points.as_ref();
+    let start_index = line.start_index;
+    let end_index = line.end_index;
+    let line_no = node_points[start_index].line;
+
+    let mut i = line.first_non_whitespace_index;
+    if !data.label.saturated {
+        let label_result =
+            eat_and_collect_link_label(node_points, i, end_index, Some(data.label.clone()));
+        if label_result.next_index < 0 {
+            return EatContinuationTextResult::FailedAndRollback {
+                lines: data.lines.clone(),
+            };
+        }
+
+        data.label = label_result.state;
+        if !data.label.saturated {
+            data.lines.push(line.clone());
+            token.data = std::sync::Arc::new(data);
+            update_token_end_position(token, line);
+            return EatContinuationTextResult::Opening {
+                next_index: end_index,
+            };
+        }
+
+        let label_end_index = label_result.next_index as usize;
+        if label_end_index + 1 >= end_index
+            || node_points[label_end_index].code_point != AsciiCodePoint::COLON as i32
+        {
+            return EatContinuationTextResult::FailedAndRollback {
+                lines: data.lines.clone(),
+            };
+        }
+
+        i = label_end_index + 1;
+    }
+
+    if data.destination.is_none() {
+        i = eat_optional_whitespaces(node_points, i, end_index);
+        if i >= end_index {
+            return EatContinuationTextResult::FailedAndRollback {
+                lines: data.lines.clone(),
+            };
+        }
+
+        let destination_result = eat_and_collect_link_destination(node_points, i, end_index, None);
+        if destination_result.next_index < 0 || !destination_result.state.saturated {
+            return EatContinuationTextResult::FailedAndRollback {
+                lines: data.lines.clone(),
+            };
+        }
+
+        let destination_end_index = destination_result.next_index as usize;
+        i = eat_optional_whitespaces(node_points, destination_end_index, end_index);
+        if i >= end_index {
+            data.destination = Some(destination_result.state);
+            data.line_no_of_destination = line_no as isize;
+            data.lines.push(line.clone());
+
+            token.data = std::sync::Arc::new(data);
+            update_token_end_position(token, line);
+            return EatContinuationTextResult::Opening {
+                next_index: end_index,
+            };
+        }
+
+        data.destination = Some(destination_result.state);
+        data.line_no_of_destination = line_no as isize;
+        data.line_no_of_title = line_no as isize;
+    }
+
+    if data.line_no_of_title < 0 {
+        data.line_no_of_title = line_no as isize;
+    }
+
+    let title_result = eat_and_collect_link_title(node_points, i, end_index, data.title.clone());
+    let title_end_index = title_result.next_index;
+    let title_state = title_result.state;
+    let title_saturated = title_state.saturated;
+    let title_has_content = !title_state.node_points.is_empty();
+    data.title = Some(title_state);
+
+    let has_invalid_tail = if title_end_index >= 0 && title_saturated {
+        eat_optional_whitespaces(node_points, title_end_index as usize, end_index) < end_index
     } else {
-        out.push('\\');
-        out.push(ch);
-    }
-}
+        false
+    };
 
-fn is_escapable_char(ch: char) -> bool {
-    ch.is_ascii_punctuation()
-}
-
-fn encode_link_destination(destination: &str) -> String {
-    let mut decoded = destination.to_string();
-    loop {
-        let Ok(next) = try_percent_decode_once(&decoded) else {
-            break;
-        };
-        if next == decoded {
-            break;
+    if title_end_index < 0 || !title_has_content || has_invalid_tail {
+        if data.line_no_of_destination == data.line_no_of_title {
+            return EatContinuationTextResult::FailedAndRollback {
+                lines: data.lines.clone(),
+            };
         }
-        decoded = next;
-    }
 
-    encode_uri_like(&decoded)
-}
+        data.title = None;
 
-fn try_percent_decode_once(input: &str) -> Result<String, ()> {
-    let bytes = input.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0usize;
-
-    while i < bytes.len() {
-        if bytes[i] == b'%' {
-            if i + 2 >= bytes.len() {
-                return Err(());
+        let rollback_start_line = calc_title_start_line_index(&data);
+        if rollback_start_line > 0 {
+            if let Some(kept_last_line) = data.lines.get(rollback_start_line - 1) {
+                set_token_end_position_from_line(token, kept_last_line);
             }
-
-            let hi = from_hex(bytes[i + 1]).ok_or(())?;
-            let lo = from_hex(bytes[i + 2]).ok_or(())?;
-            out.push((hi << 4) | lo);
-            i += 3;
-            continue;
         }
 
-        out.push(bytes[i]);
+        let rollback_lines = if rollback_start_line < data.lines.len() {
+            data.lines[rollback_start_line..].to_vec()
+        } else {
+            Vec::new()
+        };
+        data.lines.truncate(rollback_start_line);
+
+        token.data = std::sync::Arc::new(data);
+        return EatContinuationTextResult::ClosingAndRollback {
+            lines: rollback_lines,
+        };
+    }
+
+    data.lines.push(line.clone());
+
+    token.data = std::sync::Arc::new(data);
+    update_token_end_position(token, line);
+    if title_saturated {
+        EatContinuationTextResult::Closing {
+            next_index: end_index,
+        }
+    } else {
+        EatContinuationTextResult::Opening {
+            next_index: end_index,
+        }
+    }
+}
+
+pub(crate) fn on_close(
+    token: &BlockToken,
+    match_api: &dyn MatchBlockPhaseApi,
+) -> Option<OnCloseResult> {
+    let data = token.data_as::<TokenData>()?;
+
+    if !data.label.saturated {
+        return Some(OnCloseResult::FailedAndRollback {
+            lines: data.lines.clone(),
+        });
+    }
+
+    let Some(destination) = &data.destination else {
+        return Some(OnCloseResult::FailedAndRollback {
+            lines: data.lines.clone(),
+        });
+    };
+    if !destination.saturated {
+        return Some(OnCloseResult::FailedAndRollback {
+            lines: data.lines.clone(),
+        });
+    }
+
+    let mut result = None;
+    if data.title.as_ref().is_some_and(|title| !title.saturated) {
+        if data.line_no_of_destination == data.line_no_of_title {
+            return Some(OnCloseResult::FailedAndRollback {
+                lines: data.lines.clone(),
+            });
+        }
+
+        let rollback_start_line = calc_title_start_line_index(data);
+        let rollback_lines = if rollback_start_line < data.lines.len() {
+            data.lines[rollback_start_line..].to_vec()
+        } else {
+            Vec::new()
+        };
+        result = Some(OnCloseResult::ClosingAndRollback {
+            lines: rollback_lines,
+        });
+    }
+
+    let (_, identifier) = resolve_label_and_identifier(&data.label.node_points)?;
+    match_api.register_definition_identifier(&identifier);
+    result
+}
+
+fn eat_optional_whitespaces(
+    node_points: &[NodePoint],
+    start_index: usize,
+    end_index: usize,
+) -> usize {
+    let mut i = start_index;
+    while i < end_index && is_whitespace_character(node_points[i].code_point) {
+        i += 1;
+    }
+    i
+}
+
+fn eat_and_collect_link_label(
+    node_points: &[NodePoint],
+    start_index: usize,
+    end_index: usize,
+    state: Option<LinkLabelCollectingState>,
+) -> CollectResult<LinkLabelCollectingState> {
+    let mut i = start_index;
+    let mut state = state.unwrap_or(LinkLabelCollectingState {
+        saturated: false,
+        node_points: Vec::new(),
+        has_non_whitespace_character: false,
+    });
+
+    let first_non_whitespace_index = eat_optional_whitespaces(node_points, i, end_index);
+    if first_non_whitespace_index >= end_index {
+        return CollectResult {
+            next_index: -1,
+            state,
+        };
+    }
+
+    if state.node_points.is_empty() {
+        i = first_non_whitespace_index;
+
+        if node_points[i].code_point != AsciiCodePoint::OPEN_BRACKET as i32 {
+            return CollectResult {
+                next_index: -1,
+                state,
+            };
+        }
+
+        state.node_points.push(node_points[i]);
         i += 1;
     }
 
-    String::from_utf8(out).map_err(|_| ())
-}
+    while i < end_index {
+        let point = node_points[i];
+        match point.code_point {
+            x if x == AsciiCodePoint::BACKSLASH as i32 => {
+                state.has_non_whitespace_character = true;
+                if i + 1 < end_index {
+                    state.node_points.push(point);
+                    state.node_points.push(node_points[i + 1]);
+                }
+                i += 2;
+            }
+            x if x == AsciiCodePoint::OPEN_BRACKET as i32 => {
+                return CollectResult {
+                    next_index: -1,
+                    state,
+                };
+            }
+            x if x == AsciiCodePoint::CLOSE_BRACKET as i32 => {
+                state.node_points.push(point);
+                if state.has_non_whitespace_character {
+                    state.saturated = true;
+                    return CollectResult {
+                        next_index: (i + 1) as isize,
+                        state,
+                    };
+                }
 
-fn from_hex(ch: u8) -> Option<u8> {
-    match ch {
-        b'0'..=b'9' => Some(ch - b'0'),
-        b'a'..=b'f' => Some(ch - b'a' + 10),
-        b'A'..=b'F' => Some(ch - b'A' + 10),
-        _ => None,
-    }
-}
-
-fn encode_uri_like(input: &str) -> String {
-    let mut out = String::new();
-    for &b in input.as_bytes() {
-        if is_allowed_uri_byte(b) {
-            out.push(b as char);
-        } else {
-            out.push('%');
-            out.push(hex_digit((b >> 4) & 0x0f));
-            out.push(hex_digit(b & 0x0f));
+                return CollectResult {
+                    next_index: -1,
+                    state,
+                };
+            }
+            _ => {
+                if !is_whitespace_character(point.code_point) {
+                    state.has_non_whitespace_character = true;
+                }
+                state.node_points.push(point);
+                i += 1;
+            }
         }
     }
-    out
-}
 
-fn is_allowed_uri_byte(b: u8) -> bool {
-    b.is_ascii_alphanumeric()
-        || matches!(
-            b,
-            b';' | b','
-                | b'/'
-                | b'?'
-                | b':'
-                | b'@'
-                | b'&'
-                | b'='
-                | b'+'
-                | b'$'
-                | b'-'
-                | b'_'
-                | b'.'
-                | b'!'
-                | b'~'
-                | b'*'
-                | b'\''
-                | b'('
-                | b')'
-                | b'#'
-        )
-}
-
-fn hex_digit(v: u8) -> char {
-    match v {
-        0..=9 => (b'0' + v) as char,
-        10..=15 => (b'A' + (v - 10)) as char,
-        _ => '0',
+    CollectResult {
+        next_index: end_index as isize,
+        state,
     }
 }
 
-fn normalize_identifier(label: &str) -> String {
-    let mut out = String::new();
-    for (idx, chunk) in label.split_whitespace().enumerate() {
+fn eat_and_collect_link_destination(
+    node_points: &[NodePoint],
+    start_index: usize,
+    end_index: usize,
+    state: Option<LinkDestinationCollectingState>,
+) -> CollectResult<LinkDestinationCollectingState> {
+    let mut i = start_index;
+    let mut state = state.unwrap_or(LinkDestinationCollectingState {
+        saturated: false,
+        node_points: Vec::new(),
+        has_open_angle_bracket: false,
+        open_parens_count: 0,
+    });
+
+    let first_non_whitespace_index = eat_optional_whitespaces(node_points, i, end_index);
+    if first_non_whitespace_index >= end_index {
+        return CollectResult {
+            next_index: -1,
+            state,
+        };
+    }
+
+    if state.node_points.is_empty() {
+        i = first_non_whitespace_index;
+        if node_points[i].code_point == AsciiCodePoint::OPEN_ANGLE as i32 {
+            state.has_open_angle_bracket = true;
+            state.node_points.push(node_points[i]);
+            i += 1;
+        }
+    }
+
+    if state.has_open_angle_bracket {
+        while i < end_index {
+            let point = node_points[i];
+            match point.code_point {
+                x if x == AsciiCodePoint::BACKSLASH as i32 => {
+                    if i + 1 < end_index {
+                        state.node_points.push(point);
+                        state.node_points.push(node_points[i + 1]);
+                    }
+                    i += 2;
+                }
+                x if x == AsciiCodePoint::OPEN_ANGLE as i32
+                    || x == VirtualCodePoint::LineEnd as i32 =>
+                {
+                    return CollectResult {
+                        next_index: -1,
+                        state,
+                    };
+                }
+                x if x == AsciiCodePoint::CLOSE_ANGLE as i32 => {
+                    state.saturated = true;
+                    state.node_points.push(point);
+                    return CollectResult {
+                        next_index: (i + 1) as isize,
+                        state,
+                    };
+                }
+                _ => {
+                    state.node_points.push(point);
+                    i += 1;
+                }
+            }
+        }
+
+        return CollectResult {
+            next_index: i as isize,
+            state,
+        };
+    }
+
+    while i < end_index {
+        let point = node_points[i];
+        match point.code_point {
+            x if x == AsciiCodePoint::BACKSLASH as i32 => {
+                if i + 1 < end_index {
+                    state.node_points.push(point);
+                    state.node_points.push(node_points[i + 1]);
+                }
+                i += 2;
+            }
+            x if x == AsciiCodePoint::OPEN_PARENTHESIS as i32 => {
+                state.open_parens_count += 1;
+                state.node_points.push(point);
+                i += 1;
+            }
+            x if x == AsciiCodePoint::CLOSE_PARENTHESIS as i32 => {
+                state.open_parens_count -= 1;
+                state.node_points.push(point);
+                if state.open_parens_count < 0 {
+                    return CollectResult {
+                        next_index: i as isize,
+                        state,
+                    };
+                }
+                i += 1;
+            }
+            _ => {
+                if is_whitespace_character(point.code_point)
+                    || is_ascii_control_character(point.code_point)
+                {
+                    state.saturated = true;
+                    return CollectResult {
+                        next_index: i as isize,
+                        state,
+                    };
+                }
+
+                state.node_points.push(point);
+                i += 1;
+            }
+        }
+    }
+
+    state.saturated = true;
+    CollectResult {
+        next_index: i as isize,
+        state,
+    }
+}
+
+fn eat_and_collect_link_title(
+    node_points: &[NodePoint],
+    start_index: usize,
+    end_index: usize,
+    state: Option<LinkTitleCollectingState>,
+) -> CollectResult<LinkTitleCollectingState> {
+    let mut i = start_index;
+    let mut state = state.unwrap_or(LinkTitleCollectingState {
+        saturated: false,
+        node_points: Vec::new(),
+        wrap_symbol: None,
+    });
+
+    let first_non_whitespace_index = eat_optional_whitespaces(node_points, i, end_index);
+    if first_non_whitespace_index >= end_index {
+        return CollectResult {
+            next_index: -1,
+            state,
+        };
+    }
+
+    if state.node_points.is_empty() {
+        i = first_non_whitespace_index;
+        match node_points[i].code_point {
+            x if x == AsciiCodePoint::DOUBLE_QUOTE as i32
+                || x == AsciiCodePoint::SINGLE_QUOTE as i32
+                || x == AsciiCodePoint::OPEN_PARENTHESIS as i32 =>
+            {
+                state.wrap_symbol = Some(node_points[i].code_point);
+                state.node_points.push(node_points[i]);
+                i += 1;
+            }
+            _ => {
+                return CollectResult {
+                    next_index: -1,
+                    state,
+                };
+            }
+        }
+    }
+
+    let Some(wrap_symbol) = state.wrap_symbol else {
+        return CollectResult {
+            next_index: -1,
+            state,
+        };
+    };
+
+    if wrap_symbol == AsciiCodePoint::DOUBLE_QUOTE as i32
+        || wrap_symbol == AsciiCodePoint::SINGLE_QUOTE as i32
+    {
+        while i < end_index {
+            let point = node_points[i];
+            match point.code_point {
+                x if x == AsciiCodePoint::BACKSLASH as i32 => {
+                    if i + 1 < end_index {
+                        state.node_points.push(point);
+                        state.node_points.push(node_points[i + 1]);
+                    }
+                    i += 2;
+                }
+                x if x == wrap_symbol => {
+                    state.saturated = true;
+                    state.node_points.push(point);
+                    return CollectResult {
+                        next_index: (i + 1) as isize,
+                        state,
+                    };
+                }
+                _ => {
+                    state.node_points.push(point);
+                    i += 1;
+                }
+            }
+        }
+
+        return CollectResult {
+            next_index: end_index as isize,
+            state,
+        };
+    }
+
+    while i < end_index {
+        let point = node_points[i];
+        match point.code_point {
+            x if x == AsciiCodePoint::BACKSLASH as i32 => {
+                if i + 1 < end_index {
+                    state.node_points.push(point);
+                    state.node_points.push(node_points[i + 1]);
+                }
+                i += 2;
+            }
+            x if x == AsciiCodePoint::OPEN_PARENTHESIS as i32 => {
+                return CollectResult {
+                    next_index: -1,
+                    state,
+                };
+            }
+            x if x == AsciiCodePoint::CLOSE_PARENTHESIS as i32 => {
+                if i + 1 >= end_index
+                    || node_points[i + 1].code_point == VirtualCodePoint::LineEnd as i32
+                {
+                    state.node_points.push(point);
+                    state.saturated = true;
+                    break;
+                }
+
+                return CollectResult {
+                    next_index: -1,
+                    state,
+                };
+            }
+            _ => {
+                state.node_points.push(point);
+                i += 1;
+            }
+        }
+    }
+
+    CollectResult {
+        next_index: end_index as isize,
+        state,
+    }
+}
+
+pub(crate) fn resolve_label_and_identifier(label_points: &[NodePoint]) -> Option<(String, String)> {
+    if label_points.len() < 2 {
+        return None;
+    }
+
+    let label = calc_string_from_node_points(label_points, 1, label_points.len() - 1, false);
+    if label.trim().is_empty() {
+        return None;
+    }
+
+    let mut collapsed = String::new();
+    for (idx, part) in label.split_whitespace().enumerate() {
         if idx > 0 {
-            out.push(' ');
+            collapsed.push(' ');
         }
-        out.push_str(chunk);
+        collapsed.push_str(part);
     }
-    fold_case(&out)
+
+    let identifier = fold_case(&collapsed);
+    Some((label, identifier))
+}
+
+fn calc_title_start_line_index(data: &TokenData) -> usize {
+    if data.line_no_of_title < data.line_no_of_label as isize {
+        return 0;
+    }
+
+    data.line_no_of_title as usize - data.line_no_of_label
+}
+
+pub(crate) fn calc_effective_position(token: &BlockToken, data: &TokenData) -> Option<Position> {
+    let mut position = token.position.clone()?;
+
+    if data.title.as_ref().is_some_and(|title| !title.saturated)
+        && data.line_no_of_destination >= 0
+        && data.line_no_of_destination < data.line_no_of_title
+    {
+        let title_start_line = calc_title_start_line_index(data);
+        if title_start_line > 0 {
+            if let Some(kept_last_line) = data.lines.get(title_start_line - 1) {
+                if let Some(point) = calc_line_end_point(kept_last_line) {
+                    position.end = point;
+                }
+            }
+        }
+    }
+
+    Some(position)
+}
+
+fn calc_line_position(line: &PhrasingContentLine) -> Option<Position> {
+    if line.start_index >= line.end_index {
+        return None;
+    }
+
+    let start = line.node_points[line.start_index];
+    let end = line.node_points[line.end_index - 1];
+
+    Some(Position {
+        start: Point {
+            line: start.line,
+            column: start.column,
+            offset: Some(start.offset),
+        },
+        end: Point {
+            line: end.line,
+            column: end.column + 1,
+            offset: Some(end.offset + 1),
+        },
+        indent: None,
+    })
+}
+
+fn calc_line_end_point(line: &PhrasingContentLine) -> Option<Point> {
+    if line.start_index >= line.end_index {
+        return None;
+    }
+
+    let end = line.node_points[line.end_index - 1];
+    Some(Point {
+        line: end.line,
+        column: end.column + 1,
+        offset: Some(end.offset + 1),
+    })
+}
+
+fn set_token_end_position_from_line(token: &mut BlockToken, line: &PhrasingContentLine) {
+    let Some(position) = token.position.as_mut() else {
+        return;
+    };
+
+    if let Some(end) = calc_line_end_point(line) {
+        position.end = end;
+    }
+}
+
+fn update_token_end_position(token: &mut BlockToken, line: &PhrasingContentLine) {
+    let Some(position) = token.position.as_mut() else {
+        return;
+    };
+    if line.start_index >= line.end_index {
+        return;
+    }
+
+    let end = line.node_points[line.end_index - 1];
+    position.end = Point {
+        line: end.line,
+        column: end.column + 1,
+        offset: Some(end.offset + 1),
+    };
 }

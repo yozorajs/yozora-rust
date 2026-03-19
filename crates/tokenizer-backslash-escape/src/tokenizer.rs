@@ -1,15 +1,7 @@
 use yozora_ast::{Node, Text, TEXT_TYPE};
 use yozora_character::{NodePoint, VirtualCodePoint};
-use yozora_core_tokenizer::engine::{
-    DelimiterType, EngineInlineTokenizer, EngineTokenizer, InlineToken, MatchInlineHook,
-    MatchInlinePhaseApi as EngineMatchInlinePhaseApi, ParseInlineHook,
-    ParseInlinePhaseApi as EngineParseInlinePhaseApi, TokenDelimiter, TokenizerType,
-};
-use yozora_core_tokenizer::phase::NodeInterval;
-use yozora_core_tokenizer::{
-    InlineTokenizer, MatchInlinePhaseApi, ParseInlinePhaseApi, Tokenizer, TokenizerKind,
-    TokenizerMeta,
-};
+use yozora_core_tokenizer::NodeInterval;
+use yozora_core_tokenizer::*;
 
 use crate::{parse, r#match};
 
@@ -32,49 +24,15 @@ impl Default for BackslashEscapeTokenizer {
     }
 }
 
-impl Tokenizer for BackslashEscapeTokenizer {
-    fn meta(&self) -> &TokenizerMeta {
-        &self.meta
-    }
-}
 
-impl InlineTokenizer for BackslashEscapeTokenizer {
-    fn tokenize_inline(
-        &self,
-        input: &str,
-        _position: Option<yozora_ast::Position>,
-    ) -> Option<Vec<Node>> {
-        let decoded = r#match::match_backslash_escaped_text(input)?;
-        Some(parse::parse_backslash_escaped_text(decoded))
-    }
-
-    fn tokenize_inline_with_api(
-        &self,
-        input: &str,
-        position: Option<yozora_ast::Position>,
-        _api: &dyn MatchInlinePhaseApi,
-    ) -> Option<Vec<Node>> {
-        self.tokenize_inline(input, position)
-    }
-
-    fn tokenize_inline_with_apis(
-        &self,
-        input: &str,
-        position: Option<yozora_ast::Position>,
-        _match_api: &dyn MatchInlinePhaseApi,
-        _parse_api: &dyn ParseInlinePhaseApi,
-    ) -> Option<Vec<Node>> {
-        self.tokenize_inline(input, position)
-    }
-}
 
 #[derive(Debug, Clone)]
 struct EscapeTokenData {
     value: String,
 }
 
-impl EngineTokenizer for BackslashEscapeTokenizer {
-    fn tokenizer_type(&self) -> TokenizerType {
+impl Tokenizer for BackslashEscapeTokenizer {
+    fn r#type(&self) -> TokenizerType {
         TokenizerType::Inline
     }
 
@@ -93,7 +51,7 @@ struct BackslashEscapeMatchHook {
 }
 
 impl BackslashEscapeMatchHook {
-    fn new(api: &dyn EngineMatchInlinePhaseApi) -> Self {
+    fn new(api: &dyn MatchInlinePhaseApi) -> Self {
         let start_index = api.get_block_start_index();
         let end_index = api.get_block_end_index();
         let source = build_source(api.get_node_points(), start_index, end_index);
@@ -119,7 +77,8 @@ impl BackslashEscapeMatchHook {
 }
 
 impl MatchInlineHook for BackslashEscapeMatchHook {
-    fn find_delimiter(&mut self, start_index: usize, end_index: usize) -> Option<TokenDelimiter> {
+    fn findDelimiter(&mut self, range_index: (usize, usize)) -> Option<TokenDelimiter> {
+        let (start_index, end_index) = range_index;
         let delimiter = self.delimiter.clone()?;
         if delimiter.start_index < start_index || delimiter.end_index > end_index {
             return None;
@@ -129,7 +88,7 @@ impl MatchInlineHook for BackslashEscapeMatchHook {
         Some(delimiter)
     }
 
-    fn process_single_delimiter(&self, delimiter: &TokenDelimiter) -> Vec<InlineToken> {
+    fn processSingleDelimiter(&self, delimiter: &TokenDelimiter) -> Vec<InlineToken> {
         let Some(data) = self.data.as_ref() else {
             return Vec::new();
         };
@@ -142,7 +101,7 @@ impl MatchInlineHook for BackslashEscapeMatchHook {
 }
 
 struct BackslashEscapeParseHook<'a> {
-    api: &'a dyn EngineParseInlinePhaseApi,
+    api: &'a dyn ParseInlinePhaseApi,
 }
 
 impl ParseInlineHook for BackslashEscapeParseHook<'_> {
@@ -173,17 +132,17 @@ impl ParseInlineHook for BackslashEscapeParseHook<'_> {
     }
 }
 
-impl EngineInlineTokenizer for BackslashEscapeTokenizer {
-    fn create_match_hook<'a>(
+impl InlineTokenizer for BackslashEscapeTokenizer {
+    fn r#match<'a>(
         &'a self,
-        api: &'a dyn EngineMatchInlinePhaseApi,
+        api: &'a dyn MatchInlinePhaseApi,
     ) -> Box<dyn MatchInlineHook + 'a> {
         Box::new(BackslashEscapeMatchHook::new(api))
     }
 
-    fn create_parse_hook<'a>(
+    fn parse<'a>(
         &'a self,
-        api: &'a dyn EngineParseInlinePhaseApi,
+        api: &'a dyn ParseInlinePhaseApi,
     ) -> Box<dyn ParseInlineHook + 'a> {
         Box::new(BackslashEscapeParseHook { api })
     }

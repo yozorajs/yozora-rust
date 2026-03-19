@@ -1,8 +1,8 @@
 use yozora_ast::{Node, Position};
 use yozora_character::NodePoint;
 
-use crate::engine::token::InlineToken;
-use crate::phase::NodeInterval;
+use crate::types::token::InlineToken;
+use crate::types::util::NodeInterval;
 
 pub trait ParseInlinePhaseApi {
     fn should_reserve_position(&self) -> bool;
@@ -18,8 +18,4 @@ pub trait ParseInlinePhaseApi {
     fn has_footnote_definition(&self, identifier: &str) -> bool;
 
     fn parse_inline_tokens(&self, tokens: &[InlineToken]) -> Vec<Node>;
-}
-
-pub trait ParseInlineHook {
-    fn parse(&self, tokens: &[InlineToken]) -> Vec<Node>;
 }

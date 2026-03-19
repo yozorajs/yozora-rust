@@ -1,30 +1,59 @@
-use yozora_ast::{Link, Node, Text};
+use yozora_ast::{Link, Node};
+use yozora_character::calc_string_from_node_points;
+use yozora_core_tokenizer::{InlineToken, NodeInterval, ParseInlinePhaseApi};
 
-use crate::r#match::AutolinkToken;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AutolinkContentType {
+    Uri,
+    Email,
+}
 
-pub(crate) fn parse_autolink_tokens(input: &str, tokens: &[AutolinkToken]) -> Vec<Node> {
+#[derive(Debug, Clone)]
+pub(crate) struct AutolinkTokenData {
+    pub content_type: AutolinkContentType,
+    pub children_tokens: Vec<InlineToken>,
+}
+
+pub(crate) fn parse_autolink_tokens(
+    tokens: &[InlineToken],
+    parse_api: &dyn ParseInlinePhaseApi,
+) -> Vec<Node> {
+    let node_points = parse_api.get_node_points();
     let mut nodes = Vec::with_capacity(tokens.len());
 
     for token in tokens {
-        match token {
-            AutolinkToken::Text(interval) => {
-                nodes.push(Node::Text(Text {
-                    position: None,
-                    value: input[interval.start_index..interval.end_index].to_string(),
-                }));
-            }
-            AutolinkToken::Link { url, label, .. } => {
-                nodes.push(Node::Link(Link {
-                    position: None,
-                    url: url.clone(),
-                    title: None,
-                    children: vec![Node::Text(Text {
-                        position: None,
-                        value: label.clone(),
-                    })],
-                }));
-            }
+        let Some(data) = token.data_as::<AutolinkTokenData>() else {
+            continue;
+        };
+        if token.end_index <= token.start_index + 1 || token.end_index > node_points.len() {
+            continue;
         }
+
+        let mut url = calc_string_from_node_points(
+            node_points,
+            token.start_index + 1,
+            token.end_index - 1,
+            false,
+        );
+        if data.content_type == AutolinkContentType::Email {
+            url = format!("mailto:{url}");
+        }
+
+        let position = if parse_api.should_reserve_position() {
+            parse_api.calc_position(NodeInterval {
+                start_index: token.start_index,
+                end_index: token.end_index,
+            })
+        } else {
+            None
+        };
+
+        nodes.push(Node::Link(Link {
+            position,
+            url: parse_api.format_url(&url),
+            title: None,
+            children: parse_api.parse_inline_tokens(&data.children_tokens),
+        }));
     }
 
     nodes

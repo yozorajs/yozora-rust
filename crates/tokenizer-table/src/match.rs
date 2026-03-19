@@ -1,146 +1,353 @@
-use yozora_ast::AlignType;
+use yozora_ast::{AlignType, Position, TableColumn, TABLE_TYPE};
+use yozora_character::{is_whitespace_character, AsciiCodePoint};
+use yozora_core_tokenizer::*;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct TableToken {
-    pub consumed_lines: usize,
-    pub alignments: Vec<Option<AlignType>>,
-    pub rows: Vec<Vec<String>>,
+#[derive(Debug, Clone)]
+pub(crate) struct TableCellTokenData {
+    pub position: Option<Position>,
+    pub lines: Vec<PhrasingContentLine>,
 }
 
-pub(crate) fn match_table_token(lines: &[&str]) -> Option<TableToken> {
-    if lines.len() < 2 {
+#[derive(Debug, Clone)]
+pub(crate) struct TableRowTokenData {
+    pub position: Option<Position>,
+    pub cells: Vec<TableCellTokenData>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct TokenData {
+    pub columns: Vec<TableColumn>,
+    pub rows: Vec<TableRowTokenData>,
+}
+
+pub(crate) fn eat_and_interrupt_previous_sibling(
+    line: &PhrasingContentLine,
+    prev_sibling_token: &BlockToken,
+    match_api: &dyn MatchBlockPhaseApi,
+) -> Option<EatAndInterruptPreviousSiblingResult> {
+    if line.count_of_precede_spaces >= 4 || line.first_non_whitespace_index >= line.end_index {
         return None;
     }
 
-    if !lines[0].contains('|') && !lines[1].contains('|') {
+    let columns = calc_delimiter_columns(line)?;
+    if columns.is_empty() {
         return None;
     }
 
-    let header_cells = split_table_cells(lines[0]);
-    if header_cells.is_empty() {
+    let lines = match_api.extract_phrasing_lines(prev_sibling_token)?;
+    if lines.is_empty() {
         return None;
     }
 
-    let alignments = parse_delimiter_row(lines[1])?;
-    if alignments.is_empty() {
+    let previous_line = lines.last()?;
+    if !is_header_cell_count_matched(previous_line, columns.len()) {
         return None;
     }
 
-    if header_cells.len() != alignments.len() {
-        return None;
-    }
+    let row = calc_table_row(previous_line, &columns)?;
+    let position = calc_spanning_position(previous_line, line);
 
-    let column_count = alignments.len();
-    let mut rows = vec![normalize_row_cells(&header_cells, column_count)];
-    let mut consumed_lines = 2usize;
+    let token = BlockToken::new("", TABLE_TYPE, position).with_data(TokenData {
+        columns,
+        rows: vec![row],
+    });
 
-    for line in lines.iter().skip(2) {
-        if line.trim().is_empty() {
-            break;
-        }
-        if starts_blockquote(line) {
-            break;
-        }
-        let cells = split_table_cells(line);
-        rows.push(normalize_row_cells(&cells, column_count));
-        consumed_lines += 1;
-    }
+    let remaining_lines = &lines[..lines.len() - 1];
+    let remaining_sibling_tokens =
+        match_api.rollback_phrasing_lines(remaining_lines, Some(prev_sibling_token));
 
-    Some(TableToken {
-        consumed_lines,
-        alignments,
-        rows,
+    let remaining_sibling = match remaining_sibling_tokens.len() {
+        0 => RemainingSibling::None,
+        1 => RemainingSibling::One(remaining_sibling_tokens[0].clone()),
+        _ => RemainingSibling::Many(remaining_sibling_tokens),
+    };
+
+    Some(EatAndInterruptPreviousSiblingResult {
+        token,
+        next_index: line.end_index,
+        saturated: false,
+        remaining_sibling,
     })
 }
 
-fn parse_delimiter_row(line: &str) -> Option<Vec<Option<AlignType>>> {
-    let cells = split_table_cells(line);
-    if cells.is_empty() {
-        return None;
+pub(crate) fn eat_lazy_continuation_text(
+    line: &PhrasingContentLine,
+    token: &mut BlockToken,
+) -> EatLazyContinuationTextResult {
+    if line.first_non_whitespace_index >= line.end_index {
+        return EatLazyContinuationTextResult::NotMatched;
     }
 
-    let mut alignments = Vec::new();
-    for cell in cells {
-        let trimmed = cell.trim();
-        if trimmed.is_empty() {
+    let Some(data) = token.data_as::<TokenData>().cloned() else {
+        return EatLazyContinuationTextResult::NotMatched;
+    };
+
+    let Some(row) = calc_table_row(line, &data.columns) else {
+        return EatLazyContinuationTextResult::NotMatched;
+    };
+
+    let mut rows = data.rows;
+    rows.push(row);
+
+    token.data = std::sync::Arc::new(TokenData {
+        columns: data.columns,
+        rows,
+    });
+    update_token_end_position(token, line);
+
+    EatLazyContinuationTextResult::Opening {
+        next_index: line.end_index,
+    }
+}
+
+fn calc_delimiter_columns(line: &PhrasingContentLine) -> Option<Vec<TableColumn>> {
+    let node_points = line.node_points.as_ref();
+    let end_index = line.end_index;
+    let mut c_index = line.first_non_whitespace_index;
+
+    if c_index < end_index
+        && node_points[c_index].code_point == AsciiCodePoint::VERTICAL_SLASH as i32
+    {
+        c_index += 1;
+    }
+
+    let mut columns = Vec::new();
+    while c_index < end_index {
+        while c_index < end_index && is_whitespace_character(node_points[c_index].code_point) {
+            c_index += 1;
+        }
+        if c_index >= end_index {
+            break;
+        }
+
+        let mut left_colon = false;
+        if node_points[c_index].code_point == AsciiCodePoint::COLON as i32 {
+            left_colon = true;
+            c_index += 1;
+        }
+
+        let mut hyphen_count = 0usize;
+        while c_index < end_index
+            && node_points[c_index].code_point == AsciiCodePoint::MINUS_SIGN as i32
+        {
+            hyphen_count += 1;
+            c_index += 1;
+        }
+        if hyphen_count == 0 {
             return None;
         }
 
-        let align = if trimmed.starts_with(':') && trimmed.ends_with(':') && trimmed.len() >= 3 {
+        let mut right_colon = false;
+        if c_index < end_index && node_points[c_index].code_point == AsciiCodePoint::COLON as i32 {
+            right_colon = true;
+            c_index += 1;
+        }
+
+        while c_index < end_index {
+            let code_point = node_points[c_index].code_point;
+            if is_whitespace_character(code_point) {
+                c_index += 1;
+                continue;
+            }
+
+            if code_point == AsciiCodePoint::VERTICAL_SLASH as i32 {
+                c_index += 1;
+                break;
+            }
+
+            return None;
+        }
+
+        let align = if left_colon && right_colon {
             Some(AlignType::Center)
-        } else if trimmed.starts_with(':') && trimmed.len() >= 2 {
+        } else if left_colon {
             Some(AlignType::Left)
-        } else if trimmed.ends_with(':') && trimmed.len() >= 2 {
+        } else if right_colon {
             Some(AlignType::Right)
         } else {
             None
         };
 
-        let mut bar = trimmed;
-        if let Some(rest) = bar.strip_prefix(':') {
-            bar = rest;
-        }
-        if let Some(rest) = bar.strip_suffix(':') {
-            bar = rest;
-        }
-        if bar.is_empty() || !bar.chars().all(|ch| ch == '-') {
-            return None;
-        }
-
-        alignments.push(align);
+        columns.push(TableColumn { align });
     }
 
-    Some(alignments)
+    if columns.is_empty() {
+        None
+    } else {
+        Some(columns)
+    }
 }
 
-fn split_table_cells(line: &str) -> Vec<String> {
+fn is_header_cell_count_matched(line: &PhrasingContentLine, expected_columns: usize) -> bool {
+    let node_points = line.node_points.as_ref();
+    let mut cell_count = 0usize;
+    let mut has_non_whitespace_before_pipe = false;
+
+    let mut index = line.start_index;
+    while index < line.end_index {
+        let code_point = node_points[index].code_point;
+        if is_whitespace_character(code_point) {
+            index += 1;
+            continue;
+        }
+
+        if code_point == AsciiCodePoint::VERTICAL_SLASH as i32 {
+            if has_non_whitespace_before_pipe || cell_count > 0 {
+                cell_count += 1;
+            }
+            has_non_whitespace_before_pipe = false;
+            index += 1;
+            continue;
+        }
+
+        has_non_whitespace_before_pipe = true;
+        if code_point == AsciiCodePoint::BACKSLASH as i32 {
+            index += 1;
+        }
+        index += 1;
+    }
+
+    if has_non_whitespace_before_pipe && expected_columns > 1 {
+        cell_count += 1;
+    }
+
+    cell_count == expected_columns
+}
+
+fn calc_table_row(
+    line: &PhrasingContentLine,
+    columns: &[TableColumn],
+) -> Option<TableRowTokenData> {
+    if line.start_index >= line.end_index {
+        return None;
+    }
+
+    let node_points = line.node_points.as_ref();
+    let start_index = line.start_index;
+    let end_index = line.end_index;
+    let mut i = line.first_non_whitespace_index;
+
+    if i < end_index && node_points[i].code_point == AsciiCodePoint::VERTICAL_SLASH as i32 {
+        i += 1;
+    }
+
     let mut cells = Vec::new();
-    let mut current = String::new();
-    let mut escape = false;
-
-    for ch in line.chars() {
-        if escape {
-            current.push(ch);
-            escape = false;
-            continue;
+    while i < end_index {
+        while i < end_index && is_whitespace_character(node_points[i].code_point) {
+            i += 1;
         }
 
-        if ch == '\\' {
-            escape = true;
-            continue;
+        let start_point = if i < end_index {
+            calc_start_point(node_points, i)
+        } else {
+            calc_end_point(node_points, end_index - 1)
+        };
+
+        let cell_start_index = i;
+        let cell_first_non_whitespace_index = i;
+        while i < end_index {
+            let code_point = node_points[i].code_point;
+            if code_point == AsciiCodePoint::BACKSLASH as i32 {
+                i = std::cmp::min(i + 2, end_index);
+                continue;
+            }
+
+            if code_point == AsciiCodePoint::VERTICAL_SLASH as i32 {
+                break;
+            }
+
+            i += 1;
         }
 
-        if ch == '|' {
-            cells.push(current.trim().to_string());
-            current.clear();
-            continue;
+        let mut cell_end_index = i;
+        while cell_end_index > cell_start_index
+            && is_whitespace_character(node_points[cell_end_index - 1].code_point)
+        {
+            cell_end_index -= 1;
         }
 
-        current.push(ch);
-    }
-    cells.push(current.trim().to_string());
+        let end_point = if i > 0 {
+            calc_end_point(node_points, i - 1)
+        } else {
+            start_point
+        };
 
-    if line.trim_start().starts_with('|') && !cells.is_empty() {
-        cells.remove(0);
-    }
-    if line.trim_end().ends_with('|') && !cells.is_empty() {
-        cells.pop();
+        let lines = if cell_first_non_whitespace_index >= cell_end_index {
+            Vec::new()
+        } else {
+            vec![PhrasingContentLine {
+                node_points: line.node_points.clone(),
+                start_index: cell_start_index,
+                end_index: cell_end_index,
+                first_non_whitespace_index: cell_first_non_whitespace_index,
+                count_of_precede_spaces: cell_first_non_whitespace_index
+                    .saturating_sub(cell_start_index),
+            }]
+        };
+
+        cells.push(TableCellTokenData {
+            position: Some(Position {
+                start: start_point,
+                end: end_point,
+                indent: None,
+            }),
+            lines,
+        });
+
+        if cells.len() >= columns.len() {
+            break;
+        }
+
+        if i < end_index && node_points[i].code_point == AsciiCodePoint::VERTICAL_SLASH as i32 {
+            i += 1;
+        }
     }
 
-    cells
+    let row_start = calc_start_point(node_points, start_index);
+    let row_end = calc_end_point(node_points, end_index - 1);
+    while cells.len() < columns.len() {
+        cells.push(TableCellTokenData {
+            position: Some(Position {
+                start: row_end,
+                end: row_end,
+                indent: None,
+            }),
+            lines: Vec::new(),
+        });
+    }
+
+    Some(TableRowTokenData {
+        position: Some(Position {
+            start: row_start,
+            end: row_end,
+            indent: None,
+        }),
+        cells,
+    })
 }
 
-fn normalize_row_cells(cells: &[String], column_count: usize) -> Vec<String> {
-    (0..column_count)
-        .map(|index| cells.get(index).cloned().unwrap_or_default())
-        .collect()
-}
-
-fn starts_blockquote(line: &str) -> bool {
-    let leading_spaces = line.chars().take_while(|ch| *ch == ' ').count();
-    if leading_spaces >= 4 {
-        return false;
+fn calc_spanning_position(
+    first: &PhrasingContentLine,
+    last: &PhrasingContentLine,
+) -> Option<Position> {
+    if first.start_index >= first.end_index || last.start_index >= last.end_index {
+        return None;
     }
 
-    line[leading_spaces..].starts_with('>')
+    Some(Position {
+        start: calc_start_point(first.node_points.as_ref(), first.start_index),
+        end: calc_end_point(last.node_points.as_ref(), last.end_index - 1),
+        indent: None,
+    })
+}
+
+fn update_token_end_position(token: &mut BlockToken, line: &PhrasingContentLine) {
+    let Some(position) = token.position.as_mut() else {
+        return;
+    };
+    if line.start_index >= line.end_index {
+        return;
+    }
+
+    position.end = calc_end_point(line.node_points.as_ref(), line.end_index - 1);
 }

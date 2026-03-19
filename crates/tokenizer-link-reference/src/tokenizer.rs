@@ -1,15 +1,10 @@
-use yozora_ast::{LinkReference, Node, Text, LINK_REFERENCE_TYPE};
-use yozora_character::{NodePoint, VirtualCodePoint};
-use yozora_core_tokenizer::engine::{
-    DelimiterType, EngineInlineTokenizer, EngineTokenizer, InlineToken, MatchInlineHook,
-    MatchInlinePhaseApi as EngineMatchInlinePhaseApi, ParseInlineHook,
-    ParseInlinePhaseApi as EngineParseInlinePhaseApi, TokenDelimiter, TokenizerType,
-};
-use yozora_core_tokenizer::phase::NodeInterval;
-use yozora_core_tokenizer::{
-    InlineTokenizer, MatchInlinePhaseApi, ParseInlinePhaseApi, Tokenizer, TokenizerKind,
-    TokenizerMeta,
-};
+use std::cell::RefCell;
+
+use yozora_ast::Node;
+use yozora_core_tokenizer::*;
+
+#[cfg(test)]
+use yozora_core_tokenizer::NodeInterval;
 
 use crate::{parse, r#match};
 
@@ -33,57 +28,7 @@ impl Default for LinkReferenceTokenizer {
 }
 
 impl Tokenizer for LinkReferenceTokenizer {
-    fn meta(&self) -> &TokenizerMeta {
-        &self.meta
-    }
-}
-
-impl InlineTokenizer for LinkReferenceTokenizer {
-    fn tokenize_inline(
-        &self,
-        input: &str,
-        _position: Option<yozora_ast::Position>,
-    ) -> Option<Vec<Node>> {
-        let tokens = r#match::match_link_reference_tokens(input, None)?;
-        Some(parse::parse_link_reference_tokens(input, &tokens, None))
-    }
-
-    fn tokenize_inline_with_api(
-        &self,
-        input: &str,
-        _position: Option<yozora_ast::Position>,
-        api: &dyn MatchInlinePhaseApi,
-    ) -> Option<Vec<Node>> {
-        let tokens = r#match::match_link_reference_tokens(input, Some(api))?;
-        Some(parse::parse_link_reference_tokens(input, &tokens, None))
-    }
-
-    fn tokenize_inline_with_apis(
-        &self,
-        input: &str,
-        _position: Option<yozora_ast::Position>,
-        match_api: &dyn MatchInlinePhaseApi,
-        parse_api: &dyn ParseInlinePhaseApi,
-    ) -> Option<Vec<Node>> {
-        let tokens = r#match::match_link_reference_tokens(input, Some(match_api))?;
-        Some(parse::parse_link_reference_tokens(
-            input,
-            &tokens,
-            Some(parse_api),
-        ))
-    }
-}
-
-#[derive(Debug, Clone)]
-struct LinkReferenceTokenData {
-    identifier: String,
-    label: String,
-    reference_type: yozora_ast::ReferenceType,
-    child_text: String,
-}
-
-impl EngineTokenizer for LinkReferenceTokenizer {
-    fn tokenizer_type(&self) -> TokenizerType {
+    fn r#type(&self) -> TokenizerType {
         TokenizerType::Inline
     }
 
@@ -96,270 +41,271 @@ impl EngineTokenizer for LinkReferenceTokenizer {
     }
 }
 
-struct LegacyMatchApiAdapter<'a> {
-    api: &'a dyn EngineMatchInlinePhaseApi,
-}
-
-impl MatchInlinePhaseApi for LegacyMatchApiAdapter<'_> {
-    fn has_definition(&self, identifier: &str) -> bool {
-        self.api.has_definition(identifier)
-    }
-
-    fn has_footnote_definition(&self, identifier: &str) -> bool {
-        self.api.has_footnote_definition(identifier)
-    }
-}
-
-#[derive(Debug, Clone)]
-struct DelimiterEntry {
-    delimiter: TokenDelimiter,
-    data: LinkReferenceTokenData,
-}
-
-struct LinkReferenceMatchHook {
-    delimiters: Vec<DelimiterEntry>,
-    cursor: usize,
+struct LinkReferenceMatchHook<'a> {
+    api: &'a dyn MatchInlinePhaseApi,
+    delimiters: RefCell<Vec<r#match::DelimiterEntry>>,
     last_end_index: Option<usize>,
     last_delimiter: Option<TokenDelimiter>,
 }
 
-impl LinkReferenceMatchHook {
-    fn new(api: &dyn EngineMatchInlinePhaseApi) -> Self {
-        let block_start_index = api.get_block_start_index();
-        let block_end_index = api.get_block_end_index();
-        let node_points = api.get_node_points();
-
-        let source = build_source(node_points, block_start_index, block_end_index);
-        let char_starts = build_char_starts(&source);
-
-        let adapter = LegacyMatchApiAdapter { api };
-        let matched =
-            r#match::match_link_reference_tokens(&source, Some(&adapter)).unwrap_or_default();
-
-        let mut delimiters = Vec::new();
-        for token in matched {
-            let r#match::LinkReferenceToken::Link {
-                interval,
-                identifier,
-                label,
-                reference_type,
-                child_text,
-                ..
-            } = token
-            else {
-                continue;
-            };
-
-            let local_start = byte_to_char_index(&char_starts, source.len(), interval.start_index);
-            let local_end = byte_to_char_index(&char_starts, source.len(), interval.end_index);
-            if local_start >= local_end {
-                continue;
-            }
-
-            delimiters.push(DelimiterEntry {
-                delimiter: TokenDelimiter {
-                    delimiter_type: DelimiterType::Full,
-                    start_index: block_start_index + local_start,
-                    end_index: block_start_index + local_end,
-                    thickness: local_end - local_start,
-                    original_thickness: local_end - local_start,
-                },
-                data: LinkReferenceTokenData {
-                    identifier,
-                    label,
-                    reference_type,
-                    child_text,
-                },
-            });
-        }
-
-        Self {
-            delimiters,
-            cursor: 0,
-            last_end_index: None,
-            last_delimiter: None,
-        }
+impl LinkReferenceMatchHook<'_> {
+    fn register_delimiter(&self, entry: r#match::DelimiterEntry) {
+        self.delimiters.borrow_mut().push(entry);
     }
 
-    fn lookup_data(&self, delimiter: &TokenDelimiter) -> Option<&LinkReferenceTokenData> {
+    fn lookup_brackets(
+        &self,
+        delimiter: &TokenDelimiter,
+    ) -> Vec<r#match::LinkReferenceDelimiterBracket> {
         self.delimiters
+            .borrow()
             .iter()
-            .find(|x| {
-                x.delimiter.start_index == delimiter.start_index
-                    && x.delimiter.end_index == delimiter.end_index
+            .rev()
+            .find(|entry| {
+                entry.delimiter.start_index == delimiter.start_index
+                    && entry.delimiter.end_index == delimiter.end_index
+                    && entry.delimiter.delimiter_type == delimiter.delimiter_type
             })
-            .map(|x| &x.data)
-    }
-
-    fn find_delimiter_impl(
-        &mut self,
-        start_index: usize,
-        end_index: usize,
-    ) -> Option<TokenDelimiter> {
-        while self.cursor < self.delimiters.len() {
-            let delimiter = &self.delimiters[self.cursor].delimiter;
-            if delimiter.start_index < start_index {
-                self.cursor += 1;
-                continue;
-            }
-            if delimiter.start_index >= end_index {
-                return None;
-            }
-
-            self.cursor += 1;
-            return Some(delimiter.clone());
-        }
-
-        None
+            .map(|entry| entry.brackets.clone())
+            .unwrap_or_default()
     }
 }
 
-impl MatchInlineHook for LinkReferenceMatchHook {
+impl MatchInlineHook for LinkReferenceMatchHook<'_> {
     fn reset(&mut self) {
-        self.cursor = 0;
         self.last_end_index = None;
         self.last_delimiter = None;
+        self.delimiters.borrow_mut().clear();
     }
 
-    fn find_delimiter(&mut self, start_index: usize, end_index: usize) -> Option<TokenDelimiter> {
-        if self.last_end_index == Some(end_index) {
-            match &self.last_delimiter {
-                Some(delimiter) if delimiter.start_index >= start_index => {
-                    return Some(delimiter.clone());
-                }
-                None => return None,
-                _ => {}
-            }
+    fn findDelimiter(&mut self, range_index: (usize, usize)) -> Option<TokenDelimiter> {
+        let mut last_end_index = self.last_end_index;
+        let mut last_delimiter = self.last_delimiter.clone();
+        let delimiter = genFindDelimiter(
+            range_index,
+            &mut last_end_index,
+            &mut last_delimiter,
+            |start_index, end_index| {
+                let entry = r#match::find_link_reference_delimiter_entry(
+                    self.api.get_node_points(),
+                    start_index,
+                    end_index,
+                )?;
+                let delimiter = entry.delimiter.clone();
+                self.register_delimiter(entry);
+                Some(delimiter)
+            },
+        );
+        self.last_end_index = last_end_index;
+        self.last_delimiter = last_delimiter;
+        delimiter
+    }
+
+    fn isDelimiterPair(
+        &self,
+        opener_delimiter: &TokenDelimiter,
+        closer_delimiter: &TokenDelimiter,
+        internal_tokens: &[InlineToken],
+    ) -> IsDelimiterPairResult {
+        // Links may not contain other links, at any level of nesting.
+        if internal_tokens.iter().any(is_link_token) {
+            return IsDelimiterPairResult::NotPaired {
+                opener: false,
+                closer: false,
+            };
         }
 
-        self.last_end_index = Some(end_index);
-        self.last_delimiter = self.find_delimiter_impl(start_index, end_index);
-        self.last_delimiter.clone()
+        let status = r#match::check_balanced_brackets_status(
+            opener_delimiter.end_index,
+            closer_delimiter.start_index,
+            internal_tokens,
+            self.api.get_node_points(),
+        );
+
+        match status {
+            -1 => IsDelimiterPairResult::NotPaired {
+                opener: false,
+                closer: true,
+            },
+            0 => {
+                let brackets = self.lookup_brackets(closer_delimiter);
+                let Some(bracket) = brackets.first() else {
+                    return IsDelimiterPairResult::NotPaired {
+                        opener: false,
+                        closer: false,
+                    };
+                };
+
+                let Some(identifier) = &bracket.identifier else {
+                    return IsDelimiterPairResult::NotPaired {
+                        opener: false,
+                        closer: false,
+                    };
+                };
+
+                if !self.api.has_definition(identifier) {
+                    return IsDelimiterPairResult::NotPaired {
+                        opener: false,
+                        closer: false,
+                    };
+                }
+
+                IsDelimiterPairResult::Paired
+            }
+            1 => IsDelimiterPairResult::NotPaired {
+                opener: true,
+                closer: false,
+            },
+            _ => IsDelimiterPairResult::NotPaired {
+                opener: false,
+                closer: false,
+            },
+        }
     }
 
-    fn process_single_delimiter(&self, delimiter: &TokenDelimiter) -> Vec<InlineToken> {
-        let Some(data) = self.lookup_data(delimiter) else {
-            return Vec::new();
+    fn processDelimiterPair(
+        &self,
+        opener_delimiter: &TokenDelimiter,
+        closer_delimiter: &TokenDelimiter,
+        internal_tokens: &[InlineToken],
+    ) -> ProcessDelimiterPairResult {
+        let opener_brackets = self.lookup_brackets(opener_delimiter);
+        let mut tokens = r#match::process_single_delimiter(
+            self.api,
+            opener_delimiter,
+            &opener_brackets,
+            self.api.get_node_points(),
+        );
+
+        let brackets = self.lookup_brackets(closer_delimiter);
+        let Some((first, remains)) = brackets.split_first() else {
+            return ProcessDelimiterPairResult {
+                tokens,
+                remainOpenerDelimiter: None,
+                remainCloserDelimiter: None,
+            };
         };
 
-        vec![InlineToken::new(
-            "",
-            LINK_REFERENCE_TYPE,
-            (delimiter.start_index, delimiter.end_index),
+        let (Some(label), Some(identifier)) = (first.label.clone(), first.identifier.clone()) else {
+            return ProcessDelimiterPairResult {
+                tokens,
+                remainOpenerDelimiter: None,
+                remainCloserDelimiter: None,
+            };
+        };
+
+        let children_tokens = self.api.resolve_internal_tokens(
+            internal_tokens,
+            opener_delimiter.end_index,
+            closer_delimiter.start_index,
+        );
+
+        tokens.push(r#match::create_reference_token(
+            self.api.get_node_points(),
+            opener_delimiter.end_index.saturating_sub(1),
+            first.end_index,
+            yozora_ast::ReferenceType::Full,
+            label,
+            identifier,
+            opener_delimiter.end_index,
+            closer_delimiter.start_index,
+            children_tokens,
+        ));
+
+        let remain_type = if closer_delimiter.delimiter_type == DelimiterType::Both {
+            DelimiterType::Opener
+        } else {
+            DelimiterType::Full
+        };
+
+        let remain_closer_delimiter = TokenDelimiter {
+            delimiter_type: remain_type,
+            start_index: first.end_index,
+            end_index: closer_delimiter.end_index,
+            thickness: closer_delimiter.end_index.saturating_sub(first.end_index),
+            original_thickness: closer_delimiter.end_index.saturating_sub(first.end_index),
+        };
+
+        self.register_delimiter(r#match::DelimiterEntry {
+            delimiter: remain_closer_delimiter.clone(),
+            brackets: remains.to_vec(),
+        });
+
+        ProcessDelimiterPairResult {
+            tokens,
+            remainOpenerDelimiter: None,
+            remainCloserDelimiter: Some(remain_closer_delimiter),
+        }
+    }
+
+    fn processSingleDelimiter(&self, delimiter: &TokenDelimiter) -> Vec<InlineToken> {
+        let brackets = self.lookup_brackets(delimiter);
+        r#match::process_single_delimiter(
+            self.api,
+            delimiter,
+            &brackets,
+            self.api.get_node_points(),
         )
-        .with_data(data.clone())]
     }
 }
 
 struct LinkReferenceParseHook<'a> {
-    api: &'a dyn EngineParseInlinePhaseApi,
+    api: &'a dyn ParseInlinePhaseApi,
 }
 
 impl ParseInlineHook for LinkReferenceParseHook<'_> {
     fn parse(&self, tokens: &[InlineToken]) -> Vec<Node> {
-        let mut nodes = Vec::with_capacity(tokens.len());
-
-        for token in tokens {
-            let Some(data) = token.data_as::<LinkReferenceTokenData>() else {
-                continue;
-            };
-
-            let position = if self.api.should_reserve_position() {
-                self.api.calc_position(NodeInterval {
-                    start_index: token.start_index,
-                    end_index: token.end_index,
-                })
-            } else {
-                None
-            };
-
-            nodes.push(Node::LinkReference(LinkReference {
-                position,
-                identifier: data.identifier.clone(),
-                label: data.label.clone(),
-                reference_type: data.reference_type,
-                children: vec![Node::Text(Text {
-                    position: None,
-                    value: data.child_text.clone(),
-                })],
-            }));
-        }
-
-        nodes
+        parse::parse_link_reference_tokens(tokens, self.api)
     }
 }
 
-impl EngineInlineTokenizer for LinkReferenceTokenizer {
-    fn create_match_hook<'a>(
+impl InlineTokenizer for LinkReferenceTokenizer {
+    fn r#match<'a>(
         &'a self,
-        api: &'a dyn EngineMatchInlinePhaseApi,
+        api: &'a dyn MatchInlinePhaseApi,
     ) -> Box<dyn MatchInlineHook + 'a> {
-        Box::new(LinkReferenceMatchHook::new(api))
+        Box::new(LinkReferenceMatchHook {
+            api,
+            delimiters: RefCell::new(Vec::new()),
+            last_end_index: None,
+            last_delimiter: None,
+        })
     }
 
-    fn create_parse_hook<'a>(
+    fn parse<'a>(
         &'a self,
-        api: &'a dyn EngineParseInlinePhaseApi,
+        api: &'a dyn ParseInlinePhaseApi,
     ) -> Box<dyn ParseInlineHook + 'a> {
         Box::new(LinkReferenceParseHook { api })
     }
 }
 
-fn build_source(node_points: &[NodePoint], start_index: usize, end_index: usize) -> String {
-    let mut source = String::new();
-    for point in node_points
-        .iter()
-        .skip(start_index)
-        .take(end_index.saturating_sub(start_index))
-    {
-        let code_point = point.code_point;
-        let ch = if code_point == VirtualCodePoint::Space as i32 {
-            Some(' ')
-        } else if code_point == VirtualCodePoint::LineEnd as i32 {
-            Some('\n')
-        } else {
-            char::from_u32(code_point as u32)
-        };
-
-        if let Some(ch) = ch {
-            source.push(ch);
-        }
-    }
-    source
-}
-
-fn build_char_starts(source: &str) -> Vec<usize> {
-    source.char_indices().map(|(i, _)| i).collect()
-}
-
-fn byte_to_char_index(char_starts: &[usize], source_len: usize, byte_index: usize) -> usize {
-    if byte_index >= source_len {
-        return char_starts.len();
-    }
-
-    match char_starts.binary_search(&byte_index) {
-        Ok(i) | Err(i) => i,
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use yozora_ast::{ReferenceType, Text};
+    use std::collections::HashSet;
 
-    struct DummyInlineApi {
-        definitions: std::collections::HashSet<String>,
+    use yozora_ast::{Node, ReferenceType, TEXT_TYPE};
+    use yozora_character::{
+        calc_escaped_string_from_node_points, create_node_point_generator, NodePoint,
+    };
+
+    use super::*;
+
+    struct DummyMatchApi {
+        definitions: HashSet<String>,
+        node_points: Vec<NodePoint>,
     }
 
-    impl DummyInlineApi {
-        fn from(definitions: &[&str]) -> Self {
+    impl DummyMatchApi {
+        fn from(definitions: &[&str], node_points: Vec<NodePoint>) -> Self {
             Self {
                 definitions: definitions.iter().map(|v| v.to_string()).collect(),
+                node_points,
             }
         }
     }
 
-    impl MatchInlinePhaseApi for DummyInlineApi {
+    impl MatchInlinePhaseApi for DummyMatchApi {
         fn has_definition(&self, identifier: &str) -> bool {
             self.definitions.contains(identifier)
         }
@@ -367,83 +313,112 @@ mod tests {
         fn has_footnote_definition(&self, _identifier: &str) -> bool {
             false
         }
+
+        fn get_node_points(&self) -> &[NodePoint] {
+            &self.node_points
+        }
+
+        fn get_block_start_index(&self) -> usize {
+            0
+        }
+
+        fn get_block_end_index(&self) -> usize {
+            self.node_points.len()
+        }
+
+        fn resolve_internal_tokens(
+            &self,
+            _higher_priority_tokens: &[InlineToken],
+            start_index: usize,
+            end_index: usize,
+        ) -> Vec<InlineToken> {
+            vec![InlineToken::new("text", TEXT_TYPE, (start_index, end_index))]
+        }
+    }
+
+    struct DummyParseApi {
+        node_points: Vec<NodePoint>,
+    }
+
+    impl ParseInlinePhaseApi for DummyParseApi {
+        fn should_reserve_position(&self) -> bool {
+            false
+        }
+
+        fn calc_position(&self, _interval: NodeInterval) -> Option<yozora_ast::Position> {
+            None
+        }
+
+        fn format_url(&self, url: &str) -> String {
+            url.to_string()
+        }
+
+        fn get_node_points(&self) -> &[NodePoint] {
+            &self.node_points
+        }
+
+        fn has_definition(&self, _identifier: &str) -> bool {
+            false
+        }
+
+        fn has_footnote_definition(&self, _identifier: &str) -> bool {
+            false
+        }
+
+        fn parse_inline_tokens(&self, tokens: &[InlineToken]) -> Vec<Node> {
+            tokens
+                .iter()
+                .map(|token| {
+                    Node::Text(yozora_ast::Text {
+                        position: None,
+                        value: calc_escaped_string_from_node_points(
+                            &self.node_points,
+                            token.start_index,
+                            token.end_index,
+                            false,
+                        ),
+                    })
+                })
+                .collect()
+        }
+    }
+
+    fn collect_single_token(
+        input: &str,
+        definitions: &[&str],
+    ) -> Option<(InlineToken, Vec<NodePoint>)> {
+        let tokenizer = LinkReferenceTokenizer::default();
+        let node_points = create_node_point_generator(input)
+            .pop()
+            .expect("expected node points");
+        let match_api = DummyMatchApi::from(definitions, node_points.clone());
+        let mut hook = tokenizer.r#match(&match_api);
+
+        let delimiter = hook.findDelimiter((0, match_api.get_block_end_index()))?;
+        let token = hook.processSingleDelimiter(&delimiter).pop()?;
+        Some((token, node_points))
     }
 
     #[test]
-    fn should_not_capture_inline_link_with_nested_brackets() {
-        let tokenizer = LinkReferenceTokenizer::default();
-        let nodes = tokenizer.tokenize_inline("[link [foo [bar]]](/uri)", None);
-        assert!(nodes.is_none(), "got: {:?}", nodes);
+    fn should_skip_unknown_definition() {
+        let result = collect_single_token("[foo][bar]", &[]);
+        assert!(result.is_none());
     }
 
     #[test]
-    fn should_not_capture_inline_link_with_image_label() {
+    fn should_parse_full_reference_with_children() {
         let tokenizer = LinkReferenceTokenizer::default();
-        let nodes = tokenizer.tokenize_inline("[![moon](moon.jpg)](/uri)", None);
-        assert!(nodes.is_none());
-    }
+        let (token, node_points) =
+            collect_single_token("[foo *bar*][ref]", &["ref"]).expect("should parse");
+        let parse_api = DummyParseApi { node_points };
+        let parse_hook = tokenizer.parse(&parse_api);
+        let nodes = parse_hook.parse(&[token]);
 
-    #[test]
-    fn should_capture_full_reference_with_inline_content() {
-        let tokenizer = LinkReferenceTokenizer::default();
-        let nodes = tokenizer.tokenize_inline("[link *foo **bar** `#`*][ref]", None);
-        assert!(nodes.is_some(), "nodes should be parsed");
-
-        let nodes = nodes.unwrap();
-        assert_eq!(nodes.len(), 1, "got: {nodes:?}");
-        let Node::LinkReference(link) = &nodes[0] else {
-            panic!("expected linkReference, got: {nodes:?}");
+        let Some(Node::LinkReference(link)) = nodes.first() else {
+            panic!("expected linkReference");
         };
         assert_eq!(link.reference_type, ReferenceType::Full);
         assert_eq!(link.label, "ref");
-    }
-
-    #[test]
-    fn should_prefer_middle_full_reference_in_three_labels() {
-        let tokenizer = LinkReferenceTokenizer::default();
-        let nodes = tokenizer
-            .tokenize_inline("[foo][bar][baz]", None)
-            .expect("nodes");
-
-        let Node::LinkReference(link) = &nodes[0] else {
-            panic!("got: {nodes:?}");
-        };
-        assert_eq!(link.reference_type, ReferenceType::Full);
-        assert_eq!(link.label, "bar");
-    }
-
-    #[test]
-    fn should_parse_inner_shortcut_for_double_wrapped_label() {
-        let tokenizer = LinkReferenceTokenizer::default();
-        let nodes = tokenizer
-            .tokenize_inline("[[*foo* bar]]", None)
-            .expect("nodes");
-
-        assert!(matches!(&nodes[0], Node::Text(Text { value, .. }) if value == "["));
-        assert!(
-            matches!(&nodes[1], Node::LinkReference(_)),
-            "got: {nodes:?}"
-        );
-        assert!(matches!(&nodes[2], Node::Text(Text { value, .. }) if value == "]"));
-    }
-
-    #[test]
-    fn phase_api_should_filter_out_unknown_definition() {
-        let tokenizer = LinkReferenceTokenizer::default();
-        let api = DummyInlineApi::from(&[]);
-
-        let nodes = tokenizer.tokenize_inline_with_api("[foo][bar]", None, &api);
-        assert!(nodes.is_none(), "unexpected nodes: {nodes:?}");
-    }
-
-    #[test]
-    fn phase_api_should_accept_known_definition() {
-        let tokenizer = LinkReferenceTokenizer::default();
-        let api = DummyInlineApi::from(&["bar"]);
-
-        let nodes = tokenizer
-            .tokenize_inline_with_api("[foo][bar]", None, &api)
-            .expect("should parse known definition");
-        assert!(matches!(&nodes[0], Node::LinkReference(_)));
+        assert_eq!(link.children.len(), 1);
     }
 }

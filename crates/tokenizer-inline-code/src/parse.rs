@@ -1,56 +1,67 @@
-use yozora_ast::{InlineCode, Node, Text};
-use yozora_core_tokenizer::{NodeInterval, ParseInlinePhaseApi};
+use yozora_ast::{InlineCode, Node};
+use yozora_character::{calc_string_from_node_points, is_space_like};
+use yozora_core_tokenizer::{InlineToken, NodeInterval, ParseInlinePhaseApi};
 
-use crate::r#match::InlineCodeToken;
+#[derive(Debug, Clone)]
+pub(crate) struct InlineCodeTokenData {
+    pub thickness: usize,
+}
 
 pub(crate) fn parse_inline_code_tokens(
-    input: &str,
-    tokens: &[InlineCodeToken],
-    parse_api: Option<&dyn ParseInlinePhaseApi>,
+    tokens: &[InlineToken],
+    parse_api: &dyn ParseInlinePhaseApi,
 ) -> Vec<Node> {
+    let node_points = parse_api.get_node_points();
     let mut nodes = Vec::with_capacity(tokens.len());
 
     for token in tokens {
-        match token {
-            InlineCodeToken::Text(interval) => {
-                nodes.push(Node::Text(Text {
-                    position: calc_position(parse_api, *interval),
-                    value: input[interval.start_index..interval.end_index].to_string(),
-                }));
+        if token.start_index >= token.end_index || token.end_index > node_points.len() {
+            continue;
+        }
+
+        let thickness = token
+            .data_as::<InlineCodeTokenData>()
+            .map(|x| x.thickness)
+            .unwrap_or(0);
+
+        let mut start_index = token.start_index.saturating_add(thickness);
+        let mut end_index = token.end_index.saturating_sub(thickness);
+        if start_index > end_index || end_index > node_points.len() {
+            continue;
+        }
+
+        let mut is_all_space = true;
+        for point in &node_points[start_index..end_index] {
+            if is_space_like(point.code_point) {
+                continue;
             }
-            InlineCodeToken::Code { span, content } => {
-                nodes.push(Node::InlineCode(InlineCode {
-                    position: calc_position(parse_api, *span),
-                    value: normalize_code_span(&input[content.start_index..content.end_index]),
-                }));
+            is_all_space = false;
+            break;
+        }
+
+        if !is_all_space && start_index + 2 < end_index {
+            let first_character = node_points[start_index].code_point;
+            let last_character = node_points[end_index - 1].code_point;
+            if is_space_like(first_character) && is_space_like(last_character) {
+                start_index += 1;
+                end_index -= 1;
             }
         }
+
+        let value = calc_string_from_node_points(node_points, start_index, end_index, false)
+            .replace('\n', " ");
+
+        let position = if parse_api.should_reserve_position() {
+            parse_api.calc_position(NodeInterval {
+                start_index: token.start_index,
+                end_index: token.end_index,
+            })
+        } else {
+            None
+        };
+
+        nodes.push(Node::InlineCode(InlineCode { position, value }));
     }
 
     nodes
-}
-
-fn calc_position(
-    parse_api: Option<&dyn ParseInlinePhaseApi>,
-    interval: NodeInterval,
-) -> Option<yozora_ast::Position> {
-    parse_api.and_then(|api| api.calc_position(interval))
-}
-
-fn normalize_code_span(raw: &str) -> String {
-    let collapsed = raw
-        .replace("\r\n", "\n")
-        .replace('\r', "\n")
-        .replace('\n', " ");
-
-    let is_all_space = collapsed.chars().all(|ch| ch == ' ');
-    if !is_all_space
-        && collapsed.len() >= 2
-        && collapsed.starts_with(' ')
-        && collapsed.ends_with(' ')
-    {
-        return collapsed[1..collapsed.len() - 1].to_string();
-    }
-
-    collapsed
 }

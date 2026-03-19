@@ -1,50 +1,87 @@
-use yozora_ast::{Node, Table, TableCell, TableColumn, TableRow, Text};
-use yozora_core_tokenizer::BlockTokenizeResult;
+use yozora_ast::{Node, Table, TableCell, TableRow};
+use yozora_character::{AsciiCodePoint, NodePoint};
+use yozora_core_tokenizer::{merge_and_strip_content_lines, BlockToken, ParseBlockPhaseApi};
 
-use crate::r#match::TableToken;
+use crate::r#match::TokenData;
 
-pub(crate) fn parse_table_token(token: TableToken) -> BlockTokenizeResult {
-    let columns = token
-        .alignments
-        .into_iter()
-        .map(|align| TableColumn { align })
-        .collect();
+pub(crate) fn parse_table_tokens(
+    tokens: &[BlockToken],
+    parse_api: &dyn ParseBlockPhaseApi,
+) -> Vec<Node> {
+    let mut nodes = Vec::with_capacity(tokens.len());
 
-    let rows = token.rows.into_iter().map(build_row_node).collect();
+    for token in tokens {
+        let Some(data) = token.data_as::<TokenData>() else {
+            continue;
+        };
 
-    BlockTokenizeResult {
-        node: Node::Table(Table {
-            position: None,
-            columns,
+        let rows = data
+            .rows
+            .iter()
+            .map(|row| {
+                let cells = row
+                    .cells
+                    .iter()
+                    .map(|cell| {
+                        let merged =
+                            merge_and_strip_content_lines(&cell.lines, 0, cell.lines.len());
+                        let contents = unescape_table_cell_contents(&merged);
+                        let children = parse_api.process_inlines(&contents);
+
+                        Node::TableCell(TableCell {
+                            position: if parse_api.should_reserve_position() {
+                                cell.position.clone()
+                            } else {
+                                None
+                            },
+                            children,
+                        })
+                    })
+                    .collect();
+
+                Node::TableRow(TableRow {
+                    position: if parse_api.should_reserve_position() {
+                        row.position.clone()
+                    } else {
+                        None
+                    },
+                    children: cells,
+                })
+            })
+            .collect();
+
+        nodes.push(Node::Table(Table {
+            position: if parse_api.should_reserve_position() {
+                token.position.clone()
+            } else {
+                None
+            },
+            columns: data.columns.clone(),
             children: rows,
-        }),
-        consumed_lines: token.consumed_lines,
+        }));
     }
+
+    nodes
 }
 
-fn build_row_node(cells: Vec<String>) -> Node {
-    let children = cells
-        .into_iter()
-        .map(|value| {
-            let value = value.replace("\\|", "|").replace("\\#", "#");
-            let cell_children = if value.is_empty() {
-                Vec::new()
-            } else {
-                vec![Node::Text(Text {
-                    position: None,
-                    value,
-                })]
-            };
+fn unescape_table_cell_contents(node_points: &[NodePoint]) -> Vec<NodePoint> {
+    let mut contents = Vec::new();
+    let mut i = 0usize;
+    while i < node_points.len() {
+        let point = node_points[i];
+        if point.code_point == AsciiCodePoint::BACKSLASH as i32 && i + 1 < node_points.len() {
+            let next = node_points[i + 1];
+            if next.code_point != AsciiCodePoint::VERTICAL_SLASH as i32 {
+                contents.push(point);
+            }
+            contents.push(next);
+            i += 2;
+            continue;
+        }
 
-            Node::TableCell(TableCell {
-                position: None,
-                children: cell_children,
-            })
-        })
-        .collect();
+        contents.push(point);
+        i += 1;
+    }
 
-    Node::TableRow(TableRow {
-        position: None,
-        children,
-    })
+    contents
 }

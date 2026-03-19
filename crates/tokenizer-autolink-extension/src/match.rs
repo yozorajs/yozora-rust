@@ -1,243 +1,479 @@
-use yozora_core_tokenizer::NodeInterval;
+use yozora_ast::LINK_TYPE;
+use yozora_character::{
+    is_alphanumeric, is_ascii_letter, is_punctuation_character, is_whitespace_character,
+    AsciiCodePoint, NodePoint,
+};
+use yozora_core_tokenizer::{DelimiterType, InlineToken, MatchInlinePhaseApi, TokenDelimiter};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum AutolinkExtensionToken {
-    Text(NodeInterval),
-    Link {
-        interval: NodeInterval,
-        display: String,
-        href: String,
-    },
+use crate::parse::{AutolinkExtensionContentType, AutolinkExtensionTokenData};
+
+#[derive(Debug, Clone)]
+pub(crate) struct DelimiterEntry {
+    pub delimiter: TokenDelimiter,
+    pub content_type: AutolinkExtensionContentType,
 }
 
-pub(crate) fn match_autolink_extension_tokens(input: &str) -> Option<Vec<AutolinkExtensionToken>> {
-    if !input.contains("www.")
-        && !input.contains("http://")
-        && !input.contains("https://")
-        && !input.contains('@')
-    {
-        return None;
-    }
-
-    let mut tokens = Vec::new();
-    let mut cursor = 0usize;
-    let mut matched = false;
-
-    while cursor < input.len() {
-        let Some(start) = find_candidate_start(input, cursor) else {
-            tokens.push(AutolinkExtensionToken::Text(NodeInterval {
-                start_index: cursor,
-                end_index: input.len(),
-            }));
-            break;
-        };
-
-        if start > cursor {
-            tokens.push(AutolinkExtensionToken::Text(NodeInterval {
-                start_index: cursor,
-                end_index: start,
-            }));
-        }
-
-        let end = find_candidate_end(input, start);
-        let raw_candidate = &input[start..end];
-        if let Some((display, href, suffix)) = parse_autolink_extension(raw_candidate) {
-            let candidate_end = end.saturating_sub(suffix.len());
-            tokens.push(AutolinkExtensionToken::Link {
-                interval: NodeInterval {
-                    start_index: start,
-                    end_index: candidate_end,
-                },
-                display,
-                href,
-            });
-            if !suffix.is_empty() {
-                tokens.push(AutolinkExtensionToken::Text(NodeInterval {
-                    start_index: candidate_end,
-                    end_index: end,
-                }));
-            }
-            cursor = end;
-            matched = true;
-        } else {
-            tokens.push(AutolinkExtensionToken::Text(NodeInterval {
-                start_index: start,
-                end_index: end,
-            }));
-            cursor = end;
-        }
-    }
-
-    if !matched {
-        return None;
-    }
-
-    Some(tokens)
+#[derive(Debug, Clone, Copy)]
+struct EatResult {
+    valid: bool,
+    next_index: usize,
 }
 
-fn find_candidate_start(input: &str, from: usize) -> Option<usize> {
-    let bytes = input.as_bytes();
-    let mut index = from;
-    while index < bytes.len() {
-        let boundary =
-            index == 0 || bytes[index - 1].is_ascii_whitespace() || bytes[index - 1] == b'(';
-        if boundary {
-            let rest = &input[index..];
-            if rest.starts_with("www.")
-                || rest.starts_with("http://")
-                || rest.starts_with("https://")
-                || looks_like_email_start(rest)
+#[derive(Debug, Clone, Copy)]
+struct DomainSegmentEatResult {
+    valid: bool,
+    next_index: usize,
+    has_underscore: bool,
+}
+
+pub(crate) fn find_delimiter_entry(
+    node_points: &[NodePoint],
+    block_start_index: usize,
+    start_index: usize,
+    end_index: usize,
+) -> Option<DelimiterEntry> {
+    let mut i = start_index;
+    while i < end_index {
+        // Extended autolink only starts at line beginning or after a delimiter boundary.
+        let mut j = i;
+        let mut flag = false;
+        while j < end_index {
+            let c = node_points[j].code_point;
+            if is_whitespace_character(c)
+                || c == AsciiCodePoint::ASTERISK as i32
+                || c == AsciiCodePoint::UNDERSCORE as i32
+                || c == AsciiCodePoint::TILDE as i32
+                || c == AsciiCodePoint::OPEN_PARENTHESIS as i32
             {
-                return Some(index);
+                flag = true;
+                j += 1;
+                continue;
+            }
+
+            if flag || j == block_start_index {
+                break;
+            }
+
+            flag = false;
+            j += 1;
+        }
+
+        if j >= end_index {
+            break;
+        }
+        i = j;
+
+        let mut next_index = end_index;
+        let mut content_type: Option<AutolinkExtensionContentType> = None;
+
+        let url_result = eat_extended_url(node_points, i, end_index);
+        next_index = next_index.min(url_result.next_index);
+        if url_result.valid {
+            content_type = Some(AutolinkExtensionContentType::Uri);
+            next_index = url_result.next_index;
+        } else {
+            let www_result = eat_www_domain(node_points, i, end_index);
+            next_index = next_index.min(www_result.next_index);
+            if www_result.valid {
+                content_type = Some(AutolinkExtensionContentType::UriWww);
+                next_index = www_result.next_index;
+            } else {
+                let email_result = eat_extend_email_address(node_points, i, end_index);
+                next_index = next_index.min(email_result.next_index);
+                if email_result.valid {
+                    content_type = Some(AutolinkExtensionContentType::Email);
+                    next_index = email_result.next_index;
+                }
             }
         }
-        index += 1;
-    }
-    None
-}
 
-fn looks_like_email_start(rest: &str) -> bool {
-    let mut seen_at = false;
-    for ch in rest.chars() {
-        if ch.is_ascii_whitespace() || ch == '<' {
-            break;
-        }
-        if ch == '@' {
-            seen_at = true;
-            break;
-        }
-        if !(ch.is_ascii_alphanumeric() || ch == '.' || ch == '+' || ch == '-' || ch == '_') {
-            break;
-        }
-    }
-    seen_at
-}
-
-fn find_candidate_end(input: &str, start: usize) -> usize {
-    let bytes = input.as_bytes();
-    let mut end = start;
-    while end < bytes.len() {
-        if bytes[end].is_ascii_whitespace() || bytes[end] == b'<' {
-            break;
-        }
-        end += 1;
-    }
-    end
-}
-
-fn parse_autolink_extension(raw: &str) -> Option<(String, String, String)> {
-    let mut cutoff = raw.len();
-
-    while cutoff > 0 {
-        let Some(last) = raw[..cutoff].chars().last() else {
-            break;
+        let Some(content_type) = content_type else {
+            i = std::cmp::max(i + 1, next_index);
+            continue;
         };
-        if !matches!(last, '?' | '!' | '.' | ',' | ':' | '*' | '_' | '~') {
-            break;
+
+        if next_index <= end_index {
+            return Some(DelimiterEntry {
+                delimiter: TokenDelimiter {
+                    delimiter_type: DelimiterType::Full,
+                    start_index: i,
+                    end_index: next_index,
+                    thickness: next_index.saturating_sub(i),
+                    original_thickness: next_index.saturating_sub(i),
+                },
+                content_type,
+            });
         }
-        cutoff -= last.len_utf8();
-    }
 
-    cutoff = trim_unbalanced_trailing_parenthesis(raw, cutoff);
-    cutoff = trim_entity_like_suffix(raw, cutoff);
-
-    if cutoff == 0 {
-        return None;
-    }
-
-    let candidate = &raw[..cutoff];
-    let suffix = raw[cutoff..].to_string();
-
-    if candidate.starts_with("http://") || candidate.starts_with("https://") {
-        return Some((candidate.to_string(), candidate.to_string(), suffix));
-    }
-
-    if let Some(domain_and_path) = candidate.strip_prefix("www.") {
-        let domain = domain_and_path.split('/').next().unwrap_or_default();
-        if is_valid_domain(domain) {
-            return Some((candidate.to_string(), format!("http://{candidate}"), suffix));
-        }
-        return None;
-    }
-
-    if is_valid_email(candidate) {
-        if suffix.starts_with('_') {
-            return None;
-        }
-        return Some((candidate.to_string(), format!("mailto:{candidate}"), suffix));
+        i = std::cmp::max(i + 1, next_index);
     }
 
     None
 }
 
-fn trim_unbalanced_trailing_parenthesis(value: &str, mut cutoff: usize) -> usize {
-    loop {
-        if cutoff == 0 || !value[..cutoff].ends_with(')') {
-            break;
-        }
-        let slice = &value[..cutoff];
-        let opens = slice.chars().filter(|ch| *ch == '(').count();
-        let closes = slice.chars().filter(|ch| *ch == ')').count();
-        if closes <= opens {
-            break;
-        }
-        cutoff -= ')'.len_utf8();
-    }
-
-    cutoff
+pub(crate) fn process_single_delimiter(
+    api: &dyn MatchInlinePhaseApi,
+    delimiter: &TokenDelimiter,
+    content_type: AutolinkExtensionContentType,
+) -> Vec<InlineToken> {
+    vec![
+        InlineToken::new("", LINK_TYPE, (delimiter.start_index, delimiter.end_index)).with_data(
+            AutolinkExtensionTokenData {
+                content_type,
+                children_tokens: api.resolve_fallback_tokens(
+                    &[],
+                    delimiter.start_index,
+                    delimiter.end_index,
+                ),
+            },
+        ),
+    ]
 }
 
-fn trim_entity_like_suffix(value: &str, cutoff: usize) -> usize {
-    let slice = &value[..cutoff];
-    if !slice.ends_with(';') {
-        return cutoff;
-    }
+fn eat_extended_url(node_points: &[NodePoint], start_index: usize, end_index: usize) -> EatResult {
+    let schema = eat_autolink_schema(node_points, start_index, end_index);
+    let next_index = schema.next_index;
 
-    let Some(amp_index) = slice.rfind('&') else {
-        return cutoff;
-    };
-    if amp_index + 1 >= slice.len() {
-        return cutoff;
-    }
-
-    let entity_body = &slice[amp_index + 1..slice.len() - 1];
-    if !entity_body.is_empty() && entity_body.chars().all(|ch| ch.is_ascii_alphanumeric()) {
-        return amp_index;
-    }
-
-    cutoff
-}
-
-fn is_valid_domain(domain: &str) -> bool {
-    if domain.is_empty() || !domain.contains('.') {
-        return false;
-    }
-
-    domain.split('.').all(|label| {
-        if label.is_empty() {
-            return false;
-        }
-        if label.starts_with('-') || label.ends_with('-') || label.ends_with('_') {
-            return false;
-        }
-        label
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
-    })
-}
-
-fn is_valid_email(email: &str) -> bool {
-    let Some((local, domain)) = email.split_once('@') else {
-        return false;
-    };
-    if local.is_empty() || domain.is_empty() {
-        return false;
-    }
-    if !local
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || ch == '.' || ch == '+' || ch == '-' || ch == '_')
+    if !schema.valid
+        || next_index + 3 >= end_index
+        || node_points[next_index].code_point != AsciiCodePoint::COLON as i32
+        || node_points[next_index + 1].code_point != AsciiCodePoint::SLASH as i32
+        || node_points[next_index + 2].code_point != AsciiCodePoint::SLASH as i32
     {
-        return false;
+        return EatResult {
+            valid: false,
+            next_index: next_index + 1,
+        };
     }
-    is_valid_domain(domain)
+
+    let mut result = eat_valid_domain(node_points, next_index + 3, end_index);
+    result.next_index = eat_optional_domain_follows(node_points, result.next_index, end_index);
+    result
+}
+
+fn eat_www_domain(node_points: &[NodePoint], start_index: usize, end_index: usize) -> EatResult {
+    let segment = eat_domain_segment(node_points, start_index, end_index);
+    let next_index = segment.next_index;
+
+    if !segment.valid
+        || next_index >= end_index
+        || node_points[next_index].code_point != AsciiCodePoint::DOT as i32
+        || next_index.saturating_sub(start_index) != 3
+    {
+        return EatResult {
+            valid: false,
+            next_index,
+        };
+    }
+
+    for point in &node_points[start_index..next_index] {
+        let c = point.code_point;
+        if c != AsciiCodePoint::LOWERCASE_W as i32 && c != AsciiCodePoint::UPPERCASE_W as i32 {
+            return EatResult {
+                valid: false,
+                next_index,
+            };
+        }
+    }
+
+    let mut result = eat_valid_domain(node_points, next_index + 1, end_index);
+    result.next_index = eat_optional_domain_follows(node_points, result.next_index, end_index);
+    result
+}
+
+fn eat_optional_domain_follows(
+    node_points: &[NodePoint],
+    start_index: usize,
+    end_index: usize,
+) -> usize {
+    let mut next_index = start_index;
+    while next_index < end_index {
+        let c = node_points[next_index].code_point;
+        if is_whitespace_character(c) || c == AsciiCodePoint::OPEN_ANGLE as i32 {
+            break;
+        }
+        next_index += 1;
+    }
+
+    let mut i = next_index as isize - 1;
+    let start = start_index as isize;
+    while i >= start {
+        let c = node_points[i as usize].code_point;
+        if is_punctuation_character(c)
+            || c == AsciiCodePoint::QUESTION_MARK as i32
+            || c == AsciiCodePoint::EXCLAMATION_MARK as i32
+            || c == AsciiCodePoint::DOT as i32
+            || c == AsciiCodePoint::COMMA as i32
+            || c == AsciiCodePoint::COLON as i32
+            || c == AsciiCodePoint::ASTERISK as i32
+            || c == AsciiCodePoint::UNDERSCORE as i32
+            || c == AsciiCodePoint::TILDE as i32
+        {
+            i -= 1;
+            continue;
+        }
+        break;
+    }
+
+    if i >= start
+        && (i as usize) + 1 < end_index
+        && node_points[(i as usize) + 1].code_point == AsciiCodePoint::CLOSE_PARENTHESIS as i32
+    {
+        let mut count_of_open_parenthesis: isize = 0;
+        for point in &node_points[start_index..(i as usize)] {
+            let c = point.code_point;
+            if c == AsciiCodePoint::OPEN_PARENTHESIS as i32 {
+                count_of_open_parenthesis += 1;
+            } else if c == AsciiCodePoint::CLOSE_PARENTHESIS as i32 {
+                count_of_open_parenthesis -= 1;
+            }
+        }
+
+        if count_of_open_parenthesis > 0 {
+            let mut j = i as usize + 2;
+            count_of_open_parenthesis -= 1;
+            while j < end_index && count_of_open_parenthesis > 0 {
+                if node_points[j].code_point != AsciiCodePoint::CLOSE_PARENTHESIS as i32 {
+                    break;
+                }
+                count_of_open_parenthesis -= 1;
+                j += 1;
+            }
+            i = j as isize - 1;
+        }
+    }
+
+    if i + 1 >= 0
+        && (i as usize) + 1 < end_index
+        && node_points[(i as usize) + 1].code_point == AsciiCodePoint::SEMICOLON as i32
+    {
+        let mut j = i;
+        while j >= start {
+            let c = node_points[j as usize].code_point;
+            if !is_alphanumeric(c) {
+                break;
+            }
+            j -= 1;
+        }
+
+        if j >= start && node_points[j as usize].code_point == AsciiCodePoint::AMPERSAND as i32 {
+            i = j - 1;
+        }
+    }
+
+    (i + 1).max(0) as usize
+}
+
+fn eat_valid_domain(node_points: &[NodePoint], start_index: usize, end_index: usize) -> EatResult {
+    let segment = eat_domain_segment(node_points, start_index, end_index);
+    if !segment.valid || segment.next_index >= end_index {
+        return EatResult {
+            valid: false,
+            next_index: segment.next_index,
+        };
+    }
+
+    let mut next_index = segment.next_index;
+    let mut count_of_period = 0usize;
+    let mut count_of_underscore_of_last_two_segment = if segment.has_underscore {
+        2usize
+    } else {
+        0usize
+    };
+
+    while next_index < end_index {
+        if node_points[next_index].code_point != AsciiCodePoint::DOT as i32 {
+            break;
+        }
+
+        let segment = eat_domain_segment(node_points, next_index + 1, end_index);
+        if !segment.valid {
+            break;
+        }
+
+        next_index = segment.next_index;
+        count_of_period += 1;
+        count_of_underscore_of_last_two_segment >>= 1;
+        if segment.has_underscore {
+            count_of_underscore_of_last_two_segment |= 2;
+        }
+    }
+
+    if count_of_period == 0 && count_of_underscore_of_last_two_segment == 0 {
+        return EatResult {
+            valid: false,
+            next_index,
+        };
+    }
+
+    EatResult {
+        valid: true,
+        next_index,
+    }
+}
+
+fn eat_domain_segment(
+    node_points: &[NodePoint],
+    start_index: usize,
+    end_index: usize,
+) -> DomainSegmentEatResult {
+    let mut i = start_index;
+    let mut has_underscore = false;
+    while i < end_index {
+        let c = node_points[i].code_point;
+        if c == AsciiCodePoint::UNDERSCORE as i32 {
+            has_underscore = true;
+            i += 1;
+            continue;
+        }
+
+        if !is_alphanumeric(c) && c != AsciiCodePoint::MINUS_SIGN as i32 {
+            break;
+        }
+
+        i += 1;
+    }
+
+    if i > start_index {
+        DomainSegmentEatResult {
+            valid: true,
+            next_index: i,
+            has_underscore,
+        }
+    } else {
+        DomainSegmentEatResult {
+            valid: false,
+            next_index: i,
+            has_underscore,
+        }
+    }
+}
+
+fn eat_extend_email_address(
+    node_points: &[NodePoint],
+    start_index: usize,
+    end_index: usize,
+) -> EatResult {
+    let mut i = start_index;
+    if i >= end_index || !is_alphanumeric(node_points[i].code_point) {
+        return EatResult {
+            valid: false,
+            next_index: i + 1,
+        };
+    }
+
+    i += 1;
+    while i < end_index {
+        let c = node_points[i].code_point;
+        if is_alphanumeric(c)
+            || c == AsciiCodePoint::DOT as i32
+            || c == AsciiCodePoint::MINUS_SIGN as i32
+            || c == AsciiCodePoint::UNDERSCORE as i32
+            || c == AsciiCodePoint::PLUS_SIGN as i32
+        {
+            i += 1;
+            continue;
+        }
+        break;
+    }
+
+    if i == start_index
+        || i + 2 >= end_index
+        || node_points[i].code_point != AsciiCodePoint::AT_SIGN as i32
+        || !is_alphanumeric(node_points[i + 1].code_point)
+    {
+        return EatResult {
+            valid: false,
+            next_index: i + 1,
+        };
+    }
+
+    let mut count_of_period = 0usize;
+    i += 2;
+    while i < end_index {
+        let c = node_points[i].code_point;
+        if c == AsciiCodePoint::DOT as i32 {
+            count_of_period += 1;
+            i += 1;
+            continue;
+        }
+
+        if is_alphanumeric(c)
+            || c == AsciiCodePoint::MINUS_SIGN as i32
+            || c == AsciiCodePoint::UNDERSCORE as i32
+        {
+            i += 1;
+            continue;
+        }
+
+        break;
+    }
+
+    let last_character = node_points[i - 1].code_point;
+    if last_character == AsciiCodePoint::MINUS_SIGN as i32
+        || last_character == AsciiCodePoint::UNDERSCORE as i32
+    {
+        return EatResult {
+            valid: false,
+            next_index: i,
+        };
+    }
+
+    if last_character == AsciiCodePoint::DOT as i32 {
+        i -= 1;
+        count_of_period = count_of_period.saturating_sub(1);
+    }
+
+    if count_of_period == 0 {
+        return EatResult {
+            valid: false,
+            next_index: i,
+        };
+    }
+
+    EatResult {
+        valid: true,
+        next_index: i,
+    }
+}
+
+fn eat_autolink_schema(
+    node_points: &[NodePoint],
+    start_index: usize,
+    end_index: usize,
+) -> EatResult {
+    let mut i = start_index;
+    if i >= end_index || !is_ascii_letter(node_points[i].code_point) {
+        return EatResult {
+            valid: false,
+            next_index: i + 1,
+        };
+    }
+
+    i += 1;
+    while i < end_index {
+        let d = node_points[i].code_point;
+        if is_alphanumeric(d)
+            || d == AsciiCodePoint::PLUS_SIGN as i32
+            || d == AsciiCodePoint::DOT as i32
+            || d == AsciiCodePoint::MINUS_SIGN as i32
+        {
+            i += 1;
+            continue;
+        }
+        break;
+    }
+
+    let count = i.saturating_sub(start_index);
+    if !(2..=32).contains(&count) {
+        return EatResult {
+            valid: false,
+            next_index: i + 1,
+        };
+    }
+
+    EatResult {
+        valid: true,
+        next_index: i,
+    }
 }

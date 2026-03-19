@@ -1,15 +1,8 @@
-use yozora_ast::{BreakNode, Node, BREAK_TYPE};
-use yozora_character::{AsciiCodePoint, VirtualCodePoint};
-use yozora_core_tokenizer::engine::{
-    DelimiterType, EngineInlineTokenizer, EngineTokenizer, InlineToken, MatchInlineHook,
-    MatchInlinePhaseApi as EngineMatchInlinePhaseApi, ParseInlineHook,
-    ParseInlinePhaseApi as EngineParseInlinePhaseApi, TokenDelimiter, TokenizerType,
-};
-use yozora_core_tokenizer::phase::NodeInterval;
-use yozora_core_tokenizer::{
-    InlineTokenizer, MatchInlinePhaseApi, ParseInlinePhaseApi, Tokenizer, TokenizerKind,
-    TokenizerMeta,
-};
+use yozora_ast::{Node, BREAK_TYPE};
+use yozora_core_tokenizer::*;
+
+#[cfg(test)]
+use yozora_core_tokenizer::NodeInterval;
 
 use crate::{parse, r#match};
 
@@ -32,46 +25,10 @@ impl Default for BreakTokenizer {
     }
 }
 
+
+
 impl Tokenizer for BreakTokenizer {
-    fn meta(&self) -> &TokenizerMeta {
-        &self.meta
-    }
-}
-
-impl InlineTokenizer for BreakTokenizer {
-    fn tokenize_inline(
-        &self,
-        input: &str,
-        _position: Option<yozora_ast::Position>,
-    ) -> Option<Vec<Node>> {
-        let tokens = r#match::match_break_tokens(input)?;
-        Some(parse::parse_break_tokens(input, &tokens, None))
-    }
-
-    fn tokenize_inline_with_api(
-        &self,
-        input: &str,
-        _position: Option<yozora_ast::Position>,
-        _api: &dyn MatchInlinePhaseApi,
-    ) -> Option<Vec<Node>> {
-        let tokens = r#match::match_break_tokens(input)?;
-        Some(parse::parse_break_tokens(input, &tokens, None))
-    }
-
-    fn tokenize_inline_with_apis(
-        &self,
-        input: &str,
-        _position: Option<yozora_ast::Position>,
-        _match_api: &dyn MatchInlinePhaseApi,
-        parse_api: &dyn ParseInlinePhaseApi,
-    ) -> Option<Vec<Node>> {
-        let tokens = r#match::match_break_tokens(input)?;
-        Some(parse::parse_break_tokens(input, &tokens, Some(parse_api)))
-    }
-}
-
-impl EngineTokenizer for BreakTokenizer {
-    fn tokenizer_type(&self) -> TokenizerType {
+    fn r#type(&self) -> TokenizerType {
         TokenizerType::Inline
     }
 
@@ -85,69 +42,9 @@ impl EngineTokenizer for BreakTokenizer {
 }
 
 struct BreakMatchHook<'a> {
-    api: &'a dyn EngineMatchInlinePhaseApi,
+    api: &'a dyn MatchInlinePhaseApi,
     last_end_index: Option<usize>,
     last_delimiter: Option<TokenDelimiter>,
-}
-
-impl BreakMatchHook<'_> {
-    fn find_delimiter_impl(&self, start_index: usize, end_index: usize) -> Option<TokenDelimiter> {
-        let node_points = self.api.get_node_points();
-        if start_index + 1 >= end_index || end_index > node_points.len() {
-            return None;
-        }
-
-        for i in (start_index + 1)..end_index {
-            if node_points[i].code_point != VirtualCodePoint::LineEnd as i32 {
-                continue;
-            }
-
-            let prev = node_points[i - 1].code_point;
-            let marker_start = if prev == AsciiCodePoint::BACKSLASH as i32 {
-                let mut x = i.saturating_sub(2) as isize;
-                while x >= start_index as isize
-                    && node_points[x as usize].code_point == AsciiCodePoint::BACKSLASH as i32
-                {
-                    x -= 1;
-                }
-
-                if ((i as isize - x) & 1) == 0 {
-                    Some(i - 1)
-                } else {
-                    None
-                }
-            } else if prev == AsciiCodePoint::SPACE as i32 {
-                let mut x = i.saturating_sub(2) as isize;
-                while x >= start_index as isize
-                    && node_points[x as usize].code_point == AsciiCodePoint::SPACE as i32
-                {
-                    x -= 1;
-                }
-
-                if i as isize - x > 2 {
-                    Some((x + 1) as usize)
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-
-            let Some(marker_start) = marker_start else {
-                continue;
-            };
-
-            return Some(TokenDelimiter {
-                delimiter_type: DelimiterType::Full,
-                start_index: marker_start,
-                end_index: i,
-                thickness: i.saturating_sub(marker_start),
-                original_thickness: i.saturating_sub(marker_start),
-            });
-        }
-
-        None
-    }
 }
 
 impl MatchInlineHook for BreakMatchHook<'_> {
@@ -156,23 +53,23 @@ impl MatchInlineHook for BreakMatchHook<'_> {
         self.last_delimiter = None;
     }
 
-    fn find_delimiter(&mut self, start_index: usize, end_index: usize) -> Option<TokenDelimiter> {
-        if self.last_end_index == Some(end_index) {
-            match &self.last_delimiter {
-                Some(delimiter) if delimiter.start_index >= start_index => {
-                    return Some(delimiter.clone());
-                }
-                None => return None,
-                _ => {}
-            }
-        }
-
-        self.last_end_index = Some(end_index);
-        self.last_delimiter = self.find_delimiter_impl(start_index, end_index);
-        self.last_delimiter.clone()
+    fn findDelimiter(&mut self, range_index: (usize, usize)) -> Option<TokenDelimiter> {
+        let mut last_end_index = self.last_end_index;
+        let mut last_delimiter = self.last_delimiter.clone();
+        let delimiter = genFindDelimiter(
+            range_index,
+            &mut last_end_index,
+            &mut last_delimiter,
+            |start_index, end_index| {
+                r#match::find_break_delimiter(self.api, start_index, end_index)
+            },
+        );
+        self.last_end_index = last_end_index;
+        self.last_delimiter = last_delimiter;
+        delimiter
     }
 
-    fn process_single_delimiter(&self, delimiter: &TokenDelimiter) -> Vec<InlineToken> {
+    fn processSingleDelimiter(&self, delimiter: &TokenDelimiter) -> Vec<InlineToken> {
         vec![InlineToken::new(
             "",
             BREAK_TYPE,
@@ -182,32 +79,19 @@ impl MatchInlineHook for BreakMatchHook<'_> {
 }
 
 struct BreakParseHook<'a> {
-    api: &'a dyn EngineParseInlinePhaseApi,
+    api: &'a dyn ParseInlinePhaseApi,
 }
 
 impl ParseInlineHook for BreakParseHook<'_> {
     fn parse(&self, tokens: &[InlineToken]) -> Vec<Node> {
-        let mut nodes = Vec::with_capacity(tokens.len());
-        for token in tokens {
-            let position = if self.api.should_reserve_position() {
-                self.api.calc_position(NodeInterval {
-                    start_index: token.start_index,
-                    end_index: token.end_index,
-                })
-            } else {
-                None
-            };
-
-            nodes.push(Node::Break(BreakNode { position }));
-        }
-        nodes
+        parse::parse_break_tokens(tokens, self.api)
     }
 }
 
-impl EngineInlineTokenizer for BreakTokenizer {
-    fn create_match_hook<'a>(
+impl InlineTokenizer for BreakTokenizer {
+    fn r#match<'a>(
         &'a self,
-        api: &'a dyn EngineMatchInlinePhaseApi,
+        api: &'a dyn MatchInlinePhaseApi,
     ) -> Box<dyn MatchInlineHook + 'a> {
         Box::new(BreakMatchHook {
             api,
@@ -216,9 +100,9 @@ impl EngineInlineTokenizer for BreakTokenizer {
         })
     }
 
-    fn create_parse_hook<'a>(
+    fn parse<'a>(
         &'a self,
-        api: &'a dyn EngineParseInlinePhaseApi,
+        api: &'a dyn ParseInlinePhaseApi,
     ) -> Box<dyn ParseInlineHook + 'a> {
         Box::new(BreakParseHook { api })
     }
@@ -229,35 +113,36 @@ mod tests {
     use super::*;
     use yozora_character::{create_node_point_generator, NodePoint};
 
-    struct DummyInlineApi;
-
-    impl MatchInlinePhaseApi for DummyInlineApi {
-        fn has_definition(&self, _identifier: &str) -> bool {
-            false
-        }
-
-        fn has_footnote_definition(&self, _identifier: &str) -> bool {
-            false
-        }
-    }
-
     #[test]
     fn phase_api_should_preserve_break_result() {
         let tokenizer = BreakTokenizer::default();
-        let api = DummyInlineApi;
+        let node_points = create_node_point_generator("line  \nnext")
+            .pop()
+            .expect("expected node points");
+        let match_api = DummyEngineMatchApi { node_points };
 
-        let nodes = tokenizer
-            .tokenize_inline_with_api("line  \nnext", None, &api)
-            .expect("should parse hard break");
+        let mut match_hook = tokenizer.r#match(&match_api);
+        let delimiter = match_hook
+            .findDelimiter((0, match_api.get_block_end_index()))
+            .expect("expected break delimiter");
 
-        assert!(matches!(nodes.get(1), Some(Node::Break(_))));
+        let parse_api = DummyEngineParseApi;
+        let parse_hook = tokenizer.parse(&parse_api);
+        let tokens = vec![InlineToken::new(
+            BREAK_TOKENIZER_NAME,
+            BREAK_TYPE,
+            (delimiter.start_index, delimiter.end_index),
+        )];
+        let nodes = parse_hook.parse(&tokens);
+
+        assert!(matches!(nodes.first(), Some(Node::Break(_))));
     }
 
     struct DummyEngineMatchApi {
         node_points: Vec<NodePoint>,
     }
 
-    impl EngineMatchInlinePhaseApi for DummyEngineMatchApi {
+    impl MatchInlinePhaseApi for DummyEngineMatchApi {
         fn has_definition(&self, _identifier: &str) -> bool {
             false
         }
@@ -299,7 +184,7 @@ mod tests {
 
     struct DummyEngineParseApi;
 
-    impl EngineParseInlinePhaseApi for DummyEngineParseApi {
+    impl ParseInlinePhaseApi for DummyEngineParseApi {
         fn should_reserve_position(&self) -> bool {
             false
         }
@@ -337,9 +222,9 @@ mod tests {
             .expect("expected node points");
         let api = DummyEngineMatchApi { node_points };
 
-        let mut hook = tokenizer.create_match_hook(&api);
+        let mut hook = tokenizer.r#match(&api);
         let delimiter = hook
-            .find_delimiter(0, api.get_block_end_index())
+            .findDelimiter((0, api.get_block_end_index()))
             .expect("expected break delimiter");
 
         assert_eq!(delimiter.delimiter_type, DelimiterType::Full);
@@ -351,7 +236,7 @@ mod tests {
     fn engine_parse_should_create_break_node() {
         let tokenizer = BreakTokenizer::default();
         let api = DummyEngineParseApi;
-        let parse_hook = tokenizer.create_parse_hook(&api);
+        let parse_hook = tokenizer.parse(&api);
 
         let token = InlineToken::new(BREAK_TOKENIZER_NAME, BREAK_TYPE, (3, 5));
         let nodes = parse_hook.parse(&[token]);

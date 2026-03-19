@@ -1,73 +1,78 @@
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct HeadingToken {
+use yozora_ast::HEADING_TYPE;
+use yozora_character::{is_space_character, AsciiCodePoint};
+use yozora_core_tokenizer::{
+    calc_end_point, calc_start_point, BlockToken, EatAndInterruptPreviousSiblingResult,
+    EatOpenerResult, PhrasingContentLine, RemainingSibling,
+};
+
+#[derive(Debug, Clone)]
+pub(crate) struct HeadingTokenData {
     pub depth: u8,
-    pub content: String,
+    pub line: PhrasingContentLine,
 }
 
-pub(crate) fn match_heading_token(input: &str) -> Option<HeadingToken> {
-    if input.contains('\n') {
+pub(crate) fn eat_opener(line: &PhrasingContentLine) -> Option<EatOpenerResult> {
+    if line.count_of_precede_spaces >= 4 {
         return None;
     }
 
-    let leading_spaces = input.chars().take_while(|ch| *ch == ' ').count();
-    if leading_spaces >= 4 {
+    let first_non_whitespace_index = line.first_non_whitespace_index;
+    if first_non_whitespace_index >= line.end_index
+        || line.node_points[first_non_whitespace_index].code_point
+            != AsciiCodePoint::NUMBER_SIGN as i32
+    {
         return None;
     }
 
-    let line = &input[leading_spaces..];
-    if !line.starts_with('#') {
-        return None;
+    let mut i = first_non_whitespace_index + 1;
+    while i < line.end_index && line.node_points[i].code_point == AsciiCodePoint::NUMBER_SIGN as i32
+    {
+        i += 1;
     }
 
-    let mut depth = 0usize;
-    for ch in line.chars() {
-        if ch == '#' {
-            depth += 1;
-        } else {
-            break;
-        }
-    }
-
+    let depth = i.saturating_sub(first_non_whitespace_index);
     if depth == 0 || depth > 6 {
         return None;
     }
 
-    let after_opening = &line[depth..];
-    if let Some(ch) = after_opening.chars().next() {
-        if ch != ' ' && ch != '\t' {
-            return None;
-        }
+    if i + 1 < line.end_index && !is_space_character(line.node_points[i].code_point) {
+        return None;
     }
 
-    let content = strip_closing_sequence(after_opening).trim().to_string();
+    let token =
+        BlockToken::new("", HEADING_TYPE, calc_line_position(line)).with_data(HeadingTokenData {
+            depth: depth as u8,
+            line: line.clone(),
+        });
 
-    Some(HeadingToken {
-        depth: depth as u8,
-        content,
+    Some(EatOpenerResult {
+        token,
+        next_index: line.end_index,
+        saturated: true,
     })
 }
 
-fn strip_closing_sequence(after_opening: &str) -> &str {
-    let trimmed_end = after_opening.trim_end_matches([' ', '\t']);
-    let bytes = trimmed_end.as_bytes();
+pub(crate) fn eat_and_interrupt_previous_sibling(
+    line: &PhrasingContentLine,
+    prev_sibling_token: &BlockToken,
+) -> Option<EatAndInterruptPreviousSiblingResult> {
+    let opener = eat_opener(line)?;
+    Some(EatAndInterruptPreviousSiblingResult {
+        token: opener.token,
+        next_index: opener.next_index,
+        saturated: opener.saturated,
+        remaining_sibling: RemainingSibling::One(prev_sibling_token.clone()),
+    })
+}
 
-    let mut hash_start = bytes.len();
-    while hash_start > 0 && bytes[hash_start - 1] == b'#' {
-        hash_start -= 1;
+fn calc_line_position(line: &PhrasingContentLine) -> Option<yozora_ast::Position> {
+    if line.start_index >= line.end_index {
+        return None;
     }
 
-    if hash_start == bytes.len() {
-        return trimmed_end;
-    }
-
-    if hash_start == 0 || (bytes[hash_start - 1] != b' ' && bytes[hash_start - 1] != b'\t') {
-        return trimmed_end;
-    }
-
-    let mut content_end = hash_start;
-    while content_end > 0 && (bytes[content_end - 1] == b' ' || bytes[content_end - 1] == b'\t') {
-        content_end -= 1;
-    }
-
-    &trimmed_end[..content_end]
+    Some(yozora_ast::Position {
+        start: calc_start_point(line.node_points.as_ref(), line.start_index),
+        end: calc_end_point(line.node_points.as_ref(), line.end_index - 1),
+        indent: None,
+    })
 }

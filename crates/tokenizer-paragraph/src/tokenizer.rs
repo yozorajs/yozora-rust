@@ -12,15 +12,22 @@ pub struct ParagraphTokenizer {
 
 impl Default for ParagraphTokenizer {
     fn default() -> Self {
+        Self::new(TokenizerOptions::default())
+    }
+}
+
+impl ParagraphTokenizer {
+    pub fn new(options: TokenizerOptions) -> Self {
         Self {
             meta: TokenizerMeta {
-                name: PARAGRAPH_TOKENIZER_NAME.to_string(),
+                name: options.name.unwrap_or_else(|| PARAGRAPH_TOKENIZER_NAME.to_string()),
                 kind: TokenizerKind::Block,
-                priority: TokenizerPriority::FALLBACK,
+                priority: options.priority.unwrap_or(TokenizerPriority::FALLBACK),
             },
         }
     }
 }
+
 
 impl Tokenizer for ParagraphTokenizer {
     fn r#type(&self) -> TokenizerType {

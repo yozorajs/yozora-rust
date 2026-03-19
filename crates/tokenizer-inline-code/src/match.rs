@@ -37,10 +37,6 @@ impl InlineCodeDelimiterFinder {
         }
     }
 
-    pub(crate) fn reset(&mut self) {
-        self.cursor = 0;
-    }
-
     pub(crate) fn find_next_delimiter(&mut self, start_index: usize) -> Option<TokenDelimiter> {
         let len = self.potential_delimiters.len();
         while self.cursor < len {

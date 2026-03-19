@@ -12,15 +12,22 @@ pub struct HeadingTokenizer {
 
 impl Default for HeadingTokenizer {
     fn default() -> Self {
+        Self::new(TokenizerOptions::default())
+    }
+}
+
+impl HeadingTokenizer {
+    pub fn new(options: TokenizerOptions) -> Self {
         Self {
             meta: TokenizerMeta {
-                name: HEADING_TOKENIZER_NAME.to_string(),
+                name: options.name.unwrap_or_else(|| HEADING_TOKENIZER_NAME.to_string()),
                 kind: TokenizerKind::Block,
-                priority: TokenizerPriority::ATOMIC,
+                priority: options.priority.unwrap_or(TokenizerPriority::ATOMIC),
             },
         }
     }
 }
+
 
 impl Tokenizer for HeadingTokenizer {
     fn r#type(&self) -> TokenizerType {

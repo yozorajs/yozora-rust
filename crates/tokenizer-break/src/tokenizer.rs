@@ -15,15 +15,22 @@ pub struct BreakTokenizer {
 
 impl Default for BreakTokenizer {
     fn default() -> Self {
+        Self::new(TokenizerOptions::default())
+    }
+}
+
+impl BreakTokenizer {
+    pub fn new(options: TokenizerOptions) -> Self {
         Self {
             meta: TokenizerMeta {
-                name: BREAK_TOKENIZER_NAME.to_string(),
+                name: options.name.unwrap_or_else(|| BREAK_TOKENIZER_NAME.to_string()),
                 kind: TokenizerKind::Inline,
-                priority: TokenizerPriority::SOFT_INLINE,
+                priority: options.priority.unwrap_or(TokenizerPriority::SOFT_INLINE),
             },
         }
     }
 }
+
 
 
 
@@ -43,30 +50,17 @@ impl Tokenizer for BreakTokenizer {
 
 struct BreakMatchHook<'a> {
     api: &'a dyn MatchInlinePhaseApi,
-    last_end_index: Option<usize>,
-    last_delimiter: Option<TokenDelimiter>,
 }
 
-impl MatchInlineHook for BreakMatchHook<'_> {
-    fn reset(&mut self) {
-        self.last_end_index = None;
-        self.last_delimiter = None;
-    }
+impl<'a> MatchInlineHook<'a> for BreakMatchHook<'a> {
+    fn findDelimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
+        let api = self.api;
 
-    fn findDelimiter(&mut self, range_index: (usize, usize)) -> Option<TokenDelimiter> {
-        let mut last_end_index = self.last_end_index;
-        let mut last_delimiter = self.last_delimiter.clone();
-        let delimiter = genFindDelimiter(
-            range_index,
-            &mut last_end_index,
-            &mut last_delimiter,
+        Box::new(genFindDelimiter(
             |start_index, end_index| {
-                r#match::find_break_delimiter(self.api, start_index, end_index)
+                r#match::find_break_delimiter(api, start_index, end_index)
             },
-        );
-        self.last_end_index = last_end_index;
-        self.last_delimiter = last_delimiter;
-        delimiter
+        ))
     }
 
     fn processSingleDelimiter(&self, delimiter: &TokenDelimiter) -> Vec<InlineToken> {
@@ -92,12 +86,8 @@ impl InlineTokenizer for BreakTokenizer {
     fn r#match<'a>(
         &'a self,
         api: &'a dyn MatchInlinePhaseApi,
-    ) -> Box<dyn MatchInlineHook + 'a> {
-        Box::new(BreakMatchHook {
-            api,
-            last_end_index: None,
-            last_delimiter: None,
-        })
+    ) -> Box<dyn MatchInlineHook<'a> + 'a> {
+        Box::new(BreakMatchHook { api })
     }
 
     fn parse<'a>(
@@ -121,9 +111,10 @@ mod tests {
             .expect("expected node points");
         let match_api = DummyEngineMatchApi { node_points };
 
-        let mut match_hook = tokenizer.r#match(&match_api);
-        let delimiter = match_hook
-            .findDelimiter((0, match_api.getBlockEndIndex()))
+        let match_hook = tokenizer.r#match(&match_api);
+        let mut find_delimiter = match_hook.findDelimiter();
+        let delimiter = find_delimiter
+            .next((0, match_api.getBlockEndIndex()))
             .expect("expected break delimiter");
 
         let parse_api = DummyEngineParseApi;
@@ -222,9 +213,10 @@ mod tests {
             .expect("expected node points");
         let api = DummyEngineMatchApi { node_points };
 
-        let mut hook = tokenizer.r#match(&api);
-        let delimiter = hook
-            .findDelimiter((0, api.getBlockEndIndex()))
+        let hook = tokenizer.r#match(&api);
+        let mut find_delimiter = hook.findDelimiter();
+        let delimiter = find_delimiter
+            .next((0, api.getBlockEndIndex()))
             .expect("expected break delimiter");
 
         assert_eq!(delimiter.delimiter_type, DelimiterType::Full);

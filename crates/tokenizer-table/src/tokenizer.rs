@@ -12,15 +12,22 @@ pub struct TableTokenizer {
 
 impl Default for TableTokenizer {
     fn default() -> Self {
+        Self::new(TokenizerOptions::default())
+    }
+}
+
+impl TableTokenizer {
+    pub fn new(options: TokenizerOptions) -> Self {
         Self {
             meta: TokenizerMeta {
-                name: TABLE_TOKENIZER_NAME.to_string(),
+                name: options.name.unwrap_or_else(|| TABLE_TOKENIZER_NAME.to_string()),
                 kind: TokenizerKind::Block,
-                priority: TokenizerPriority::INTERRUPTABLE_BLOCK,
+                priority: options.priority.unwrap_or(TokenizerPriority::INTERRUPTABLE_BLOCK),
             },
         }
     }
 }
+
 
 impl Tokenizer for TableTokenizer {
     fn r#type(&self) -> TokenizerType {

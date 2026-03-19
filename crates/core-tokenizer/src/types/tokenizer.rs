@@ -52,7 +52,7 @@ pub trait InlineTokenizer: Tokenizer {
     fn r#match<'a>(
         &'a self,
         api: &'a dyn MatchInlinePhaseApi,
-    ) -> Box<dyn MatchInlineHook + 'a>;
+    ) -> Box<dyn MatchInlineHook<'a> + 'a>;
 
     fn parse<'a>(
         &'a self,

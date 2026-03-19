@@ -3,8 +3,7 @@ use yozora_character::{
     calc_escaped_string_from_node_points, calc_string_from_node_points, is_whitespace_character,
 };
 use yozora_core_tokenizer::{merge_content_lines_faithfully, BlockToken, ParseBlockPhaseApi};
-
-use crate::r#match::FencedCodeTokenData;
+use yozora_tokenizer_fenced_block::FencedBlockTokenData;
 
 pub(crate) fn parse_fenced_code_tokens(
     tokens: &[BlockToken],
@@ -13,7 +12,7 @@ pub(crate) fn parse_fenced_code_tokens(
     let mut nodes = Vec::with_capacity(tokens.len());
 
     for token in tokens {
-        let Some(data) = token.data_as::<FencedCodeTokenData>() else {
+        let Some(data) = token.data_as::<FencedBlockTokenData>() else {
             continue;
         };
 

@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::rc::Rc;
 
 use yozora_ast::Node;
 use yozora_core_tokenizer::*;
@@ -14,15 +15,22 @@ pub struct ImageTokenizer {
 
 impl Default for ImageTokenizer {
     fn default() -> Self {
+        Self::new(TokenizerOptions::default())
+    }
+}
+
+impl ImageTokenizer {
+    pub fn new(options: TokenizerOptions) -> Self {
         Self {
             meta: TokenizerMeta {
-                name: IMAGE_TOKENIZER_NAME.to_string(),
+                name: options.name.unwrap_or_else(|| IMAGE_TOKENIZER_NAME.to_string()),
                 kind: TokenizerKind::Inline,
-                priority: TokenizerPriority::LINKS,
+                priority: options.priority.unwrap_or(TokenizerPriority::LINKS),
             },
         }
     }
 }
+
 
 impl Tokenizer for ImageTokenizer {
     fn r#type(&self) -> TokenizerType {
@@ -44,9 +52,7 @@ struct ImageMatchHook<'a> {
     char_starts: Vec<usize>,
     block_start_index: usize,
     block_end_index: usize,
-    delimiters: RefCell<Vec<r#match::DelimiterEntry>>,
-    last_end_index: Option<usize>,
-    last_delimiter: Option<TokenDelimiter>,
+    delimiters: Rc<RefCell<Vec<r#match::DelimiterEntry>>>,
 }
 
 impl<'a> ImageMatchHook<'a> {
@@ -63,14 +69,8 @@ impl<'a> ImageMatchHook<'a> {
             char_starts,
             block_start_index,
             block_end_index,
-            delimiters: RefCell::new(Vec::new()),
-            last_end_index: None,
-            last_delimiter: None,
+            delimiters: Rc::new(RefCell::new(Vec::new())),
         }
-    }
-
-    fn register_delimiter(&self, entry: r#match::DelimiterEntry) {
-        self.delimiters.borrow_mut().push(entry);
     }
 
     fn lookup_data(&self, delimiter: &TokenDelimiter) -> Option<r#match::ImageDelimiterData> {
@@ -87,38 +87,33 @@ impl<'a> ImageMatchHook<'a> {
     }
 }
 
-impl MatchInlineHook for ImageMatchHook<'_> {
-    fn reset(&mut self) {
-        self.last_end_index = None;
-        self.last_delimiter = None;
+impl<'a> MatchInlineHook<'a> for ImageMatchHook<'a> {
+    fn findDelimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
         self.delimiters.borrow_mut().clear();
-    }
 
-    fn findDelimiter(&mut self, range_index: (usize, usize)) -> Option<TokenDelimiter> {
-        let mut last_end_index = self.last_end_index;
-        let mut last_delimiter = self.last_delimiter.clone();
-        let delimiter = genFindDelimiter(
-            range_index,
-            &mut last_end_index,
-            &mut last_delimiter,
-            |start_index, end_index| {
+        let source = self.source.clone();
+        let char_starts = self.char_starts.clone();
+        let api = self.api;
+        let block_start_index = self.block_start_index;
+        let block_end_index = self.block_end_index;
+        let delimiters = Rc::clone(&self.delimiters);
+
+        Box::new(genFindDelimiter(
+            move |start_index, end_index| {
                 let entry = r#match::find_image_delimiter_entry(
-                    &self.source,
-                    &self.char_starts,
-                    self.api.getNodePoints(),
-                    self.block_start_index,
-                    self.block_end_index,
+                    &source,
+                    &char_starts,
+                    api.getNodePoints(),
+                    block_start_index,
+                    block_end_index,
                     start_index,
                     end_index,
                 )?;
                 let delimiter = entry.delimiter.clone();
-                self.register_delimiter(entry);
+                delimiters.borrow_mut().push(entry);
                 Some(delimiter)
             },
-        );
-        self.last_end_index = last_end_index;
-        self.last_delimiter = last_delimiter;
-        delimiter
+        ))
     }
 
     fn isDelimiterPair(
@@ -198,7 +193,10 @@ impl ParseInlineHook for ImageParseHook<'_> {
 }
 
 impl InlineTokenizer for ImageTokenizer {
-    fn r#match<'b>(&'b self, api: &'b dyn MatchInlinePhaseApi) -> Box<dyn MatchInlineHook + 'b> {
+    fn r#match<'b>(
+        &'b self,
+        api: &'b dyn MatchInlinePhaseApi,
+    ) -> Box<dyn MatchInlineHook<'b> + 'b> {
         Box::new(ImageMatchHook::new(api))
     }
 

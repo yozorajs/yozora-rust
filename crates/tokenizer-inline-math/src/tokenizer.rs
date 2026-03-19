@@ -14,14 +14,18 @@ pub const INLINE_MATH_TOKENIZER_NAME: &str = "@yozora/tokenizer-inline-math";
 pub const INLINE_MATH_WITH_BACKTICK_TOKENIZER_NAME: &str =
     "@yozora/tokenizer-inline-math_with_backtick";
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct InlineMathTokenizerOptions {
+    pub name: Option<String>,
+    pub priority: Option<i32>,
     pub backtick_required: bool,
 }
 
 impl Default for InlineMathTokenizerOptions {
     fn default() -> Self {
         Self {
+            name: None,
+            priority: None,
             backtick_required: true,
         }
     }
@@ -41,7 +45,7 @@ impl Default for InlineMathTokenizer {
 
 impl InlineMathTokenizer {
     pub fn new(options: InlineMathTokenizerOptions) -> Self {
-        let (name, priority) = if options.backtick_required {
+        let (default_name, default_priority) = if options.backtick_required {
             (INLINE_MATH_WITH_BACKTICK_TOKENIZER_NAME, TokenizerPriority::ATOMIC)
         } else {
             (INLINE_MATH_TOKENIZER_NAME, TokenizerPriority::INTERRUPTABLE_INLINE)
@@ -49,9 +53,11 @@ impl InlineMathTokenizer {
 
         Self {
             meta: TokenizerMeta {
-                name: name.to_string(),
+                name: options
+                    .name
+                    .unwrap_or_else(|| default_name.to_string()),
                 kind: TokenizerKind::Inline,
-                priority,
+                priority: options.priority.unwrap_or(default_priority),
             },
             backtick_required: options.backtick_required,
         }
@@ -72,31 +78,16 @@ impl Tokenizer for InlineMathTokenizer {
     }
 }
 
-struct InlineMathBacktickMatchHook {
-    delimiter_finder: r#match::InlineMathBacktickDelimiterFinder,
-    last_end_index: Option<usize>,
-    last_delimiter: Option<TokenDelimiter>,
+struct InlineMathBacktickMatchHook<'a> {
+    api: &'a dyn MatchInlinePhaseApi,
 }
 
-impl MatchInlineHook for InlineMathBacktickMatchHook {
-    fn reset(&mut self) {
-        self.delimiter_finder.reset();
-        self.last_end_index = None;
-        self.last_delimiter = None;
-    }
-
-    fn findDelimiter(&mut self, range_index: (usize, usize)) -> Option<TokenDelimiter> {
-        let mut last_end_index = self.last_end_index;
-        let mut last_delimiter = self.last_delimiter.clone();
-        let delimiter = genFindDelimiter(
-            range_index,
-            &mut last_end_index,
-            &mut last_delimiter,
-            |start_index, _end_index| self.delimiter_finder.find_next_delimiter(start_index),
-        );
-        self.last_end_index = last_end_index;
-        self.last_delimiter = last_delimiter;
-        delimiter
+impl<'a> MatchInlineHook<'a> for InlineMathBacktickMatchHook<'a> {
+    fn findDelimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
+        let mut delimiter_finder = r#match::InlineMathBacktickDelimiterFinder::new(self.api);
+        Box::new(genFindDelimiter(move |start_index, _end_index| {
+            delimiter_finder.find_next_delimiter(start_index)
+        }))
     }
 
     fn processSingleDelimiter(&self, delimiter: &TokenDelimiter) -> Vec<InlineToken> {
@@ -106,28 +97,14 @@ impl MatchInlineHook for InlineMathBacktickMatchHook {
 
 struct InlineMathPlainMatchHook<'a> {
     api: &'a dyn MatchInlinePhaseApi,
-    last_end_index: Option<usize>,
-    last_delimiter: Option<TokenDelimiter>,
 }
 
-impl MatchInlineHook for InlineMathPlainMatchHook<'_> {
-    fn reset(&mut self) {
-        self.last_end_index = None;
-        self.last_delimiter = None;
-    }
-
-    fn findDelimiter(&mut self, range_index: (usize, usize)) -> Option<TokenDelimiter> {
-        let mut last_end_index = self.last_end_index;
-        let mut last_delimiter = self.last_delimiter.clone();
-        let delimiter = genFindDelimiter(
-            range_index,
-            &mut last_end_index,
-            &mut last_delimiter,
-            |start_index, end_index| r#match::find_delimiter(self.api, start_index, end_index),
-        );
-        self.last_end_index = last_end_index;
-        self.last_delimiter = last_delimiter;
-        delimiter
+impl<'a> MatchInlineHook<'a> for InlineMathPlainMatchHook<'a> {
+    fn findDelimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
+        let api = self.api;
+        Box::new(genFindDelimiter(move |start_index, end_index| {
+            r#match::find_delimiter(api, start_index, end_index)
+        }))
     }
 
     fn isDelimiterPair(
@@ -160,19 +137,14 @@ impl ParseInlineHook for InlineMathParseHook<'_> {
 }
 
 impl InlineTokenizer for InlineMathTokenizer {
-    fn r#match<'a>(&'a self, api: &'a dyn MatchInlinePhaseApi) -> Box<dyn MatchInlineHook + 'a> {
+    fn r#match<'a>(
+        &'a self,
+        api: &'a dyn MatchInlinePhaseApi,
+    ) -> Box<dyn MatchInlineHook<'a> + 'a> {
         if self.backtick_required {
-            Box::new(InlineMathBacktickMatchHook {
-                delimiter_finder: r#match::InlineMathBacktickDelimiterFinder::new(api),
-                last_end_index: None,
-                last_delimiter: None,
-            })
+            Box::new(InlineMathBacktickMatchHook { api })
         } else {
-            Box::new(InlineMathPlainMatchHook {
-                api,
-                last_end_index: None,
-                last_delimiter: None,
-            })
+            Box::new(InlineMathPlainMatchHook { api })
         }
     }
 
@@ -269,15 +241,17 @@ mod tests {
     fn engine_match_should_find_inline_math_opener() {
         let tokenizer = InlineMathTokenizer::new(InlineMathTokenizerOptions {
             backtick_required: false,
+            ..InlineMathTokenizerOptions::default()
         });
         let node_points = create_node_point_generator("$x$")
             .pop()
             .expect("expected node points");
         let api = DummyMatchApi { node_points };
 
-        let mut hook = tokenizer.r#match(&api);
-        let delimiter = hook
-            .findDelimiter((0, api.getBlockEndIndex()))
+        let hook = tokenizer.r#match(&api);
+        let mut find_delimiter = hook.findDelimiter();
+        let delimiter = find_delimiter
+            .next((0, api.getBlockEndIndex()))
             .expect("expected inline math delimiter");
 
         assert_eq!(delimiter.delimiter_type, DelimiterType::Opener);
@@ -289,6 +263,7 @@ mod tests {
     fn engine_parse_should_build_inline_math_node() {
         let tokenizer = InlineMathTokenizer::new(InlineMathTokenizerOptions {
             backtick_required: false,
+            ..InlineMathTokenizerOptions::default()
         });
         let node_points = create_node_point_generator("$x$")
             .pop()

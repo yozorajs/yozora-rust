@@ -1,5 +1,6 @@
 use yozora_ast::Node;
 use yozora_core_tokenizer::*;
+use yozora_tokenizer_fenced_block::FencedBlockTokenData;
 
 use crate::{parse, r#match};
 
@@ -12,15 +13,22 @@ pub struct AdmonitionTokenizer {
 
 impl Default for AdmonitionTokenizer {
     fn default() -> Self {
+        Self::new(TokenizerOptions::default())
+    }
+}
+
+impl AdmonitionTokenizer {
+    pub fn new(options: TokenizerOptions) -> Self {
         Self {
             meta: TokenizerMeta {
-                name: ADMONITION_TOKENIZER_NAME.to_string(),
+                name: options.name.unwrap_or_else(|| ADMONITION_TOKENIZER_NAME.to_string()),
                 kind: TokenizerKind::Block,
-                priority: TokenizerPriority::FENCED_BLOCK,
+                priority: options.priority.unwrap_or(TokenizerPriority::FENCED_BLOCK),
             },
         }
     }
 }
+
 
 impl Tokenizer for AdmonitionTokenizer {
     fn r#type(&self) -> TokenizerType {
@@ -59,10 +67,13 @@ impl MatchBlockHook for AdmonitionMatchHook<'_> {
         token: &mut BlockToken,
         _parent_token: &BlockToken,
     ) -> EatContinuationTextResult {
-        r#match::eat_continuation_text(line, token, self.api)
+        r#match::eat_continuation_text(line, token)
     }
 
-    fn on_close(&mut self, _token: &BlockToken) -> Option<OnCloseResult> {
+    fn on_close(&mut self, token: &mut BlockToken) -> Option<OnCloseResult> {
+        if let Some(data) = token.data_as::<FencedBlockTokenData>() {
+            token.children = self.api.rollbackPhrasingLines(&data.lines, None);
+        }
         None
     }
 }

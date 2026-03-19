@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::rc::Rc;
 
 use yozora_ast::Node;
 use yozora_core_tokenizer::*;
@@ -17,15 +18,22 @@ pub struct LinkReferenceTokenizer {
 
 impl Default for LinkReferenceTokenizer {
     fn default() -> Self {
+        Self::new(TokenizerOptions::default())
+    }
+}
+
+impl LinkReferenceTokenizer {
+    pub fn new(options: TokenizerOptions) -> Self {
         Self {
             meta: TokenizerMeta {
-                name: LINK_REFERENCE_TOKENIZER_NAME.to_string(),
+                name: options.name.unwrap_or_else(|| LINK_REFERENCE_TOKENIZER_NAME.to_string()),
                 kind: TokenizerKind::Inline,
-                priority: TokenizerPriority::LINKS,
+                priority: options.priority.unwrap_or(TokenizerPriority::LINKS),
             },
         }
     }
 }
+
 
 impl Tokenizer for LinkReferenceTokenizer {
     fn r#type(&self) -> TokenizerType {
@@ -43,9 +51,7 @@ impl Tokenizer for LinkReferenceTokenizer {
 
 struct LinkReferenceMatchHook<'a> {
     api: &'a dyn MatchInlinePhaseApi,
-    delimiters: RefCell<Vec<r#match::DelimiterEntry>>,
-    last_end_index: Option<usize>,
-    last_delimiter: Option<TokenDelimiter>,
+    delimiters: Rc<RefCell<Vec<r#match::DelimiterEntry>>>,
 }
 
 impl LinkReferenceMatchHook<'_> {
@@ -71,34 +77,25 @@ impl LinkReferenceMatchHook<'_> {
     }
 }
 
-impl MatchInlineHook for LinkReferenceMatchHook<'_> {
-    fn reset(&mut self) {
-        self.last_end_index = None;
-        self.last_delimiter = None;
+impl<'a> MatchInlineHook<'a> for LinkReferenceMatchHook<'a> {
+    fn findDelimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
         self.delimiters.borrow_mut().clear();
-    }
 
-    fn findDelimiter(&mut self, range_index: (usize, usize)) -> Option<TokenDelimiter> {
-        let mut last_end_index = self.last_end_index;
-        let mut last_delimiter = self.last_delimiter.clone();
-        let delimiter = genFindDelimiter(
-            range_index,
-            &mut last_end_index,
-            &mut last_delimiter,
-            |start_index, end_index| {
+        let api = self.api;
+        let delimiters = Rc::clone(&self.delimiters);
+
+        Box::new(genFindDelimiter(
+            move |start_index, end_index| {
                 let entry = r#match::find_link_reference_delimiter_entry(
-                    self.api.getNodePoints(),
+                    api.getNodePoints(),
                     start_index,
                     end_index,
                 )?;
                 let delimiter = entry.delimiter.clone();
-                self.register_delimiter(entry);
+                delimiters.borrow_mut().push(entry);
                 Some(delimiter)
             },
-        );
-        self.last_end_index = last_end_index;
-        self.last_delimiter = last_delimiter;
-        delimiter
+        ))
     }
 
     fn isDelimiterPair(
@@ -263,12 +260,10 @@ impl InlineTokenizer for LinkReferenceTokenizer {
     fn r#match<'a>(
         &'a self,
         api: &'a dyn MatchInlinePhaseApi,
-    ) -> Box<dyn MatchInlineHook + 'a> {
+    ) -> Box<dyn MatchInlineHook<'a> + 'a> {
         Box::new(LinkReferenceMatchHook {
             api,
-            delimiters: RefCell::new(Vec::new()),
-            last_end_index: None,
-            last_delimiter: None,
+            delimiters: Rc::new(RefCell::new(Vec::new())),
         })
     }
 
@@ -404,9 +399,10 @@ mod tests {
             .pop()
             .expect("expected node points");
         let match_api = DummyMatchApi::from(definitions, node_points.clone());
-        let mut hook = tokenizer.r#match(&match_api);
+        let hook = tokenizer.r#match(&match_api);
 
-        let delimiter = hook.findDelimiter((0, match_api.getBlockEndIndex()))?;
+        let mut find_delimiter = hook.findDelimiter();
+        let delimiter = find_delimiter.next((0, match_api.getBlockEndIndex()))?;
         let token = hook.processSingleDelimiter(&delimiter).pop()?;
         Some((token, node_points))
     }

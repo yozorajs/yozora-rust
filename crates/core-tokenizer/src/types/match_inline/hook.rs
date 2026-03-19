@@ -1,5 +1,9 @@
 use crate::types::token::{InlineToken, TokenDelimiter};
 
+pub trait FindDelimiterGenerator {
+    fn next(&mut self, range_index: (usize, usize)) -> Option<TokenDelimiter>;
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IsDelimiterPairResult {
     Paired,
@@ -15,10 +19,8 @@ pub struct ProcessDelimiterPairResult {
 }
 
 #[allow(non_snake_case)]
-pub trait MatchInlineHook {
-    fn reset(&mut self) {}
-
-    fn findDelimiter(&mut self, range_index: (usize, usize)) -> Option<TokenDelimiter>;
+pub trait MatchInlineHook<'hook> {
+    fn findDelimiter(&self) -> Box<dyn FindDelimiterGenerator + 'hook>;
 
     fn isDelimiterPair(
         &self,

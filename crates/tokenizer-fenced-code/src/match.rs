@@ -1,171 +1,47 @@
 use std::sync::Arc;
 
 use yozora_ast::CODE_TYPE;
-use yozora_character::{
-    calc_trim_boundary_of_code_points, is_space_character, AsciiCodePoint, NodePoint,
-};
+use yozora_character::AsciiCodePoint;
 use yozora_core_tokenizer::{
-    calc_end_point, calc_start_point, BlockToken, EatAndInterruptPreviousSiblingResult,
-    EatContinuationTextResult, EatOpenerResult, PhrasingContentLine, RemainingSibling,
+    BlockToken, EatAndInterruptPreviousSiblingResult, EatContinuationTextResult, EatOpenerResult,
+    PhrasingContentLine,
 };
-
-#[derive(Debug, Clone)]
-pub(crate) struct FencedCodeTokenData {
-    pub marker: i32,
-    pub marker_count: usize,
-    pub indent: usize,
-    pub info_string: Vec<NodePoint>,
-    pub lines: Vec<PhrasingContentLine>,
-}
+use yozora_tokenizer_fenced_block::{
+    fenced_block_eat_and_interrupt_previous_sibling, fenced_block_eat_continuation_text,
+    fenced_block_eat_opener, FencedBlockHookContext,
+};
 
 pub(crate) fn eat_opener(line: &PhrasingContentLine) -> Option<EatOpenerResult> {
-    if line.count_of_precede_spaces >= 4 {
-        return None;
-    }
-
-    let first_non_whitespace_index = line.first_non_whitespace_index;
-    if first_non_whitespace_index + 2 >= line.end_index {
-        return None;
-    }
-
-    let node_points = line.node_points.as_ref();
-    let marker = node_points[first_non_whitespace_index].code_point;
-    if marker != AsciiCodePoint::BACKTICK as i32 && marker != AsciiCodePoint::TILDE as i32 {
-        return None;
-    }
-
-    let mut i = first_non_whitespace_index + 1;
-    while i < line.end_index && node_points[i].code_point == marker {
-        i += 1;
-    }
-
-    let marker_count = i - first_non_whitespace_index;
-    if marker_count < 3 {
-        return None;
-    }
-
-    let (left, right) = calc_trim_boundary_of_code_points(node_points, i, line.end_index);
-    let info_string = node_points[left..right].to_vec();
-    if marker == AsciiCodePoint::BACKTICK as i32
-        && info_string
-            .iter()
-            .any(|point| point.code_point == AsciiCodePoint::BACKTICK as i32)
-    {
-        return None;
-    }
-
-    let token =
-        BlockToken::new("", CODE_TYPE, calc_line_position(line)).with_data(FencedCodeTokenData {
-            marker,
-            marker_count,
-            indent: first_non_whitespace_index.saturating_sub(line.start_index),
-            info_string,
-            lines: Vec::new(),
-        });
-
-    Some(EatOpenerResult {
-        token,
-        next_index: line.end_index,
-        saturated: false,
-    })
+    fenced_block_eat_opener(line, &create_context())
 }
 
 pub(crate) fn eat_and_interrupt_previous_sibling(
     line: &PhrasingContentLine,
     prev_sibling_token: &BlockToken,
 ) -> Option<EatAndInterruptPreviousSiblingResult> {
-    let opener = eat_opener(line)?;
-    Some(EatAndInterruptPreviousSiblingResult {
-        token: opener.token,
-        next_index: opener.next_index,
-        saturated: opener.saturated,
-        remaining_sibling: RemainingSibling::One(prev_sibling_token.clone()),
-    })
+    fenced_block_eat_and_interrupt_previous_sibling(line, prev_sibling_token, &create_context())
 }
 
 pub(crate) fn eat_continuation_text(
     line: &PhrasingContentLine,
     token: &mut BlockToken,
 ) -> EatContinuationTextResult {
-    let Some(data) = token.data_as::<FencedCodeTokenData>().cloned() else {
-        return EatContinuationTextResult::NotMatched;
-    };
-
-    let node_points = line.node_points.as_ref();
-    if line.count_of_precede_spaces < 4 && line.first_non_whitespace_index < line.end_index {
-        let mut i = line.first_non_whitespace_index;
-        while i < line.end_index && node_points[i].code_point == data.marker {
-            i += 1;
-        }
-
-        let marker_count = i - line.first_non_whitespace_index;
-        if marker_count >= data.marker_count {
-            while i < line.end_index && is_space_character(node_points[i].code_point) {
-                i += 1;
-            }
-
-            if i + 1 >= line.end_index {
-                return EatContinuationTextResult::Closing {
-                    next_index: line.end_index,
-                };
-            }
-        }
-    }
-
-    let first_index = std::cmp::min(
-        line.start_index + data.indent,
-        std::cmp::min(
-            line.first_non_whitespace_index,
-            line.end_index.saturating_sub(1),
-        ),
-    );
-    let mut lines = data.lines;
-    lines.push(PhrasingContentLine {
-        node_points: line.node_points.clone(),
-        start_index: first_index,
-        end_index: line.end_index,
-        first_non_whitespace_index: line.first_non_whitespace_index,
-        count_of_precede_spaces: line.count_of_precede_spaces,
-    });
-
-    token.data = Arc::new(FencedCodeTokenData {
-        marker: data.marker,
-        marker_count: data.marker_count,
-        indent: data.indent,
-        info_string: data.info_string,
-        lines,
-    });
-    update_token_end_position(token, line);
-
-    EatContinuationTextResult::Opening {
-        next_index: line.end_index,
-    }
+    fenced_block_eat_continuation_text(line, token)
 }
 
-fn calc_line_position(line: &PhrasingContentLine) -> Option<yozora_ast::Position> {
-    if line.start_index >= line.end_index {
-        return None;
+fn create_context() -> FencedBlockHookContext {
+    FencedBlockHookContext {
+        node_type: CODE_TYPE,
+        markers: vec![AsciiCodePoint::BACKTICK as i32, AsciiCodePoint::TILDE as i32],
+        markers_required: 3,
+        check_info_string: Some(Arc::new(|info_string, marker, _marker_count| {
+            // Backtick fenced code info string cannot contain backticks.
+            if marker != AsciiCodePoint::BACKTICK as i32 {
+                return true;
+            }
+            !info_string
+                .iter()
+                .any(|point| point.code_point == AsciiCodePoint::BACKTICK as i32)
+        })),
     }
-
-    Some(yozora_ast::Position {
-        start: calc_start_point(line.node_points.as_ref(), line.start_index),
-        end: calc_end_point(line.node_points.as_ref(), line.end_index - 1),
-        indent: None,
-    })
-}
-
-fn update_token_end_position(token: &mut BlockToken, line: &PhrasingContentLine) {
-    let Some(position) = token.position.as_mut() else {
-        return;
-    };
-    if line.start_index >= line.end_index {
-        return;
-    }
-
-    let end = line.node_points[line.end_index - 1];
-    position.end = yozora_ast::Point {
-        line: end.line,
-        column: end.column + 1,
-        offset: Some(end.offset + 1),
-    };
 }

@@ -610,11 +610,13 @@ impl<'a> BlockContentProcessor<'a> {
         if let Some(hook_index) = top_state.hook_index {
             if !self.state_stack.is_empty() {
                 let parent_stack_index = self.state_stack.len() - 1;
-                let top_snapshot = token_ref(&self.root, &top_state.path).clone();
-                let on_close_result = self.hooks[hook_index]
-                    .hook
-                    .borrow_mut()
-                    .on_close(&top_snapshot);
+                let top_path = top_state.path.clone();
+                let hook = self.hooks[hook_index].hook.clone();
+                let on_close_result = {
+                    let mut hook = hook.borrow_mut();
+                    let token = token_mut(&mut self.root, &top_path);
+                    hook.on_close(token)
+                };
                 if let Some(result) = on_close_result {
                     match result {
                         OnCloseResult::ClosingAndRollback { lines } => {
@@ -873,7 +875,7 @@ mod tests {
             })
         }
 
-        fn on_close(&mut self, _token: &BlockToken) -> Option<OnCloseResult> {
+        fn on_close(&mut self, _token: &mut BlockToken) -> Option<OnCloseResult> {
             Some(OnCloseResult::FailedAndRollback {
                 lines: vec![make_line("d")],
             })
@@ -903,7 +905,7 @@ mod tests {
             })
         }
 
-        fn on_close(&mut self, _token: &BlockToken) -> Option<OnCloseResult> {
+        fn on_close(&mut self, _token: &mut BlockToken) -> Option<OnCloseResult> {
             Some(OnCloseResult::ClosingAndRollback {
                 lines: vec![make_line("d")],
             })

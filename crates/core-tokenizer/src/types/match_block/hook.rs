@@ -80,7 +80,7 @@ pub trait MatchBlockHook {
         EatLazyContinuationTextResult::NotMatched
     }
 
-    fn on_close(&mut self, _token: &BlockToken) -> Option<OnCloseResult> {
+    fn on_close(&mut self, _token: &mut BlockToken) -> Option<OnCloseResult> {
         None
     }
 }

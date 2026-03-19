@@ -178,46 +178,53 @@ pub fn match_inline_tokens(
 mod tests {
     use super::{match_inline_tokens, MatchInlineProcessorHook};
     use yozora_core_tokenizer::{
-        DelimiterType, InlineToken, IsDelimiterPairResult, MatchInlineHook,
+        DelimiterType, FindDelimiterGenerator, InlineToken, IsDelimiterPairResult, MatchInlineHook,
         ProcessDelimiterPairResult, TokenDelimiter,
     };
 
     struct DummyHook {
         delimiters: Vec<TokenDelimiter>,
-        cursor: usize,
         paired: bool,
     }
 
     impl DummyHook {
         fn new(delimiters: Vec<TokenDelimiter>, paired: bool) -> Self {
-            Self {
-                delimiters,
-                cursor: 0,
-                paired,
-            }
+            Self { delimiters, paired }
         }
     }
 
-    impl MatchInlineHook for DummyHook {
-        fn reset(&mut self) {
-            self.cursor = 0;
-        }
+    impl<'a> MatchInlineHook<'a> for DummyHook {
+        fn findDelimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
+            let delimiters = self.delimiters.clone();
 
-        fn findDelimiter(&mut self, range_index: (usize, usize)) -> Option<TokenDelimiter> {
-            let (start_index, end_index) = range_index;
-            while self.cursor < self.delimiters.len() {
-                let delimiter = self.delimiters[self.cursor].clone();
-                if delimiter.start_index < start_index {
-                    self.cursor += 1;
-                    continue;
-                }
-                if delimiter.start_index >= end_index {
-                    return None;
-                }
-                self.cursor += 1;
-                return Some(delimiter);
+            struct DummyDelimiterGenerator {
+                delimiters: Vec<TokenDelimiter>,
+                cursor: usize,
             }
-            None
+
+            impl FindDelimiterGenerator for DummyDelimiterGenerator {
+                fn next(&mut self, range_index: (usize, usize)) -> Option<TokenDelimiter> {
+                    let (start_index, end_index) = range_index;
+                    while self.cursor < self.delimiters.len() {
+                        let delimiter = self.delimiters[self.cursor].clone();
+                        if delimiter.start_index < start_index {
+                            self.cursor += 1;
+                            continue;
+                        }
+                        if delimiter.start_index >= end_index {
+                            return None;
+                        }
+                        self.cursor += 1;
+                        return Some(delimiter);
+                    }
+                    None
+                }
+            }
+
+            Box::new(DummyDelimiterGenerator {
+                delimiters,
+                cursor: 0,
+            })
         }
 
         fn isDelimiterPair(

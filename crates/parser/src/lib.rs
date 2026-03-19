@@ -136,6 +136,7 @@ fn register_builtin_tokenizers(inner: &mut DefaultParser) {
             AnyTokenizer::Inline(Box::new(InlineMathTokenizer::new(
                 InlineMathTokenizerOptions {
                     backtick_required: true,
+                    ..InlineMathTokenizerOptions::default()
                 },
             ))),
             None,
@@ -195,6 +196,7 @@ fn register_builtin_tokenizers(inner: &mut DefaultParser) {
             AnyTokenizer::Inline(Box::new(InlineMathTokenizer::new(
                 InlineMathTokenizerOptions {
                     backtick_required: false,
+                    ..InlineMathTokenizerOptions::default()
                 },
             ))),
             None,

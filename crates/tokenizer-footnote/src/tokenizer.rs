@@ -12,15 +12,22 @@ pub struct FootnoteTokenizer {
 
 impl Default for FootnoteTokenizer {
     fn default() -> Self {
+        Self::new(TokenizerOptions::default())
+    }
+}
+
+impl FootnoteTokenizer {
+    pub fn new(options: TokenizerOptions) -> Self {
         Self {
             meta: TokenizerMeta {
-                name: FOOTNOTE_TOKENIZER_NAME.to_string(),
+                name: options.name.unwrap_or_else(|| FOOTNOTE_TOKENIZER_NAME.to_string()),
                 kind: TokenizerKind::Inline,
-                priority: TokenizerPriority::LINKS,
+                priority: options.priority.unwrap_or(TokenizerPriority::LINKS),
             },
         }
     }
 }
+
 
 impl Tokenizer for FootnoteTokenizer {
     fn r#type(&self) -> TokenizerType {
@@ -38,37 +45,22 @@ impl Tokenizer for FootnoteTokenizer {
 
 struct FootnoteMatchHook<'a> {
     api: &'a dyn MatchInlinePhaseApi,
-    last_end_index: Option<usize>,
-    last_delimiter: Option<TokenDelimiter>,
 }
 
-impl MatchInlineHook for FootnoteMatchHook<'_> {
-    fn reset(&mut self) {
-        self.last_end_index = None;
-        self.last_delimiter = None;
-    }
+impl<'a> MatchInlineHook<'a> for FootnoteMatchHook<'a> {
+    fn findDelimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
+        let api = self.api;
 
-    fn findDelimiter(&mut self, range_index: (usize, usize)) -> Option<TokenDelimiter> {
-        let mut last_end_index = self.last_end_index;
-        let mut last_delimiter = self.last_delimiter.clone();
-
-        let delimiter = genFindDelimiter(
-            range_index,
-            &mut last_end_index,
-            &mut last_delimiter,
+        Box::new(genFindDelimiter(
             |start_index, end_index| {
                 let entry = r#match::find_delimiter_entry(
-                    self.api.getNodePoints(),
+                    api.getNodePoints(),
                     start_index,
                     end_index,
                 )?;
                 Some(entry.delimiter)
             },
-        );
-
-        self.last_end_index = last_end_index;
-        self.last_delimiter = last_delimiter;
-        delimiter
+        ))
     }
 
     fn isDelimiterPair(
@@ -111,12 +103,11 @@ impl ParseInlineHook for FootnoteParseHook<'_> {
 }
 
 impl InlineTokenizer for FootnoteTokenizer {
-    fn r#match<'a>(&'a self, api: &'a dyn MatchInlinePhaseApi) -> Box<dyn MatchInlineHook + 'a> {
-        Box::new(FootnoteMatchHook {
-            api,
-            last_end_index: None,
-            last_delimiter: None,
-        })
+    fn r#match<'a>(
+        &'a self,
+        api: &'a dyn MatchInlinePhaseApi,
+    ) -> Box<dyn MatchInlineHook<'a> + 'a> {
+        Box::new(FootnoteMatchHook { api })
     }
 
     fn parse<'a>(&'a self, api: &'a dyn ParseInlinePhaseApi) -> Box<dyn ParseInlineHook + 'a> {

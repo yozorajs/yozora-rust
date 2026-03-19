@@ -12,8 +12,8 @@ pub use types::match_block::{
     EatOpenerResult, MatchBlockHook, MatchBlockPhaseApi, OnCloseResult, RemainingSibling,
 };
 pub use types::match_inline::{
-    IsDelimiterPairResult, MatchInlineFallbackPhaseApi, MatchInlineHook, MatchInlinePhaseApi,
-    ProcessDelimiterPairResult,
+    FindDelimiterGenerator, IsDelimiterPairResult, MatchInlineFallbackPhaseApi, MatchInlineHook,
+    MatchInlinePhaseApi, ProcessDelimiterPairResult,
 };
 pub use types::parse_block::{ParseBlockHook, ParseBlockPhaseApi};
 pub use types::parse_inline::{ParseInlineHook, ParseInlinePhaseApi};
@@ -52,6 +52,12 @@ pub struct TokenizerMeta {
     pub name: String,
     pub kind: TokenizerKind,
     pub priority: i32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TokenizerOptions {
+    pub name: Option<String>,
+    pub priority: Option<i32>,
 }
 
 pub enum AnyTokenizer {

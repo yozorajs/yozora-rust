@@ -1,3 +1,6 @@
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use yozora_ast::Node;
 use yozora_core_tokenizer::*;
 
@@ -17,15 +20,22 @@ pub struct AutolinkTokenizer {
 
 impl Default for AutolinkTokenizer {
     fn default() -> Self {
+        Self::new(TokenizerOptions::default())
+    }
+}
+
+impl AutolinkTokenizer {
+    pub fn new(options: TokenizerOptions) -> Self {
         Self {
             meta: TokenizerMeta {
-                name: AUTOLINK_TOKENIZER_NAME.to_string(),
+                name: options.name.unwrap_or_else(|| AUTOLINK_TOKENIZER_NAME.to_string()),
                 kind: TokenizerKind::Inline,
-                priority: TokenizerPriority::ATOMIC,
+                priority: options.priority.unwrap_or(TokenizerPriority::ATOMIC),
             },
         }
     }
 }
+
 
 impl Tokenizer for AutolinkTokenizer {
     fn r#type(&self) -> TokenizerType {
@@ -43,21 +53,16 @@ impl Tokenizer for AutolinkTokenizer {
 
 struct AutolinkMatchHook<'a> {
     api: &'a dyn MatchInlinePhaseApi,
-    delimiters: Vec<r#match::DelimiterEntry>,
-    last_end_index: Option<usize>,
-    last_delimiter: Option<TokenDelimiter>,
+    delimiters: Rc<RefCell<Vec<r#match::DelimiterEntry>>>,
 }
 
 impl AutolinkMatchHook<'_> {
-    fn register_delimiter(&mut self, entry: r#match::DelimiterEntry) {
-        self.delimiters.push(entry);
-    }
-
     fn lookup_content_type(
         &self,
         delimiter: &TokenDelimiter,
     ) -> Option<parse::AutolinkContentType> {
         self.delimiters
+            .borrow()
             .iter()
             .rev()
             .find(|entry| {
@@ -69,34 +74,24 @@ impl AutolinkMatchHook<'_> {
     }
 }
 
-impl MatchInlineHook for AutolinkMatchHook<'_> {
-    fn reset(&mut self) {
-        self.last_end_index = None;
-        self.last_delimiter = None;
-        self.delimiters.clear();
-    }
+impl<'a> MatchInlineHook<'a> for AutolinkMatchHook<'a> {
+    fn findDelimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
+        self.delimiters.borrow_mut().clear();
+        let api = self.api;
+        let delimiters = Rc::clone(&self.delimiters);
 
-    fn findDelimiter(&mut self, range_index: (usize, usize)) -> Option<TokenDelimiter> {
-        let mut last_end_index = self.last_end_index;
-        let mut last_delimiter = self.last_delimiter.clone();
-        let delimiter = genFindDelimiter(
-            range_index,
-            &mut last_end_index,
-            &mut last_delimiter,
-            |start_index, end_index| {
+        Box::new(genFindDelimiter(
+            move |start_index, end_index| {
                 let entry = r#match::find_delimiter_entry(
-                    self.api.getNodePoints(),
+                    api.getNodePoints(),
                     start_index,
                     end_index,
                 )?;
                 let delimiter = entry.delimiter.clone();
-                self.register_delimiter(entry);
+                delimiters.borrow_mut().push(entry);
                 Some(delimiter)
             },
-        );
-        self.last_end_index = last_end_index;
-        self.last_delimiter = last_delimiter;
-        delimiter
+        ))
     }
 
     fn processSingleDelimiter(&self, delimiter: &TokenDelimiter) -> Vec<InlineToken> {
@@ -119,12 +114,13 @@ impl ParseInlineHook for AutolinkParseHook<'_> {
 }
 
 impl InlineTokenizer for AutolinkTokenizer {
-    fn r#match<'a>(&'a self, api: &'a dyn MatchInlinePhaseApi) -> Box<dyn MatchInlineHook + 'a> {
+    fn r#match<'a>(
+        &'a self,
+        api: &'a dyn MatchInlinePhaseApi,
+    ) -> Box<dyn MatchInlineHook<'a> + 'a> {
         Box::new(AutolinkMatchHook {
             api,
-            delimiters: Vec::new(),
-            last_end_index: None,
-            last_delimiter: None,
+            delimiters: Rc::new(RefCell::new(Vec::new())),
         })
     }
 
@@ -238,9 +234,10 @@ mod tests {
             .expect("expected node points");
         let api = DummyMatchApi { node_points };
 
-        let mut hook = tokenizer.r#match(&api);
-        let delimiter = hook
-            .findDelimiter((0, api.getBlockEndIndex()))
+        let hook = tokenizer.r#match(&api);
+        let mut find_delimiter = hook.findDelimiter();
+        let delimiter = find_delimiter
+            .next((0, api.getBlockEndIndex()))
             .expect("expected autolink delimiter");
 
         assert_eq!(delimiter.delimiter_type, DelimiterType::Full);

@@ -7,6 +7,8 @@ pub const LIST_TOKENIZER_NAME: &str = "@yozora/tokenizer-list";
 
 #[derive(Debug, Clone)]
 pub struct ListTokenizerOptions {
+    pub name: Option<String>,
+    pub priority: Option<i32>,
     pub enable_task_list_item: bool,
     pub empty_item_could_not_interrupted_types: Vec<NodeType>,
 }
@@ -14,6 +16,8 @@ pub struct ListTokenizerOptions {
 impl Default for ListTokenizerOptions {
     fn default() -> Self {
         Self {
+            name: None,
+            priority: None,
             enable_task_list_item: false,
             empty_item_could_not_interrupted_types: vec![PARAGRAPH_TYPE],
         }
@@ -37,9 +41,13 @@ impl ListTokenizer {
     pub fn new(options: ListTokenizerOptions) -> Self {
         Self {
             meta: TokenizerMeta {
-                name: LIST_TOKENIZER_NAME.to_string(),
+                name: options
+                    .name
+                    .unwrap_or_else(|| LIST_TOKENIZER_NAME.to_string()),
                 kind: TokenizerKind::Block,
-                priority: TokenizerPriority::CONTAINING_BLOCK,
+                priority: options
+                    .priority
+                    .unwrap_or(TokenizerPriority::CONTAINING_BLOCK),
             },
             enable_task_list_item: options.enable_task_list_item,
             empty_item_could_not_interrupted_types: options.empty_item_could_not_interrupted_types,

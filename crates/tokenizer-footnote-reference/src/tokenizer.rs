@@ -19,15 +19,22 @@ pub struct FootnoteReferenceTokenizer {
 
 impl Default for FootnoteReferenceTokenizer {
     fn default() -> Self {
+        Self::new(TokenizerOptions::default())
+    }
+}
+
+impl FootnoteReferenceTokenizer {
+    pub fn new(options: TokenizerOptions) -> Self {
         Self {
             meta: TokenizerMeta {
-                name: FOOTNOTE_REFERENCE_TOKENIZER_NAME.to_string(),
+                name: options.name.unwrap_or_else(|| FOOTNOTE_REFERENCE_TOKENIZER_NAME.to_string()),
                 kind: TokenizerKind::Inline,
-                priority: TokenizerPriority::ATOMIC,
+                priority: options.priority.unwrap_or(TokenizerPriority::ATOMIC),
             },
         }
     }
 }
+
 
 impl Tokenizer for FootnoteReferenceTokenizer {
     fn r#type(&self) -> TokenizerType {
@@ -45,33 +52,18 @@ impl Tokenizer for FootnoteReferenceTokenizer {
 
 struct FootnoteReferenceMatchHook<'a> {
     api: &'a dyn MatchInlinePhaseApi,
-    last_end_index: Option<usize>,
-    last_delimiter: Option<TokenDelimiter>,
 }
 
-impl MatchInlineHook for FootnoteReferenceMatchHook<'_> {
-    fn reset(&mut self) {
-        self.last_end_index = None;
-        self.last_delimiter = None;
-    }
+impl<'a> MatchInlineHook<'a> for FootnoteReferenceMatchHook<'a> {
+    fn findDelimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
+        let api = self.api;
 
-    fn findDelimiter(&mut self, range_index: (usize, usize)) -> Option<TokenDelimiter> {
-        let mut last_end_index = self.last_end_index;
-        let mut last_delimiter = self.last_delimiter.clone();
-
-        let delimiter = genFindDelimiter(
-            range_index,
-            &mut last_end_index,
-            &mut last_delimiter,
+        Box::new(genFindDelimiter(
             |start_index, end_index| {
-                let entry = r#match::find_delimiter_entry(self.api, start_index, end_index)?;
+                let entry = r#match::find_delimiter_entry(api, start_index, end_index)?;
                 Some(entry.delimiter)
             },
-        );
-
-        self.last_end_index = last_end_index;
-        self.last_delimiter = last_delimiter;
-        delimiter
+        ))
     }
 
     fn processSingleDelimiter(&self, delimiter: &TokenDelimiter) -> Vec<InlineToken> {
@@ -90,12 +82,11 @@ impl ParseInlineHook for FootnoteReferenceParseHook<'_> {
 }
 
 impl InlineTokenizer for FootnoteReferenceTokenizer {
-    fn r#match<'a>(&'a self, api: &'a dyn MatchInlinePhaseApi) -> Box<dyn MatchInlineHook + 'a> {
-        Box::new(FootnoteReferenceMatchHook {
-            api,
-            last_end_index: None,
-            last_delimiter: None,
-        })
+    fn r#match<'a>(
+        &'a self,
+        api: &'a dyn MatchInlinePhaseApi,
+    ) -> Box<dyn MatchInlineHook<'a> + 'a> {
+        Box::new(FootnoteReferenceMatchHook { api })
     }
 
     fn parse<'a>(&'a self, api: &'a dyn ParseInlinePhaseApi) -> Box<dyn ParseInlineHook + 'a> {
@@ -201,9 +192,10 @@ mod tests {
         let tokenizer = FootnoteReferenceTokenizer::default();
         let api = DummyInlineApi::from("[^missing]", &[]);
 
-        let mut hook = tokenizer.r#match(&api);
-        let delimiter = hook
-            .findDelimiter((0, api.getBlockEndIndex()))
+        let hook = tokenizer.r#match(&api);
+        let mut find_delimiter = hook.findDelimiter();
+        let delimiter = find_delimiter
+            .next((0, api.getBlockEndIndex()))
             .expect("expected delimiter");
 
         let tokens = hook.processSingleDelimiter(&delimiter);
@@ -215,9 +207,10 @@ mod tests {
         let tokenizer = FootnoteReferenceTokenizer::default();
         let api = DummyInlineApi::from("[^note]", &["note"]);
 
-        let mut match_hook = tokenizer.r#match(&api);
-        let delimiter = match_hook
-            .findDelimiter((0, api.getBlockEndIndex()))
+        let match_hook = tokenizer.r#match(&api);
+        let mut find_delimiter = match_hook.findDelimiter();
+        let delimiter = find_delimiter
+            .next((0, api.getBlockEndIndex()))
             .expect("expected delimiter");
         let tokens = match_hook.processSingleDelimiter(&delimiter);
         assert_eq!(tokens.len(), 1);

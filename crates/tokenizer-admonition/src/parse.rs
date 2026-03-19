@@ -1,14 +1,11 @@
-use yozora_ast::{Admonition, Node};
-use yozora_core_tokenizer::{BlockToken, ParseBlockPhaseApi, PhrasingContentLine};
+use std::sync::Arc;
 
-#[derive(Debug, Clone)]
-pub(crate) struct AdmonitionTokenData {
-    pub keyword: String,
-    pub marker_count: usize,
-    pub indent: usize,
-    pub title_line: Option<PhrasingContentLine>,
-    pub body_lines: Vec<PhrasingContentLine>,
-}
+use yozora_ast::{Admonition, Node};
+use yozora_character::{calc_escaped_string_from_node_points, is_unicode_whitespace_character};
+use yozora_core_tokenizer::{
+    merge_and_strip_content_lines, BlockToken, ParseBlockPhaseApi, PhrasingContentLine,
+};
+use yozora_tokenizer_fenced_block::FencedBlockTokenData;
 
 pub(crate) fn parse_admonition_tokens(
     tokens: &[BlockToken],
@@ -17,20 +14,34 @@ pub(crate) fn parse_admonition_tokens(
     let mut nodes = Vec::with_capacity(tokens.len());
 
     for token in tokens {
-        let Some(data) = token.data_as::<AdmonitionTokenData>() else {
+        let Some(data) = token.data_as::<FencedBlockTokenData>() else {
             continue;
         };
 
-        let title = if let Some(title_line) = &data.title_line {
-            if title_line.start_index < title_line.end_index {
-                parse_api.processInlines(
-                    &title_line.node_points[title_line.start_index..title_line.end_index],
-                )
-            } else {
-                Vec::new()
-            }
-        } else {
+        let info_string = &data.info_string;
+        let mut i = 0usize;
+        while i < info_string.len() && !is_unicode_whitespace_character(info_string[i].code_point) {
+            i += 1;
+        }
+
+        let keyword = calc_escaped_string_from_node_points(info_string, 0, i, true);
+
+        while i < info_string.len() && is_unicode_whitespace_character(info_string[i].code_point) {
+            i += 1;
+        }
+
+        let title = if i >= info_string.len() {
             Vec::new()
+        } else {
+            let title_lines = vec![PhrasingContentLine {
+                node_points: Arc::new(info_string.clone()),
+                start_index: i,
+                end_index: info_string.len(),
+                first_non_whitespace_index: i,
+                count_of_precede_spaces: 0,
+            }];
+            let contents = merge_and_strip_content_lines(&title_lines, 0, title_lines.len());
+            parse_api.processInlines(&contents)
         };
 
         let children = parse_api.parseBlockTokens(Some(&token.children));
@@ -40,7 +51,7 @@ pub(crate) fn parse_admonition_tokens(
             } else {
                 None
             },
-            keyword: data.keyword.clone(),
+            keyword,
             title,
             children,
         }));

@@ -12,15 +12,22 @@ pub struct IndentedCodeTokenizer {
 
 impl Default for IndentedCodeTokenizer {
     fn default() -> Self {
+        Self::new(TokenizerOptions::default())
+    }
+}
+
+impl IndentedCodeTokenizer {
+    pub fn new(options: TokenizerOptions) -> Self {
         Self {
             meta: TokenizerMeta {
-                name: INDENTED_CODE_TOKENIZER_NAME.to_string(),
+                name: options.name.unwrap_or_else(|| INDENTED_CODE_TOKENIZER_NAME.to_string()),
                 kind: TokenizerKind::Block,
-                priority: TokenizerPriority::ATOMIC,
+                priority: options.priority.unwrap_or(TokenizerPriority::ATOMIC),
             },
         }
     }
 }
+
 
 impl Tokenizer for IndentedCodeTokenizer {
     fn r#type(&self) -> TokenizerType {

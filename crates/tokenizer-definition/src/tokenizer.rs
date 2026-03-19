@@ -12,15 +12,22 @@ pub struct DefinitionTokenizer {
 
 impl Default for DefinitionTokenizer {
     fn default() -> Self {
+        Self::new(TokenizerOptions::default())
+    }
+}
+
+impl DefinitionTokenizer {
+    pub fn new(options: TokenizerOptions) -> Self {
         Self {
             meta: TokenizerMeta {
-                name: DEFINITION_TOKENIZER_NAME.to_string(),
+                name: options.name.unwrap_or_else(|| DEFINITION_TOKENIZER_NAME.to_string()),
                 kind: TokenizerKind::Block,
-                priority: TokenizerPriority::ATOMIC,
+                priority: options.priority.unwrap_or(TokenizerPriority::ATOMIC),
             },
         }
     }
 }
+
 
 impl Tokenizer for DefinitionTokenizer {
     fn r#type(&self) -> TokenizerType {
@@ -62,7 +69,7 @@ impl MatchBlockHook for DefinitionMatchHook<'_> {
         r#match::eat_continuation_text(line, token)
     }
 
-    fn on_close(&mut self, token: &BlockToken) -> Option<OnCloseResult> {
+    fn on_close(&mut self, token: &mut BlockToken) -> Option<OnCloseResult> {
         r#match::on_close(token, self.api)
     }
 }

@@ -246,6 +246,7 @@ dependencies = [
  "yozora-ast",
  "yozora-character",
  "yozora-core-tokenizer",
+ "yozora-tokenizer-fenced-block",
 ]
 
 [[package]]
@@ -325,6 +326,7 @@ name = "yozora-tokenizer-fenced-block"
 version = "0.1.0"
 dependencies = [
  "yozora-ast",
+ "yozora-character",
  "yozora-core-tokenizer",
 ]
 
@@ -335,6 +337,7 @@ dependencies = [
  "yozora-ast",
  "yozora-character",
  "yozora-core-tokenizer",
+ "yozora-tokenizer-fenced-block",
 ]
 
 [[package]]
@@ -472,6 +475,7 @@ dependencies = [
  "yozora-ast",
  "yozora-character",
  "yozora-core-tokenizer",
+ "yozora-tokenizer-fenced-block",
 ]
 
 [[package]]

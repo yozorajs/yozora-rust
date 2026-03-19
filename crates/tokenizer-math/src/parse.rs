@@ -1,15 +1,7 @@
 use yozora_ast::{Math, Node};
 use yozora_character::calc_string_from_node_points;
-use yozora_core_tokenizer::{
-    merge_content_lines_faithfully, BlockToken, ParseBlockPhaseApi, PhrasingContentLine,
-};
-
-#[derive(Debug, Clone)]
-pub(crate) struct MathTokenData {
-    pub marker_count: usize,
-    pub indent: usize,
-    pub lines: Vec<PhrasingContentLine>,
-}
+use yozora_core_tokenizer::{merge_content_lines_faithfully, BlockToken, ParseBlockPhaseApi};
+use yozora_tokenizer_fenced_block::FencedBlockTokenData;
 
 pub(crate) fn parse_math_tokens(
     tokens: &[BlockToken],
@@ -18,7 +10,7 @@ pub(crate) fn parse_math_tokens(
     let mut nodes = Vec::with_capacity(tokens.len());
 
     for token in tokens {
-        let Some(data) = token.data_as::<MathTokenData>() else {
+        let Some(data) = token.data_as::<FencedBlockTokenData>() else {
             continue;
         };
 

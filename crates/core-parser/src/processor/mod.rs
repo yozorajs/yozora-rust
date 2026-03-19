@@ -655,7 +655,7 @@ fn parseInlineTokens_with_context(
 
         let hook = parse_inline_hook_map
             .get(tokenizer_name)
-            .unwrap_or_else(|| panic!("[parseBlock] tokenizer '{tokenizer_name}' not found"));
+            .unwrap_or_else(|| panic!("[parseInline] tokenizer '{tokenizer_name}' not found"));
         results.extend(hook.parse(&tokens[i0..i1]));
 
         i0 = i1;

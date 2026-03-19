@@ -12,15 +12,22 @@ pub struct FootnoteDefinitionTokenizer {
 
 impl Default for FootnoteDefinitionTokenizer {
     fn default() -> Self {
+        Self::new(TokenizerOptions::default())
+    }
+}
+
+impl FootnoteDefinitionTokenizer {
+    pub fn new(options: TokenizerOptions) -> Self {
         Self {
             meta: TokenizerMeta {
-                name: FOOTNOTE_DEFINITION_TOKENIZER_NAME.to_string(),
+                name: options.name.unwrap_or_else(|| FOOTNOTE_DEFINITION_TOKENIZER_NAME.to_string()),
                 kind: TokenizerKind::Block,
-                priority: TokenizerPriority::CONTAINING_BLOCK,
+                priority: options.priority.unwrap_or(TokenizerPriority::CONTAINING_BLOCK),
             },
         }
     }
 }
+
 
 impl Tokenizer for FootnoteDefinitionTokenizer {
     fn r#type(&self) -> TokenizerType {
@@ -63,7 +70,7 @@ impl MatchBlockHook for FootnoteDefinitionMatchHook<'_> {
         r#match::eat_continuation_text(line, token, self.indent)
     }
 
-    fn on_close(&mut self, token: &BlockToken) -> Option<OnCloseResult> {
+    fn on_close(&mut self, token: &mut BlockToken) -> Option<OnCloseResult> {
         r#match::on_close(token, self.api);
         None
     }

@@ -12,15 +12,22 @@ pub struct ThematicBreakTokenizer {
 
 impl Default for ThematicBreakTokenizer {
     fn default() -> Self {
+        Self::new(TokenizerOptions::default())
+    }
+}
+
+impl ThematicBreakTokenizer {
+    pub fn new(options: TokenizerOptions) -> Self {
         Self {
             meta: TokenizerMeta {
-                name: THEMATIC_BREAK_TOKENIZER_NAME.to_string(),
+                name: options.name.unwrap_or_else(|| THEMATIC_BREAK_TOKENIZER_NAME.to_string()),
                 kind: TokenizerKind::Block,
-                priority: TokenizerPriority::ATOMIC,
+                priority: options.priority.unwrap_or(TokenizerPriority::ATOMIC),
             },
         }
     }
 }
+
 
 impl Tokenizer for ThematicBreakTokenizer {
     fn r#type(&self) -> TokenizerType {

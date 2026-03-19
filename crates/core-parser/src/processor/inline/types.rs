@@ -1,14 +1,14 @@
 use yozora_core_tokenizer::{
-    genFindDelimiter, InlineToken, IsDelimiterPairResult, MatchInlineHook,
-    ProcessDelimiterPairResult, TokenDelimiter,
+    FindDelimiterGenerator, InlineToken, IsDelimiterPairResult, MatchInlineHook,
+    ProcessDelimiterPairResult,
+    TokenDelimiter,
 };
 
 pub struct MatchInlineProcessorHook<'a> {
     pub name: String,
     pub priority: i32,
-    pub hook: Box<dyn MatchInlineHook + 'a>,
-    find_delimiter_last_end_index: Option<usize>,
-    find_delimiter_last_delimiter: Option<TokenDelimiter>,
+    pub hook: Box<dyn MatchInlineHook<'a> + 'a>,
+    find_delimiter: Box<dyn FindDelimiterGenerator + 'a>,
 }
 
 #[allow(non_snake_case)]
@@ -16,24 +16,20 @@ impl<'a> MatchInlineProcessorHook<'a> {
     pub fn new(
         name: impl Into<String>,
         priority: i32,
-        hook: Box<dyn MatchInlineHook + 'a>,
+        hook: Box<dyn MatchInlineHook<'a> + 'a>,
     ) -> Self {
+        let find_delimiter = hook.findDelimiter();
+
         Self {
             name: name.into(),
             priority,
             hook,
-            find_delimiter_last_end_index: None,
-            find_delimiter_last_delimiter: None,
+            find_delimiter,
         }
     }
 
     pub fn findDelimiter(&mut self, range_index: (usize, usize)) -> Option<TokenDelimiter> {
-        genFindDelimiter(
-            range_index,
-            &mut self.find_delimiter_last_end_index,
-            &mut self.find_delimiter_last_delimiter,
-            |start_index, end_index| self.hook.findDelimiter((start_index, end_index)),
-        )
+        self.find_delimiter.next(range_index)
     }
 
     pub fn isDelimiterPair(
@@ -61,8 +57,6 @@ impl<'a> MatchInlineProcessorHook<'a> {
     }
 
     pub fn reset(&mut self) {
-        self.find_delimiter_last_end_index = None;
-        self.find_delimiter_last_delimiter = None;
-        self.hook.reset();
+        self.find_delimiter = self.hook.findDelimiter();
     }
 }

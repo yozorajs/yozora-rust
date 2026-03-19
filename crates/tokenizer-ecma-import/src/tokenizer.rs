@@ -12,15 +12,22 @@ pub struct EcmaImportTokenizer {
 
 impl Default for EcmaImportTokenizer {
     fn default() -> Self {
+        Self::new(TokenizerOptions::default())
+    }
+}
+
+impl EcmaImportTokenizer {
+    pub fn new(options: TokenizerOptions) -> Self {
         Self {
             meta: TokenizerMeta {
-                name: ECMA_IMPORT_TOKENIZER_NAME.to_string(),
+                name: options.name.unwrap_or_else(|| ECMA_IMPORT_TOKENIZER_NAME.to_string()),
                 kind: TokenizerKind::Block,
-                priority: TokenizerPriority::ATOMIC,
+                priority: options.priority.unwrap_or(TokenizerPriority::ATOMIC),
             },
         }
     }
 }
+
 
 impl Tokenizer for EcmaImportTokenizer {
     fn r#type(&self) -> TokenizerType {

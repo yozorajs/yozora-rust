@@ -15,15 +15,22 @@ pub struct TextTokenizer {
 
 impl Default for TextTokenizer {
     fn default() -> Self {
+        Self::new(TokenizerOptions::default())
+    }
+}
+
+impl TextTokenizer {
+    pub fn new(options: TokenizerOptions) -> Self {
         Self {
             meta: TokenizerMeta {
-                name: TEXT_TOKENIZER_NAME.to_string(),
+                name: options.name.unwrap_or_else(|| TEXT_TOKENIZER_NAME.to_string()),
                 kind: TokenizerKind::Inline,
-                priority: TokenizerPriority::FALLBACK,
+                priority: options.priority.unwrap_or(TokenizerPriority::FALLBACK),
             },
         }
     }
 }
+
 
 impl Tokenizer for TextTokenizer {
     fn r#type(&self) -> TokenizerType {
@@ -39,29 +46,13 @@ impl Tokenizer for TextTokenizer {
     }
 }
 
-struct TextMatchHook {
-    last_end_index: Option<usize>,
-    last_delimiter: Option<TokenDelimiter>,
-}
+struct TextMatchHook;
 
-impl MatchInlineHook for TextMatchHook {
-    fn reset(&mut self) {
-        self.last_end_index = None;
-        self.last_delimiter = None;
-    }
-
-    fn findDelimiter(&mut self, range_index: (usize, usize)) -> Option<TokenDelimiter> {
-        let mut last_end_index = self.last_end_index;
-        let mut last_delimiter = self.last_delimiter.clone();
-        let delimiter = genFindDelimiter(
-            range_index,
-            &mut last_end_index,
-            &mut last_delimiter,
+impl<'a> MatchInlineHook<'a> for TextMatchHook {
+    fn findDelimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
+        Box::new(genFindDelimiter(
             |start_index, end_index| Some(r#match::find_text_delimiter(start_index, end_index)),
-        );
-        self.last_end_index = last_end_index;
-        self.last_delimiter = last_delimiter;
-        delimiter
+        ))
     }
 
     fn processSingleDelimiter(&self, delimiter: &TokenDelimiter) -> Vec<InlineToken> {
@@ -138,11 +129,11 @@ fn normalize_soft_line_break_whitespace(input: String) -> String {
 }
 
 impl InlineTokenizer for TextTokenizer {
-    fn r#match<'a>(&'a self, _api: &'a dyn MatchInlinePhaseApi) -> Box<dyn MatchInlineHook + 'a> {
-        Box::new(TextMatchHook {
-            last_end_index: None,
-            last_delimiter: None,
-        })
+    fn r#match<'a>(
+        &'a self,
+        _api: &'a dyn MatchInlinePhaseApi,
+    ) -> Box<dyn MatchInlineHook<'a> + 'a> {
+        Box::new(TextMatchHook)
     }
 
     fn parse<'a>(&'a self, api: &'a dyn ParseInlinePhaseApi) -> Box<dyn ParseInlineHook + 'a> {

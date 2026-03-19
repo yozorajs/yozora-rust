@@ -1,5 +1,9 @@
 use yozora_ast::{Code, Node, Point, Position, CODE_TYPE};
-use yozora_character::VirtualCodePoint;
+use yozora_character::{
+    calc_escaped_string_from_node_points, calc_string_from_node_points,
+    calc_trim_boundary_of_code_points, is_space_character, is_whitespace_character, AsciiCodePoint,
+    NodePoint,
+};
 use yozora_core_tokenizer::engine::{
     BlockToken, EatContinuationTextResult, EatOpenerResult, EngineBlockTokenizer, EngineTokenizer,
     MatchBlockHook, MatchBlockPhaseApi as EngineMatchBlockPhaseApi, ParseBlockHook,
@@ -59,8 +63,11 @@ impl BlockTokenizer for FencedCodeTokenizer {
 
 #[derive(Debug, Clone)]
 struct TokenData {
-    lines: Vec<String>,
-    latest: r#match::FencedCodeToken,
+    marker: i32,
+    marker_count: usize,
+    indent: usize,
+    info_string: Vec<NodePoint>,
+    lines: Vec<PhrasingContentLine>,
 }
 
 impl EngineTokenizer for FencedCodeTokenizer {
@@ -89,13 +96,47 @@ impl MatchBlockHook for FencedCodeMatchHook {
         line: &PhrasingContentLine,
         _parent_token: &BlockToken,
     ) -> Option<EatOpenerResult> {
-        let source = line_to_string(line);
-        let refs = [source.as_str()];
-        let matched = r#match::match_fenced_code_token(&refs)?;
+        if line.count_of_precede_spaces >= 4 {
+            return None;
+        }
+
+        let first_non_whitespace_index = line.first_non_whitespace_index;
+        if first_non_whitespace_index + 2 >= line.end_index {
+            return None;
+        }
+
+        let node_points = line.node_points.as_ref();
+        let marker = node_points[first_non_whitespace_index].code_point;
+        if marker != AsciiCodePoint::BACKTICK as i32 && marker != AsciiCodePoint::TILDE as i32 {
+            return None;
+        }
+
+        let mut i = first_non_whitespace_index + 1;
+        while i < line.end_index && node_points[i].code_point == marker {
+            i += 1;
+        }
+
+        let marker_count = i - first_non_whitespace_index;
+        if marker_count < 3 {
+            return None;
+        }
+
+        let (left, right) = calc_trim_boundary_of_code_points(node_points, i, line.end_index);
+        let info_string = node_points[left..right].to_vec();
+        if marker == AsciiCodePoint::BACKTICK as i32
+            && info_string
+                .iter()
+                .any(|point| point.code_point == AsciiCodePoint::BACKTICK as i32)
+        {
+            return None;
+        }
 
         let token = BlockToken::new("", CODE_TYPE, calc_line_position(line)).with_data(TokenData {
-            lines: vec![source],
-            latest: matched,
+            marker,
+            marker_count,
+            indent: first_non_whitespace_index.saturating_sub(line.start_index),
+            info_string,
+            lines: Vec::new(),
         });
 
         Some(EatOpenerResult {
@@ -111,25 +152,53 @@ impl MatchBlockHook for FencedCodeMatchHook {
         token: &mut BlockToken,
         _parent_token: &BlockToken,
     ) -> EatContinuationTextResult {
-        let Some(data) = token.data_as::<TokenData>() else {
+        let Some(data) = token.data_as::<TokenData>().cloned() else {
             return EatContinuationTextResult::NotMatched;
         };
 
-        let mut lines = data.lines.clone();
-        lines.push(line_to_string(line));
+        let node_points = line.node_points.as_ref();
+        if line.count_of_precede_spaces < 4 && line.first_non_whitespace_index < line.end_index {
+            let mut i = line.first_non_whitespace_index;
+            while i < line.end_index && node_points[i].code_point == data.marker {
+                i += 1;
+            }
 
-        let refs = lines.iter().map(String::as_str).collect::<Vec<_>>();
-        let Some(matched) = r#match::match_fenced_code_token(&refs) else {
-            return EatContinuationTextResult::NotMatched;
-        };
+            let marker_count = i - line.first_non_whitespace_index;
+            if marker_count >= data.marker_count {
+                while i < line.end_index && is_space_character(node_points[i].code_point) {
+                    i += 1;
+                }
 
-        if matched.consumed_lines < lines.len() {
-            return EatContinuationTextResult::NotMatched;
+                if i + 1 >= line.end_index {
+                    return EatContinuationTextResult::Closing {
+                        next_index: line.end_index,
+                    };
+                }
+            }
         }
 
+        let first_index = std::cmp::min(
+            line.start_index + data.indent,
+            std::cmp::min(
+                line.first_non_whitespace_index,
+                line.end_index.saturating_sub(1),
+            ),
+        );
+        let mut lines = data.lines;
+        lines.push(PhrasingContentLine {
+            node_points: line.node_points.clone(),
+            start_index: first_index,
+            end_index: line.end_index,
+            first_non_whitespace_index: line.first_non_whitespace_index,
+            count_of_precede_spaces: line.count_of_precede_spaces,
+        });
+
         token.data = std::sync::Arc::new(TokenData {
+            marker: data.marker,
+            marker_count: data.marker_count,
+            indent: data.indent,
+            info_string: data.info_string,
             lines,
-            latest: matched,
         });
         update_token_end_position(token, line);
 
@@ -152,13 +221,23 @@ impl ParseBlockHook for FencedCodeParseHook<'_> {
                 continue;
             };
 
-            let mut node = parse::parse_fenced_code_token(data.latest.clone()).node;
-            if let Node::Code(Code { position, .. }) = &mut node {
-                if self.api.should_reserve_position() {
-                    *position = token.position.clone();
-                }
+            let (lang, meta) = parse_info_string(&data.info_string);
+            let contents = merge_content_lines_faithfully(&data.lines);
+            let mut value = calc_string_from_node_points(&contents, 0, contents.len(), false);
+            if !value.ends_with('\n') {
+                value.push('\n');
             }
-            nodes.push(node);
+
+            nodes.push(Node::Code(Code {
+                position: if self.api.should_reserve_position() {
+                    token.position.clone()
+                } else {
+                    None
+                },
+                value,
+                lang,
+                meta,
+            }));
         }
 
         nodes
@@ -181,28 +260,33 @@ impl EngineBlockTokenizer for FencedCodeTokenizer {
     }
 }
 
-fn line_to_string(line: &PhrasingContentLine) -> String {
-    let mut source = String::new();
-    for point in line
-        .node_points
-        .iter()
-        .skip(line.start_index)
-        .take(line.end_index.saturating_sub(line.start_index))
-    {
-        let code_point = point.code_point;
-        let ch = if code_point == VirtualCodePoint::Space as i32 {
-            Some(' ')
-        } else if code_point == VirtualCodePoint::LineEnd as i32 {
-            Some('\n')
-        } else {
-            char::from_u32(code_point as u32)
-        };
-
-        if let Some(ch) = ch {
-            source.push(ch);
-        }
+fn parse_info_string(info_string: &[NodePoint]) -> (Option<String>, Option<String>) {
+    let mut i = 0usize;
+    while i < info_string.len() && !is_whitespace_character(info_string[i].code_point) {
+        i += 1;
     }
-    source
+
+    let lang = calc_escaped_string_from_node_points(info_string, 0, i, true);
+    while i < info_string.len() && is_whitespace_character(info_string[i].code_point) {
+        i += 1;
+    }
+    let meta = calc_escaped_string_from_node_points(info_string, i, info_string.len(), true);
+
+    (
+        if lang.is_empty() { None } else { Some(lang) },
+        if meta.is_empty() { None } else { Some(meta) },
+    )
+}
+
+fn merge_content_lines_faithfully(lines: &[PhrasingContentLine]) -> Vec<NodePoint> {
+    let mut contents = Vec::new();
+    for line in lines {
+        if line.start_index >= line.end_index {
+            continue;
+        }
+        contents.extend_from_slice(&line.node_points[line.start_index..line.end_index]);
+    }
+    contents
 }
 
 fn calc_line_position(line: &PhrasingContentLine) -> Option<Position> {

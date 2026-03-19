@@ -49,7 +49,7 @@ fn fixture_runner_smoke_case() {
     );
 
     let parse_options = Some(ParseOptions {
-        should_reserve_position: matches!(assert_level, AssertLevel::L2),
+        shouldReservePosition: Some(matches!(assert_level, AssertLevel::L2)),
         ..ParseOptions::default()
     });
 

@@ -3,6 +3,7 @@ pub mod phase;
 
 use yozora_ast::{Node, Position};
 
+use crate::engine::{EngineBlockTokenizer, EngineInlineFallbackTokenizer, EngineInlineTokenizer};
 pub use phase::*;
 
 #[derive(Debug, Clone)]
@@ -118,8 +119,8 @@ pub trait InlineFallbackTokenizer: InlineTokenizer {
 }
 
 pub enum AnyTokenizer {
-    Block(Box<dyn BlockTokenizer>),
-    Inline(Box<dyn InlineTokenizer>),
+    Block(Box<dyn EngineBlockTokenizer>),
+    Inline(Box<dyn EngineInlineTokenizer>),
 }
 
 impl AnyTokenizer {
@@ -132,22 +133,22 @@ impl AnyTokenizer {
 
     pub fn name(&self) -> &str {
         match self {
-            Self::Block(t) => &t.meta().name,
-            Self::Inline(t) => &t.meta().name,
+            Self::Block(t) => t.name(),
+            Self::Inline(t) => t.name(),
         }
     }
 
     pub fn priority(&self) -> i32 {
         match self {
-            Self::Block(t) => t.meta().priority,
-            Self::Inline(t) => t.meta().priority,
+            Self::Block(t) => t.priority(),
+            Self::Inline(t) => t.priority(),
         }
     }
 }
 
 pub enum AnyFallbackTokenizer {
-    Block(Box<dyn BlockFallbackTokenizer>),
-    Inline(Box<dyn InlineFallbackTokenizer>),
+    Block(Box<dyn EngineBlockTokenizer>),
+    Inline(Box<dyn EngineInlineFallbackTokenizer>),
 }
 
 pub fn leading_indent_columns(line: &str) -> usize {
@@ -225,8 +226,8 @@ impl AnyFallbackTokenizer {
 
     pub fn name(&self) -> &str {
         match self {
-            Self::Block(t) => &t.meta().name,
-            Self::Inline(t) => &t.meta().name,
+            Self::Block(t) => t.name(),
+            Self::Inline(t) => t.name(),
         }
     }
 }

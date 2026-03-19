@@ -1,9 +1,10 @@
 use yozora_ast::{Heading, Node, Point, Position, HEADING_TYPE};
-use yozora_character::VirtualCodePoint;
+use yozora_character::{is_whitespace_character, AsciiCodePoint, VirtualCodePoint};
 use yozora_core_tokenizer::engine::{
-    BlockToken, EatContinuationTextResult, EatOpenerResult, EngineBlockTokenizer, EngineTokenizer,
-    MatchBlockHook, MatchBlockPhaseApi as EngineMatchBlockPhaseApi, OnCloseResult, ParseBlockHook,
-    ParseBlockPhaseApi as EngineParseBlockPhaseApi, PhrasingContentLine, TokenizerType,
+    BlockToken, EatAndInterruptPreviousSiblingResult, EatOpenerResult, EngineBlockTokenizer,
+    EngineTokenizer, MatchBlockHook, MatchBlockPhaseApi as EngineMatchBlockPhaseApi,
+    ParseBlockHook, ParseBlockPhaseApi as EngineParseBlockPhaseApi, PhrasingContentLine,
+    RemainingSibling, TokenizerType,
 };
 use yozora_core_tokenizer::{
     BlockTokenizeResult, BlockTokenizer, MatchBlockPhaseApi, Tokenizer, TokenizerKind,
@@ -25,7 +26,7 @@ impl Default for SetextHeadingTokenizer {
             meta: TokenizerMeta {
                 name: SETEXT_HEADING_TOKENIZER_NAME.to_string(),
                 kind: TokenizerKind::Block,
-                priority: 5,
+                priority: 7,
             },
         }
     }
@@ -59,9 +60,8 @@ impl BlockTokenizer for SetextHeadingTokenizer {
 
 #[derive(Debug, Clone)]
 struct TokenData {
-    lines: Vec<String>,
-    raw_lines: Vec<PhrasingContentLine>,
-    latest: Option<r#match::SetextHeadingToken>,
+    marker: i32,
+    lines: Vec<PhrasingContentLine>,
 }
 
 impl EngineTokenizer for SetextHeadingTokenizer {
@@ -78,86 +78,72 @@ impl EngineTokenizer for SetextHeadingTokenizer {
     }
 }
 
-struct SetextHeadingMatchHook;
+struct SetextHeadingMatchHook<'a> {
+    api: &'a dyn EngineMatchBlockPhaseApi,
+}
 
-impl MatchBlockHook for SetextHeadingMatchHook {
+impl MatchBlockHook for SetextHeadingMatchHook<'_> {
     fn is_containing_block(&self) -> bool {
         false
     }
 
     fn eat_opener(
         &mut self,
-        line: &PhrasingContentLine,
+        _line: &PhrasingContentLine,
         _parent_token: &BlockToken,
     ) -> Option<EatOpenerResult> {
-        let source = line_to_string(line);
-        if !looks_like_setext_start(&source) {
-            return None;
-        }
-
-        let token =
-            BlockToken::new("", HEADING_TYPE, calc_line_position(line)).with_data(TokenData {
-                lines: vec![source],
-                raw_lines: vec![line.clone()],
-                latest: None,
-            });
-
-        Some(EatOpenerResult {
-            token,
-            next_index: line.end_index,
-            saturated: false,
-        })
+        None
     }
 
-    fn eat_continuation_text(
+    fn eat_and_interrupt_previous_sibling(
         &mut self,
         line: &PhrasingContentLine,
-        token: &mut BlockToken,
+        prev_sibling_token: &BlockToken,
         _parent_token: &BlockToken,
-    ) -> EatContinuationTextResult {
-        let Some(data) = token.data_as::<TokenData>() else {
-            return EatContinuationTextResult::NotMatched;
-        };
-
-        let mut lines = data.lines.clone();
-        let mut raw_lines = data.raw_lines.clone();
-        let current_line = line_to_string(line);
-        lines.push(current_line.clone());
-        raw_lines.push(line.clone());
-
-        let refs = lines.iter().map(String::as_str).collect::<Vec<_>>();
-        let matched = r#match::match_setext_heading_token(&refs);
-
-        if let Some(matched) = &matched {
-            if matched.consumed_lines < lines.len() {
-                return EatContinuationTextResult::NotMatched;
-            }
-        } else if data.latest.is_some() {
-            return EatContinuationTextResult::NotMatched;
-        } else if !looks_like_setext_continuation(&current_line) {
-            return EatContinuationTextResult::FailedAndRollback { lines: raw_lines };
-        }
-
-        token.data = std::sync::Arc::new(TokenData {
-            lines,
-            raw_lines,
-            latest: matched,
-        });
-        update_token_end_position(token, line);
-
-        EatContinuationTextResult::Opening {
-            next_index: line.end_index,
-        }
-    }
-
-    fn on_close(&mut self, token: &BlockToken) -> Option<OnCloseResult> {
-        let data = token.data_as::<TokenData>()?;
-        if data.latest.is_some() {
+    ) -> Option<EatAndInterruptPreviousSiblingResult> {
+        if line.count_of_precede_spaces >= 4 || line.first_non_whitespace_index >= line.end_index {
             return None;
         }
 
-        Some(OnCloseResult::FailedAndRollback {
-            lines: data.raw_lines.clone(),
+        let node_points = line.node_points.as_ref();
+        let mut marker: Option<i32> = None;
+        let mut has_potential_internal_space = false;
+
+        for i in line.first_non_whitespace_index..line.end_index {
+            let code_point = node_points[i].code_point;
+            if code_point == VirtualCodePoint::LineEnd as i32 {
+                break;
+            }
+
+            if is_whitespace_character(code_point) {
+                has_potential_internal_space = true;
+                continue;
+            }
+
+            if has_potential_internal_space
+                || (code_point != AsciiCodePoint::EQUALS_SIGN as i32
+                    && code_point != AsciiCodePoint::MINUS_SIGN as i32)
+                || marker.is_some_and(|m| m != code_point)
+            {
+                marker = None;
+                break;
+            }
+
+            marker = Some(code_point);
+        }
+
+        let marker = marker?;
+        let lines = self.api.extract_phrasing_lines(prev_sibling_token)?;
+        let first_line = lines.first()?;
+
+        let token = BlockToken::new("", HEADING_TYPE, calc_spanning_position(first_line, line))
+            .with_data(TokenData { marker, lines });
+
+        Some(EatAndInterruptPreviousSiblingResult {
+            token,
+            next_index: line.end_index,
+            saturated: true,
+            remaining_sibling: RemainingSibling::None,
         })
     }
 }
@@ -168,23 +154,31 @@ struct SetextHeadingParseHook<'a> {
 
 impl ParseBlockHook for SetextHeadingParseHook<'_> {
     fn parse(&self, tokens: &[BlockToken]) -> Vec<Node> {
-        let mut nodes = Vec::new();
+        let mut nodes = Vec::with_capacity(tokens.len());
 
         for token in tokens {
             let Some(data) = token.data_as::<TokenData>() else {
                 continue;
             };
-            let Some(matched) = data.latest.clone() else {
-                continue;
+
+            let depth = if data.marker == AsciiCodePoint::EQUALS_SIGN as i32 {
+                1
+            } else {
+                2
             };
 
-            let mut node = parse::parse_setext_heading_token(matched).node;
-            if let Node::Heading(Heading { position, .. }) = &mut node {
-                if self.api.should_reserve_position() {
-                    *position = token.position.clone();
-                }
-            }
-            nodes.push(node);
+            let contents = merge_and_strip_content_lines(&data.lines);
+            let children = self.api.process_inlines(&contents);
+            nodes.push(Node::Heading(Heading {
+                position: if self.api.should_reserve_position() {
+                    token.position.clone()
+                } else {
+                    None
+                },
+                identifier: None,
+                depth,
+                children,
+            }));
         }
 
         nodes
@@ -194,9 +188,9 @@ impl ParseBlockHook for SetextHeadingParseHook<'_> {
 impl EngineBlockTokenizer for SetextHeadingTokenizer {
     fn create_match_hook<'a>(
         &'a self,
-        _api: &'a dyn EngineMatchBlockPhaseApi,
+        api: &'a dyn EngineMatchBlockPhaseApi,
     ) -> Box<dyn MatchBlockHook + 'a> {
-        Box::new(SetextHeadingMatchHook)
+        Box::new(SetextHeadingMatchHook { api })
     }
 
     fn create_parse_hook<'a>(
@@ -207,56 +201,56 @@ impl EngineBlockTokenizer for SetextHeadingTokenizer {
     }
 }
 
-fn looks_like_setext_start(line: &str) -> bool {
-    let leading_spaces = line.chars().take_while(|ch| *ch == ' ').count();
-    if leading_spaces >= 4 {
-        return false;
+fn merge_and_strip_content_lines(
+    lines: &[PhrasingContentLine],
+) -> Vec<yozora_character::NodePoint> {
+    if lines.is_empty() {
+        return Vec::new();
     }
 
-    !line.trim().is_empty()
-}
+    let mut merged = Vec::new();
+    let last_index = lines.len() - 1;
 
-fn looks_like_setext_continuation(line: &str) -> bool {
-    let leading_spaces = line.chars().take_while(|ch| *ch == ' ').count();
-    if leading_spaces >= 4 {
-        return false;
-    }
-
-    !line.trim().is_empty()
-}
-
-fn line_to_string(line: &PhrasingContentLine) -> String {
-    let mut source = String::new();
-    for point in line
-        .node_points
-        .iter()
-        .skip(line.start_index)
-        .take(line.end_index.saturating_sub(line.start_index))
-    {
-        let code_point = point.code_point;
-        let ch = if code_point == VirtualCodePoint::Space as i32 {
-            Some(' ')
-        } else if code_point == VirtualCodePoint::LineEnd as i32 {
-            Some('\n')
-        } else {
-            char::from_u32(code_point as u32)
-        };
-
-        if let Some(ch) = ch {
-            source.push(ch);
+    for line in &lines[..last_index] {
+        if line.first_non_whitespace_index >= line.end_index {
+            continue;
         }
+        merged
+            .extend_from_slice(&line.node_points[line.first_non_whitespace_index..line.end_index]);
     }
-    source
+
+    let last = &lines[last_index];
+    if last.first_non_whitespace_index >= last.end_index {
+        return merged;
+    }
+
+    let node_points = last.node_points.as_ref();
+    let mut right = last.end_index;
+    while right > last.first_non_whitespace_index {
+        let idx = right - 1;
+        if !is_whitespace_character(node_points[idx].code_point) {
+            break;
+        }
+        right -= 1;
+    }
+
+    if right > last.first_non_whitespace_index {
+        merged.extend_from_slice(&node_points[last.first_non_whitespace_index..right]);
+    }
+
+    merged
 }
 
-fn calc_line_position(line: &PhrasingContentLine) -> Option<Position> {
-    if line.start_index >= line.end_index {
+fn calc_spanning_position(
+    first: &PhrasingContentLine,
+    last: &PhrasingContentLine,
+) -> Option<Position> {
+    if first.start_index >= first.end_index || last.start_index >= last.end_index {
         return None;
     }
 
-    let start = line.node_points[line.start_index];
-    let end = line.node_points[line.end_index - 1];
-
+    let start = first.node_points[first.start_index];
+    let end = last.node_points[last.end_index - 1];
     Some(Position {
         start: Point {
             line: start.line,
@@ -270,20 +264,4 @@ fn calc_line_position(line: &PhrasingContentLine) -> Option<Position> {
         },
         indent: None,
     })
-}
-
-fn update_token_end_position(token: &mut BlockToken, line: &PhrasingContentLine) {
-    let Some(position) = token.position.as_mut() else {
-        return;
-    };
-    if line.start_index >= line.end_index {
-        return;
-    }
-
-    let end = line.node_points[line.end_index - 1];
-    position.end = Point {
-        line: end.line,
-        column: end.column + 1,
-        offset: Some(end.offset + 1),
-    };
 }

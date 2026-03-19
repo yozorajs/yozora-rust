@@ -1,9 +1,11 @@
 use yozora_ast::{Blockquote, Node, Point, Position, BLOCKQUOTE_TYPE};
-use yozora_character::VirtualCodePoint;
+use yozora_character::{is_space_character, AsciiCodePoint, VirtualCodePoint};
 use yozora_core_tokenizer::engine::{
-    BlockToken, EatContinuationTextResult, EatOpenerResult, EngineBlockTokenizer, EngineTokenizer,
-    MatchBlockHook, MatchBlockPhaseApi as EngineMatchBlockPhaseApi, ParseBlockHook,
-    ParseBlockPhaseApi as EngineParseBlockPhaseApi, PhrasingContentLine, TokenizerType,
+    BlockToken, EatAndInterruptPreviousSiblingResult, EatContinuationTextResult, EatOpenerResult,
+    EngineBlockTokenizer, EngineTokenizer, MatchBlockHook,
+    MatchBlockPhaseApi as EngineMatchBlockPhaseApi, ParseBlockHook,
+    ParseBlockPhaseApi as EngineParseBlockPhaseApi, PhrasingContentLine, RemainingSibling,
+    TokenizerType,
 };
 use yozora_core_tokenizer::{
     BlockTokenizeResult, BlockTokenizer, MatchBlockPhaseApi, Tokenizer, TokenizerKind,
@@ -57,12 +59,6 @@ impl BlockTokenizer for BlockquoteTokenizer {
     }
 }
 
-#[derive(Debug, Clone)]
-struct TokenData {
-    lines: Vec<String>,
-    latest: r#match::BlockquoteToken,
-}
-
 impl EngineTokenizer for BlockquoteTokenizer {
     fn tokenizer_type(&self) -> TokenizerType {
         TokenizerType::Block
@@ -81,7 +77,7 @@ struct BlockquoteMatchHook;
 
 impl MatchBlockHook for BlockquoteMatchHook {
     fn is_containing_block(&self) -> bool {
-        false
+        true
     }
 
     fn eat_opener(
@@ -89,54 +85,95 @@ impl MatchBlockHook for BlockquoteMatchHook {
         line: &PhrasingContentLine,
         _parent_token: &BlockToken,
     ) -> Option<EatOpenerResult> {
-        let source = line_to_string(line);
-        let refs = [source.as_str()];
-        let matched = r#match::match_blockquote_token(&refs)?;
+        if line.count_of_precede_spaces >= 4 {
+            return None;
+        }
 
-        let token =
-            BlockToken::new("", BLOCKQUOTE_TYPE, calc_line_position(line)).with_data(TokenData {
-                lines: vec![source],
-                latest: matched,
-            });
+        let first = line.first_non_whitespace_index;
+        if first >= line.end_index {
+            return None;
+        }
+
+        let marker = line.node_points[first].code_point;
+        if marker != AsciiCodePoint::CLOSE_ANGLE as i32 {
+            return None;
+        }
+
+        let mut next_index = first + 1;
+        if next_index < line.end_index
+            && is_space_character(line.node_points[next_index].code_point)
+        {
+            next_index += 1;
+            if next_index < line.end_index
+                && line.node_points[next_index].code_point == VirtualCodePoint::Space as i32
+            {
+                next_index += 1;
+            }
+        }
+
+        let token = BlockToken::new(
+            "",
+            BLOCKQUOTE_TYPE,
+            calc_segment_position(line, line.start_index, next_index),
+        );
 
         Some(EatOpenerResult {
             token,
-            next_index: line.end_index,
+            next_index,
             saturated: false,
+        })
+    }
+
+    fn eat_and_interrupt_previous_sibling(
+        &mut self,
+        line: &PhrasingContentLine,
+        prev_sibling_token: &BlockToken,
+        _parent_token: &BlockToken,
+    ) -> Option<EatAndInterruptPreviousSiblingResult> {
+        let opener = self.eat_opener(line, prev_sibling_token)?;
+
+        Some(EatAndInterruptPreviousSiblingResult {
+            token: opener.token,
+            next_index: opener.next_index,
+            saturated: opener.saturated,
+            remaining_sibling: RemainingSibling::One(prev_sibling_token.clone()),
         })
     }
 
     fn eat_continuation_text(
         &mut self,
         line: &PhrasingContentLine,
-        token: &mut BlockToken,
-        _parent_token: &BlockToken,
+        _token: &mut BlockToken,
+        parent_token: &BlockToken,
     ) -> EatContinuationTextResult {
-        let Some(data) = token.data_as::<TokenData>() else {
-            return EatContinuationTextResult::NotMatched;
-        };
+        let first = line.first_non_whitespace_index;
+        let marker = line
+            .node_points
+            .get(first)
+            .map(|point| point.code_point)
+            .unwrap_or_default();
 
-        let mut lines = data.lines.clone();
-        lines.push(line_to_string(line));
+        if line.count_of_precede_spaces >= 4
+            || first >= line.end_index
+            || marker != AsciiCodePoint::CLOSE_ANGLE as i32
+        {
+            if parent_token.node_type == BLOCKQUOTE_TYPE {
+                return EatContinuationTextResult::Opening {
+                    next_index: line.start_index,
+                };
+            }
 
-        let refs = lines.iter().map(String::as_str).collect::<Vec<_>>();
-        let Some(matched) = r#match::match_blockquote_token(&refs) else {
-            return EatContinuationTextResult::NotMatched;
-        };
-
-        if matched.consumed_lines < lines.len() {
             return EatContinuationTextResult::NotMatched;
         }
 
-        token.data = std::sync::Arc::new(TokenData {
-            lines,
-            latest: matched,
-        });
-        update_token_end_position(token, line);
-
-        EatContinuationTextResult::Opening {
-            next_index: line.end_index,
+        let mut next_index = first + 1;
+        if next_index < line.end_index
+            && is_space_character(line.node_points[next_index].code_point)
+        {
+            next_index += 1;
         }
+
+        EatContinuationTextResult::Opening { next_index }
     }
 }
 
@@ -149,17 +186,14 @@ impl ParseBlockHook for BlockquoteParseHook<'_> {
         let mut nodes = Vec::with_capacity(tokens.len());
 
         for token in tokens {
-            let Some(data) = token.data_as::<TokenData>() else {
-                continue;
+            let children = self.api.parse_block_tokens(&token.children);
+            let position = if self.api.should_reserve_position() {
+                token.position.clone()
+            } else {
+                None
             };
 
-            let mut node = parse::parse_blockquote_token(data.latest.clone()).node;
-            if let Node::Blockquote(Blockquote { position, .. }) = &mut node {
-                if self.api.should_reserve_position() {
-                    *position = token.position.clone();
-                }
-            }
-            nodes.push(node);
+            nodes.push(Node::Blockquote(Blockquote { position, children }));
         }
 
         nodes
@@ -182,37 +216,17 @@ impl EngineBlockTokenizer for BlockquoteTokenizer {
     }
 }
 
-fn line_to_string(line: &PhrasingContentLine) -> String {
-    let mut source = String::new();
-    for point in line
-        .node_points
-        .iter()
-        .skip(line.start_index)
-        .take(line.end_index.saturating_sub(line.start_index))
-    {
-        let code_point = point.code_point;
-        let ch = if code_point == VirtualCodePoint::Space as i32 {
-            Some(' ')
-        } else if code_point == VirtualCodePoint::LineEnd as i32 {
-            Some('\n')
-        } else {
-            char::from_u32(code_point as u32)
-        };
-
-        if let Some(ch) = ch {
-            source.push(ch);
-        }
-    }
-    source
-}
-
-fn calc_line_position(line: &PhrasingContentLine) -> Option<Position> {
-    if line.start_index >= line.end_index {
+fn calc_segment_position(
+    line: &PhrasingContentLine,
+    start_index: usize,
+    end_index: usize,
+) -> Option<Position> {
+    if start_index >= end_index {
         return None;
     }
 
-    let start = line.node_points[line.start_index];
-    let end = line.node_points[line.end_index - 1];
+    let start = line.node_points[start_index];
+    let end = line.node_points[end_index - 1];
 
     Some(Position {
         start: Point {
@@ -227,20 +241,4 @@ fn calc_line_position(line: &PhrasingContentLine) -> Option<Position> {
         },
         indent: None,
     })
-}
-
-fn update_token_end_position(token: &mut BlockToken, line: &PhrasingContentLine) {
-    let Some(position) = token.position.as_mut() else {
-        return;
-    };
-    if line.start_index >= line.end_index {
-        return;
-    }
-
-    let end = line.node_points[line.end_index - 1];
-    position.end = Point {
-        line: end.line,
-        column: end.column + 1,
-        offset: Some(end.offset + 1),
-    };
 }

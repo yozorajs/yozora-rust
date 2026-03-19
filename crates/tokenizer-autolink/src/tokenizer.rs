@@ -241,7 +241,7 @@ impl ParseInlineHook for AutolinkParseHook<'_> {
 
             nodes.push(Node::Link(Link {
                 position,
-                url: data.url.clone(),
+                url: self.api.format_url(&data.url),
                 title: None,
                 children: vec![Node::Text(Text {
                     position: None,

@@ -243,7 +243,7 @@ impl ParseInlineHook for ImageParseHook<'_> {
 
             nodes.push(Node::Image(Image {
                 position,
-                url: data.url.clone(),
+                url: self.api.format_url(&data.url),
                 title: data.title.clone(),
                 alt: data.alt.clone(),
             }));

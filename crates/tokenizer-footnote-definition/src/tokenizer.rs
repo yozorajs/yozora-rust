@@ -1,5 +1,5 @@
 use yozora_ast::{FootnoteDefinition, Node, Point, Position, FOOTNOTE_DEFINITION_TYPE};
-use yozora_character::VirtualCodePoint;
+use yozora_character::{calc_string_from_node_points, is_whitespace_character, AsciiCodePoint};
 use yozora_core_tokenizer::engine::{
     BlockToken, EatContinuationTextResult, EatOpenerResult, EngineBlockTokenizer, EngineTokenizer,
     MatchBlockHook, MatchBlockPhaseApi as EngineMatchBlockPhaseApi, ParseBlockHook,
@@ -65,8 +65,8 @@ impl BlockTokenizer for FootnoteDefinitionTokenizer {
 
 #[derive(Debug, Clone)]
 struct TokenData {
-    lines: Vec<String>,
-    latest: r#match::FootnoteDefinitionBlockToken,
+    label: String,
+    identifier: String,
 }
 
 impl EngineTokenizer for FootnoteDefinitionTokenizer {
@@ -87,16 +87,9 @@ struct FootnoteDefinitionMatchHook<'a> {
     api: &'a dyn EngineMatchBlockPhaseApi,
 }
 
-impl FootnoteDefinitionMatchHook<'_> {
-    fn register_identifier(&self, token: &r#match::FootnoteDefinitionBlockToken) {
-        self.api
-            .register_footnote_definition_identifier(&token.identifier);
-    }
-}
-
 impl MatchBlockHook for FootnoteDefinitionMatchHook<'_> {
     fn is_containing_block(&self) -> bool {
-        false
+        true
     }
 
     fn eat_opener(
@@ -104,20 +97,46 @@ impl MatchBlockHook for FootnoteDefinitionMatchHook<'_> {
         line: &PhrasingContentLine,
         _parent_token: &BlockToken,
     ) -> Option<EatOpenerResult> {
-        let source = line_to_string(line);
-        let refs = [source.as_str()];
-        let matched = r#match::match_footnote_definition(&refs)?;
-        self.register_identifier(&matched);
+        if line.count_of_precede_spaces >= 4 {
+            return None;
+        }
+
+        let node_points = line.node_points.as_ref();
+        let first_non_whitespace_index = line.first_non_whitespace_index;
+        let Some(label_end) =
+            eat_footnote_label(node_points, first_non_whitespace_index, line.end_index)
+        else {
+            return None;
+        };
+
+        if label_end + 1 >= line.end_index
+            || node_points[label_end + 1].code_point != AsciiCodePoint::COLON as i32
+        {
+            return None;
+        }
+
+        let label = calc_string_from_node_points(
+            node_points,
+            first_non_whitespace_index + 2,
+            label_end,
+            false,
+        )
+        .trim()
+        .to_string();
+        if label.is_empty() {
+            return None;
+        }
+
+        let identifier = normalize_identifier(&label);
+        self.api
+            .register_footnote_definition_identifier(&identifier);
 
         let token = BlockToken::new("", FOOTNOTE_DEFINITION_TYPE, calc_line_position(line))
-            .with_data(TokenData {
-                lines: vec![source],
-                latest: matched,
-            });
+            .with_data(TokenData { label, identifier });
 
         Some(EatOpenerResult {
             token,
-            next_index: line.end_index,
+            next_index: label_end + 2,
             saturated: false,
         })
     }
@@ -128,32 +147,25 @@ impl MatchBlockHook for FootnoteDefinitionMatchHook<'_> {
         token: &mut BlockToken,
         _parent_token: &BlockToken,
     ) -> EatContinuationTextResult {
-        let Some(data) = token.data_as::<TokenData>() else {
-            return EatContinuationTextResult::NotMatched;
-        };
-
-        let mut lines = data.lines.clone();
-        lines.push(line_to_string(line));
-
-        let refs = lines.iter().map(String::as_str).collect::<Vec<_>>();
-        let Some(matched) = r#match::match_footnote_definition(&refs) else {
-            return EatContinuationTextResult::NotMatched;
-        };
-
-        if matched.consumed_lines < lines.len() {
-            return EatContinuationTextResult::NotMatched;
-        }
-
-        self.register_identifier(&matched);
-        token.data = std::sync::Arc::new(TokenData {
-            lines,
-            latest: matched,
-        });
         update_token_end_position(token, line);
 
-        EatContinuationTextResult::Opening {
-            next_index: line.end_index,
+        const INDENT: usize = 4;
+        if line.first_non_whitespace_index >= line.end_index {
+            return EatContinuationTextResult::Opening {
+                next_index: std::cmp::min(
+                    line.end_index.saturating_sub(1),
+                    line.start_index + INDENT,
+                ),
+            };
         }
+
+        if line.count_of_precede_spaces >= INDENT {
+            return EatContinuationTextResult::Opening {
+                next_index: line.start_index + INDENT,
+            };
+        }
+
+        EatContinuationTextResult::NotMatched
     }
 }
 
@@ -170,13 +182,17 @@ impl ParseBlockHook for FootnoteDefinitionParseHook<'_> {
                 continue;
             };
 
-            let mut node = parse::parse_footnote_definition_token(data.latest.clone()).node;
-            if let Node::FootnoteDefinition(FootnoteDefinition { position, .. }) = &mut node {
-                if self.api.should_reserve_position() {
-                    *position = token.position.clone();
-                }
-            }
-            nodes.push(node);
+            let children = self.api.parse_block_tokens(&token.children);
+            nodes.push(Node::FootnoteDefinition(FootnoteDefinition {
+                position: if self.api.should_reserve_position() {
+                    token.position.clone()
+                } else {
+                    None
+                },
+                identifier: data.identifier.clone(),
+                label: data.label.clone(),
+                children,
+            }));
         }
 
         nodes
@@ -199,28 +215,66 @@ impl EngineBlockTokenizer for FootnoteDefinitionTokenizer {
     }
 }
 
-fn line_to_string(line: &PhrasingContentLine) -> String {
-    let mut source = String::new();
-    for point in line
-        .node_points
-        .iter()
-        .skip(line.start_index)
-        .take(line.end_index.saturating_sub(line.start_index))
-    {
-        let code_point = point.code_point;
-        let ch = if code_point == VirtualCodePoint::Space as i32 {
-            Some(' ')
-        } else if code_point == VirtualCodePoint::LineEnd as i32 {
-            Some('\n')
-        } else {
-            char::from_u32(code_point as u32)
-        };
-
-        if let Some(ch) = ch {
-            source.push(ch);
-        }
+fn eat_footnote_label(
+    node_points: &[yozora_character::NodePoint],
+    start_index: usize,
+    end_index: usize,
+) -> Option<usize> {
+    if start_index + 2 >= end_index {
+        return None;
     }
-    source
+
+    if node_points[start_index].code_point != AsciiCodePoint::OPEN_BRACKET as i32
+        || node_points[start_index + 1].code_point != AsciiCodePoint::CARET as i32
+    {
+        return None;
+    }
+
+    let mut i = start_index + 2;
+    let mut has_non_whitespace = false;
+    while i < end_index {
+        let code_point = node_points[i].code_point;
+        if code_point == AsciiCodePoint::BACKSLASH as i32 {
+            if i + 1 >= end_index {
+                return None;
+            }
+
+            if !is_whitespace_character(node_points[i + 1].code_point) {
+                has_non_whitespace = true;
+            }
+            i += 2;
+            continue;
+        }
+
+        if code_point == AsciiCodePoint::OPEN_BRACKET as i32 {
+            return None;
+        }
+
+        if code_point == AsciiCodePoint::CLOSE_BRACKET as i32 {
+            if !has_non_whitespace {
+                return None;
+            }
+            return Some(i);
+        }
+
+        if !is_whitespace_character(code_point) {
+            has_non_whitespace = true;
+        }
+        i += 1;
+    }
+
+    None
+}
+
+fn normalize_identifier(label: &str) -> String {
+    let mut out = String::new();
+    for (idx, chunk) in label.split_whitespace().enumerate() {
+        if idx > 0 {
+            out.push(' ');
+        }
+        out.push_str(chunk);
+    }
+    out.to_ascii_lowercase()
 }
 
 fn calc_line_position(line: &PhrasingContentLine) -> Option<Position> {

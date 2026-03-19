@@ -1,5 +1,5 @@
 use yozora_ast::{Code, Node, Point, Position, CODE_TYPE};
-use yozora_character::VirtualCodePoint;
+use yozora_character::{calc_string_from_node_points, AsciiCodePoint, NodePoint, VirtualCodePoint};
 use yozora_core_tokenizer::engine::{
     BlockToken, EatContinuationTextResult, EatOpenerResult, EngineBlockTokenizer, EngineTokenizer,
     MatchBlockHook, MatchBlockPhaseApi as EngineMatchBlockPhaseApi, ParseBlockHook,
@@ -59,8 +59,7 @@ impl BlockTokenizer for IndentedCodeTokenizer {
 
 #[derive(Debug, Clone)]
 struct TokenData {
-    lines: Vec<String>,
-    latest: r#match::IndentedCodeToken,
+    lines: Vec<PhrasingContentLine>,
 }
 
 impl EngineTokenizer for IndentedCodeTokenizer {
@@ -89,13 +88,35 @@ impl MatchBlockHook for IndentedCodeMatchHook {
         line: &PhrasingContentLine,
         _parent_token: &BlockToken,
     ) -> Option<EatOpenerResult> {
-        let source = line_to_string(line);
-        let refs = [source.as_str()];
-        let matched = r#match::match_indented_code_token(&refs)?;
+        if line.count_of_precede_spaces < 4 {
+            return None;
+        }
+
+        let mut first_index = line.start_index + 4;
+        if line.start_index + 3 < line.node_points.len()
+            && line.node_points[line.start_index].code_point == AsciiCodePoint::SPACE as i32
+            && line.node_points[line.start_index + 3].code_point == VirtualCodePoint::Space as i32
+        {
+            let mut i = line.start_index + 1;
+            while i < line.first_non_whitespace_index {
+                if line.node_points[i].code_point == VirtualCodePoint::Space as i32 {
+                    break;
+                }
+                i += 1;
+            }
+            first_index = i + 4;
+        }
 
         let token = BlockToken::new("", CODE_TYPE, calc_line_position(line)).with_data(TokenData {
-            lines: vec![source],
-            latest: matched,
+            lines: vec![PhrasingContentLine {
+                node_points: line.node_points.clone(),
+                start_index: first_index,
+                end_index: line.end_index,
+                first_non_whitespace_index: line.first_non_whitespace_index,
+                count_of_precede_spaces: line
+                    .count_of_precede_spaces
+                    .saturating_sub(first_index.saturating_sub(line.start_index)),
+            }],
         });
 
         Some(EatOpenerResult {
@@ -111,26 +132,27 @@ impl MatchBlockHook for IndentedCodeMatchHook {
         token: &mut BlockToken,
         _parent_token: &BlockToken,
     ) -> EatContinuationTextResult {
-        let Some(data) = token.data_as::<TokenData>() else {
+        let Some(data) = token.data_as::<TokenData>().cloned() else {
             return EatContinuationTextResult::NotMatched;
         };
 
-        let mut lines = data.lines.clone();
-        lines.push(line_to_string(line));
-
-        let refs = lines.iter().map(String::as_str).collect::<Vec<_>>();
-        let Some(matched) = r#match::match_indented_code_token(&refs) else {
-            return EatContinuationTextResult::NotMatched;
-        };
-
-        if matched.consumed_lines < lines.len() {
+        if line.count_of_precede_spaces < 4 && line.first_non_whitespace_index < line.end_index {
             return EatContinuationTextResult::NotMatched;
         }
 
-        token.data = std::sync::Arc::new(TokenData {
-            lines,
-            latest: matched,
+        let first_index = std::cmp::min(line.end_index.saturating_sub(1), line.start_index + 4);
+        let mut lines = data.lines;
+        lines.push(PhrasingContentLine {
+            node_points: line.node_points.clone(),
+            start_index: first_index,
+            end_index: line.end_index,
+            first_non_whitespace_index: line.first_non_whitespace_index,
+            count_of_precede_spaces: line
+                .count_of_precede_spaces
+                .saturating_sub(first_index.saturating_sub(line.start_index)),
         });
+
+        token.data = std::sync::Arc::new(TokenData { lines });
         update_token_end_position(token, line);
 
         EatContinuationTextResult::Opening {
@@ -152,13 +174,42 @@ impl ParseBlockHook for IndentedCodeParseHook<'_> {
                 continue;
             };
 
-            let mut node = parse::parse_indented_code_token(data.latest.clone()).node;
-            if let Node::Code(Code { position, .. }) = &mut node {
-                if self.api.should_reserve_position() {
-                    *position = token.position.clone();
+            let mut start_line_index = 0usize;
+            let mut end_line_index = data.lines.len();
+
+            while start_line_index < end_line_index {
+                let line = &data.lines[start_line_index];
+                if line.first_non_whitespace_index < line.end_index {
+                    break;
                 }
+                start_line_index += 1;
             }
-            nodes.push(node);
+
+            while start_line_index < end_line_index {
+                let line = &data.lines[end_line_index - 1];
+                if line.first_non_whitespace_index < line.end_index {
+                    break;
+                }
+                end_line_index -= 1;
+            }
+
+            let contents =
+                merge_content_lines_faithfully(&data.lines, start_line_index, end_line_index);
+            let mut value = calc_string_from_node_points(&contents, 0, contents.len(), false);
+            if !value.ends_with('\n') {
+                value.push('\n');
+            }
+
+            nodes.push(Node::Code(Code {
+                position: if self.api.should_reserve_position() {
+                    token.position.clone()
+                } else {
+                    None
+                },
+                value,
+                lang: None,
+                meta: None,
+            }));
         }
 
         nodes
@@ -181,28 +232,23 @@ impl EngineBlockTokenizer for IndentedCodeTokenizer {
     }
 }
 
-fn line_to_string(line: &PhrasingContentLine) -> String {
-    let mut source = String::new();
-    for point in line
-        .node_points
-        .iter()
-        .skip(line.start_index)
-        .take(line.end_index.saturating_sub(line.start_index))
-    {
-        let code_point = point.code_point;
-        let ch = if code_point == VirtualCodePoint::Space as i32 {
-            Some(' ')
-        } else if code_point == VirtualCodePoint::LineEnd as i32 {
-            Some('\n')
-        } else {
-            char::from_u32(code_point as u32)
-        };
-
-        if let Some(ch) = ch {
-            source.push(ch);
-        }
+fn merge_content_lines_faithfully(
+    lines: &[PhrasingContentLine],
+    start_line_index: usize,
+    end_line_index: usize,
+) -> Vec<NodePoint> {
+    if start_line_index >= end_line_index || end_line_index > lines.len() {
+        return Vec::new();
     }
-    source
+
+    let mut contents = Vec::new();
+    for line in lines.iter().take(end_line_index).skip(start_line_index) {
+        if line.start_index >= line.end_index {
+            continue;
+        }
+        contents.extend_from_slice(&line.node_points[line.start_index..line.end_index]);
+    }
+    contents
 }
 
 fn calc_line_position(line: &PhrasingContentLine) -> Option<Position> {

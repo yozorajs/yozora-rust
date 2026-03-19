@@ -1,5 +1,7 @@
-use yozora_ast::{Heading, Node, Point, Position, Text, HEADING_TYPE};
-use yozora_character::VirtualCodePoint;
+use yozora_ast::{Heading, Node, Point, Position, HEADING_TYPE};
+use yozora_character::{
+    calc_trim_boundary_of_code_points, is_space_character, is_whitespace_character, AsciiCodePoint,
+};
 use yozora_core_tokenizer::engine::{
     BlockToken, EatOpenerResult, EngineBlockTokenizer, EngineTokenizer, MatchBlockHook,
     MatchBlockPhaseApi as EngineMatchBlockPhaseApi, ParseBlockHook,
@@ -69,7 +71,7 @@ impl BlockTokenizer for HeadingTokenizer {
 #[derive(Debug, Clone)]
 struct HeadingTokenData {
     depth: u8,
-    content: String,
+    line: PhrasingContentLine,
 }
 
 impl EngineTokenizer for HeadingTokenizer {
@@ -98,13 +100,41 @@ impl MatchBlockHook for HeadingMatchHook {
         line: &PhrasingContentLine,
         _parent_token: &BlockToken,
     ) -> Option<EatOpenerResult> {
-        let source = line_to_string(line);
-        let matched = r#match::match_heading_token(&source)?;
+        if line.count_of_precede_spaces >= 4 {
+            return None;
+        }
+
+        let first_non_whitespace_index = line.first_non_whitespace_index;
+        if first_non_whitespace_index >= line.end_index {
+            return None;
+        }
+
+        if line.node_points[first_non_whitespace_index].code_point
+            != AsciiCodePoint::NUMBER_SIGN as i32
+        {
+            return None;
+        }
+
+        let mut i = first_non_whitespace_index + 1;
+        while i < line.end_index
+            && line.node_points[i].code_point == AsciiCodePoint::NUMBER_SIGN as i32
+        {
+            i += 1;
+        }
+
+        let depth = i - first_non_whitespace_index;
+        if depth == 0 || depth > 6 {
+            return None;
+        }
+
+        if i + 1 < line.end_index && !is_space_character(line.node_points[i].code_point) {
+            return None;
+        }
 
         let token = BlockToken::new("", HEADING_TYPE, calc_line_position(line)).with_data(
             HeadingTokenData {
-                depth: matched.depth,
-                content: matched.content,
+                depth: depth as u8,
+                line: line.clone(),
             },
         );
 
@@ -129,13 +159,48 @@ impl ParseBlockHook for HeadingParseHook<'_> {
                 continue;
             };
 
-            let children = if data.content.is_empty() {
-                Vec::new()
+            let line = &data.line;
+            let node_points = line.node_points.as_ref();
+
+            let (left_index, mut right_index) = calc_trim_boundary_of_code_points(
+                node_points,
+                line.first_non_whitespace_index + data.depth as usize,
+                line.end_index,
+            );
+
+            let mut close_char_count = 0usize;
+            let mut j = right_index;
+            while j > left_index {
+                let idx = j - 1;
+                if node_points[idx].code_point != AsciiCodePoint::NUMBER_SIGN as i32 {
+                    break;
+                }
+                close_char_count += 1;
+                j -= 1;
+            }
+
+            if close_char_count > 0 {
+                let mut space_count = 0usize;
+                let mut k = right_index - close_char_count;
+                while k > left_index {
+                    let idx = k - 1;
+                    if !is_whitespace_character(node_points[idx].code_point) {
+                        break;
+                    }
+                    space_count += 1;
+                    k -= 1;
+                }
+
+                if space_count > 0 || k == left_index {
+                    right_index -= close_char_count + space_count;
+                }
+            }
+
+            let inline_children = if left_index < right_index {
+                self.api
+                    .process_inlines(&node_points[left_index..right_index])
             } else {
-                vec![Node::Text(Text {
-                    position: None,
-                    value: data.content.clone(),
-                })]
+                Vec::new()
             };
 
             nodes.push(Node::Heading(Heading {
@@ -146,7 +211,7 @@ impl ParseBlockHook for HeadingParseHook<'_> {
                 },
                 identifier: None,
                 depth: data.depth,
-                children,
+                children: inline_children,
             }));
         }
 
@@ -168,30 +233,6 @@ impl EngineBlockTokenizer for HeadingTokenizer {
     ) -> Box<dyn ParseBlockHook + 'a> {
         Box::new(HeadingParseHook { api })
     }
-}
-
-fn line_to_string(line: &PhrasingContentLine) -> String {
-    let mut source = String::new();
-    for point in line
-        .node_points
-        .iter()
-        .skip(line.start_index)
-        .take(line.end_index.saturating_sub(line.start_index))
-    {
-        let code_point = point.code_point;
-        let ch = if code_point == VirtualCodePoint::Space as i32 {
-            Some(' ')
-        } else if code_point == VirtualCodePoint::LineEnd as i32 {
-            Some('\n')
-        } else {
-            char::from_u32(code_point as u32)
-        };
-
-        if let Some(ch) = ch {
-            source.push(ch);
-        }
-    }
-    source
 }
 
 fn calc_line_position(line: &PhrasingContentLine) -> Option<Position> {

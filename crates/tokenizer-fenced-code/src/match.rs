@@ -30,7 +30,10 @@ pub(crate) fn match_fenced_code_token(lines: &[&str]) -> Option<FencedCodeToken>
             break;
         }
 
-        content_lines.push(strip_opening_indent(line, opening.indent).to_string());
+        let normalized = strip_opening_indent(line, opening.indent)
+            .trim_end_matches(['\n', '\r'])
+            .to_string();
+        content_lines.push(normalized);
     }
 
     let value = if content_lines.is_empty() {

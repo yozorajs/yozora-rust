@@ -4,8 +4,8 @@ pub(crate) struct HtmlBlockToken {
     pub value: String,
 }
 
-#[derive(Debug, Clone)]
-enum HtmlBlockKind {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum HtmlBlockKind {
     Type1(String),
     Type2,
     Type3,
@@ -16,11 +16,11 @@ enum HtmlBlockKind {
 }
 
 impl HtmlBlockKind {
-    fn ends_on_blank_line(&self) -> bool {
+    pub(crate) fn ends_on_blank_line(&self) -> bool {
         matches!(self, Self::Type6 | Self::Type7)
     }
 
-    fn is_closed_by_line(&self, line: &str) -> bool {
+    pub(crate) fn is_closed_by_line(&self, line: &str) -> bool {
         match self {
             Self::Type1(tag) => contains_case_insensitive(line, &format!("</{tag}")),
             Self::Type2 => line.contains("-->"),
@@ -46,13 +46,15 @@ pub(crate) fn match_html_block_token(lines: &[&str]) -> Option<HtmlBlockToken> {
 
     let mut consumed_lines = 0usize;
     let mut body = Vec::new();
+    let mut last_line_has_line_end = false;
 
     for (idx, line) in lines.iter().enumerate() {
         if idx > 0 && kind.ends_on_blank_line() && line.trim().is_empty() {
             break;
         }
 
-        body.push((*line).to_string());
+        last_line_has_line_end = line.ends_with('\n');
+        body.push(line.trim_end_matches('\n').to_string());
         consumed_lines += 1;
 
         if kind.is_closed_by_line(line) {
@@ -67,6 +69,8 @@ pub(crate) fn match_html_block_token(lines: &[&str]) -> Option<HtmlBlockToken> {
     let mut value = body.join("\n");
     if consumed_lines < lines.len() {
         value.push('\n');
+    } else if last_line_has_line_end {
+        value.push('\n');
     } else if matches!(kind, HtmlBlockKind::Type6)
         && should_append_unclosed_type7_newline(first, &body)
         && !value.ends_with('\n')
@@ -80,7 +84,7 @@ pub(crate) fn match_html_block_token(lines: &[&str]) -> Option<HtmlBlockToken> {
     })
 }
 
-fn detect_html_block_kind(line: &str) -> Option<HtmlBlockKind> {
+pub(crate) fn detect_html_block_kind(line: &str) -> Option<HtmlBlockKind> {
     let leading_spaces = line.chars().take_while(|ch| *ch == ' ').count();
     if leading_spaces >= 4 {
         return None;

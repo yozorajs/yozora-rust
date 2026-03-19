@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use yozora_ast::Node;
 use yozora_ast::{Point, Position, PARAGRAPH_TYPE};
+use yozora_character::{is_whitespace_character, NodePoint};
 use yozora_core_tokenizer::engine::{
     BlockToken, EatLazyContinuationTextResult, EatOpenerResult, EngineBlockTokenizer,
     EngineTokenizer, MatchBlockHook, MatchBlockPhaseApi as EngineMatchBlockPhaseApi,
@@ -101,7 +102,7 @@ struct ParagraphMatchHook;
 
 impl ParagraphMatchHook {
     fn create_token(line: &PhrasingContentLine) -> Option<BlockToken> {
-        if line.start_index >= line.end_index {
+        if line.first_non_whitespace_index >= line.end_index {
             return None;
         }
 
@@ -164,7 +165,7 @@ impl MatchBlockHook for ParagraphMatchHook {
         token: &mut BlockToken,
         _parent_token: &BlockToken,
     ) -> EatLazyContinuationTextResult {
-        if line.start_index >= line.end_index {
+        if line.first_non_whitespace_index >= line.end_index {
             return EatLazyContinuationTextResult::NotMatched;
         }
 
@@ -200,13 +201,7 @@ impl ParseBlockHook for ParagraphParseHook<'_> {
                 continue;
             };
 
-            let mut node_points = Vec::new();
-            for line in &data.lines {
-                if line.start_index >= line.end_index {
-                    continue;
-                }
-                node_points.extend_from_slice(&line.node_points[line.start_index..line.end_index]);
-            }
+            let node_points = merge_and_strip_content_lines(&data.lines);
 
             let inline_children = self.api.process_inlines(&node_points);
             let position = if self.api.should_reserve_position() {
@@ -219,6 +214,45 @@ impl ParseBlockHook for ParagraphParseHook<'_> {
 
         nodes
     }
+}
+
+fn merge_and_strip_content_lines(lines: &[PhrasingContentLine]) -> Vec<NodePoint> {
+    if lines.is_empty() {
+        return Vec::new();
+    }
+
+    let mut merged = Vec::new();
+    let last_index = lines.len() - 1;
+
+    for line in &lines[..last_index] {
+        if line.first_non_whitespace_index >= line.end_index {
+            continue;
+        }
+
+        merged
+            .extend_from_slice(&line.node_points[line.first_non_whitespace_index..line.end_index]);
+    }
+
+    let last = &lines[last_index];
+    if last.first_non_whitespace_index >= last.end_index {
+        return merged;
+    }
+
+    let node_points = last.node_points.as_ref();
+    let mut right = last.end_index;
+    while right > last.first_non_whitespace_index {
+        let index = right - 1;
+        if !is_whitespace_character(node_points[index].code_point) {
+            break;
+        }
+        right -= 1;
+    }
+
+    if right > last.first_non_whitespace_index {
+        merged.extend_from_slice(&node_points[last.first_non_whitespace_index..right]);
+    }
+
+    merged
 }
 
 impl EngineBlockTokenizer for ParagraphTokenizer {

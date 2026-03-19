@@ -486,6 +486,7 @@ name = "yozora-tokenizer-paragraph"
 version = "0.1.0"
 dependencies = [
  "yozora-ast",
+ "yozora-character",
  "yozora-core-tokenizer",
 ]
 

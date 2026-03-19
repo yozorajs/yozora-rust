@@ -1,9 +1,11 @@
 use yozora_ast::{Html, Node, Point, Position, HTML_TYPE};
-use yozora_character::VirtualCodePoint;
+use yozora_character::calc_string_from_node_points;
 use yozora_core_tokenizer::engine::{
-    BlockToken, EatContinuationTextResult, EatOpenerResult, EngineBlockTokenizer, EngineTokenizer,
-    MatchBlockHook, MatchBlockPhaseApi as EngineMatchBlockPhaseApi, ParseBlockHook,
-    ParseBlockPhaseApi as EngineParseBlockPhaseApi, PhrasingContentLine, TokenizerType,
+    BlockToken, EatAndInterruptPreviousSiblingResult, EatContinuationTextResult, EatOpenerResult,
+    EngineBlockTokenizer, EngineTokenizer, MatchBlockHook,
+    MatchBlockPhaseApi as EngineMatchBlockPhaseApi, ParseBlockHook,
+    ParseBlockPhaseApi as EngineParseBlockPhaseApi, PhrasingContentLine, RemainingSibling,
+    TokenizerType,
 };
 use yozora_core_tokenizer::{
     BlockTokenizeResult, BlockTokenizer, MatchBlockPhaseApi, Tokenizer, TokenizerKind,
@@ -63,8 +65,8 @@ impl BlockTokenizer for HtmlBlockTokenizer {
 
 #[derive(Debug, Clone)]
 struct TokenData {
-    lines: Vec<String>,
-    latest: r#match::HtmlBlockToken,
+    kind: r#match::HtmlBlockKind,
+    lines: Vec<PhrasingContentLine>,
 }
 
 impl EngineTokenizer for HtmlBlockTokenizer {
@@ -93,19 +95,39 @@ impl MatchBlockHook for HtmlBlockMatchHook {
         line: &PhrasingContentLine,
         _parent_token: &BlockToken,
     ) -> Option<EatOpenerResult> {
-        let source = line_to_string(line);
-        let refs = [source.as_str()];
-        let matched = r#match::match_html_block_token(&refs)?;
+        let source = calc_line_text(line);
+        let kind = r#match::detect_html_block_kind(&source)?;
 
         let token = BlockToken::new("", HTML_TYPE, calc_line_position(line)).with_data(TokenData {
-            lines: vec![source],
-            latest: matched,
+            kind: kind.clone(),
+            lines: vec![line.clone()],
         });
 
+        let saturated = !kind.ends_on_blank_line() && kind.is_closed_by_line(&source);
         Some(EatOpenerResult {
             token,
             next_index: line.end_index,
-            saturated: false,
+            saturated,
+        })
+    }
+
+    fn eat_and_interrupt_previous_sibling(
+        &mut self,
+        line: &PhrasingContentLine,
+        prev_sibling_token: &BlockToken,
+        _parent_token: &BlockToken,
+    ) -> Option<EatAndInterruptPreviousSiblingResult> {
+        let opener = self.eat_opener(line, prev_sibling_token)?;
+        let data = opener.token.data_as::<TokenData>()?;
+        if data.kind == r#match::HtmlBlockKind::Type7 {
+            return None;
+        }
+
+        Some(EatAndInterruptPreviousSiblingResult {
+            token: opener.token,
+            next_index: opener.next_index,
+            saturated: opener.saturated,
+            remaining_sibling: RemainingSibling::One(prev_sibling_token.clone()),
         })
     }
 
@@ -115,30 +137,33 @@ impl MatchBlockHook for HtmlBlockMatchHook {
         token: &mut BlockToken,
         _parent_token: &BlockToken,
     ) -> EatContinuationTextResult {
-        let Some(data) = token.data_as::<TokenData>() else {
+        let Some(data) = token.data_as::<TokenData>().cloned() else {
             return EatContinuationTextResult::NotMatched;
         };
 
-        let mut lines = data.lines.clone();
-        lines.push(line_to_string(line));
-
-        let refs = lines.iter().map(String::as_str).collect::<Vec<_>>();
-        let Some(matched) = r#match::match_html_block_token(&refs) else {
-            return EatContinuationTextResult::NotMatched;
-        };
-
-        if matched.consumed_lines < lines.len() {
+        let source = calc_line_text(line);
+        if data.kind.ends_on_blank_line() && source.trim().is_empty() {
             return EatContinuationTextResult::NotMatched;
         }
 
+        let mut lines = data.lines;
+        lines.push(line.clone());
+        let should_close = !data.kind.ends_on_blank_line() && data.kind.is_closed_by_line(&source);
+
         token.data = std::sync::Arc::new(TokenData {
+            kind: data.kind,
             lines,
-            latest: matched,
         });
         update_token_end_position(token, line);
 
-        EatContinuationTextResult::Opening {
-            next_index: line.end_index,
+        if should_close {
+            EatContinuationTextResult::Closing {
+                next_index: line.end_index,
+            }
+        } else {
+            EatContinuationTextResult::Opening {
+                next_index: line.end_index,
+            }
         }
     }
 }
@@ -156,13 +181,16 @@ impl ParseBlockHook for HtmlBlockParseHook<'_> {
                 continue;
             };
 
-            let mut node = parse::parse_html_block_token(data.latest.clone()).node;
-            if let Node::Html(Html { position, .. }) = &mut node {
-                if self.api.should_reserve_position() {
-                    *position = token.position.clone();
-                }
-            }
-            nodes.push(node);
+            let contents = merge_content_lines_faithfully(&data.lines);
+            let value = calc_string_from_node_points(&contents, 0, contents.len(), false);
+            nodes.push(Node::Html(Html {
+                position: if self.api.should_reserve_position() {
+                    token.position.clone()
+                } else {
+                    None
+                },
+                value,
+            }));
         }
 
         nodes
@@ -185,28 +213,22 @@ impl EngineBlockTokenizer for HtmlBlockTokenizer {
     }
 }
 
-fn line_to_string(line: &PhrasingContentLine) -> String {
-    let mut source = String::new();
-    for point in line
-        .node_points
-        .iter()
-        .skip(line.start_index)
-        .take(line.end_index.saturating_sub(line.start_index))
-    {
-        let code_point = point.code_point;
-        let ch = if code_point == VirtualCodePoint::Space as i32 {
-            Some(' ')
-        } else if code_point == VirtualCodePoint::LineEnd as i32 {
-            Some('\n')
-        } else {
-            char::from_u32(code_point as u32)
-        };
-
-        if let Some(ch) = ch {
-            source.push(ch);
+fn merge_content_lines_faithfully(
+    lines: &[PhrasingContentLine],
+) -> Vec<yozora_character::NodePoint> {
+    let mut contents = Vec::new();
+    for line in lines {
+        if line.start_index >= line.end_index {
+            continue;
         }
+
+        contents.extend_from_slice(&line.node_points[line.start_index..line.end_index]);
     }
-    source
+    contents
+}
+
+fn calc_line_text(line: &PhrasingContentLine) -> String {
+    calc_string_from_node_points(&line.node_points, line.start_index, line.end_index, false)
 }
 
 fn calc_line_position(line: &PhrasingContentLine) -> Option<Position> {

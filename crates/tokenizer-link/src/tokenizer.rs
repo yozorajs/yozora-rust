@@ -243,7 +243,7 @@ impl ParseInlineHook for LinkParseHook<'_> {
 
             nodes.push(Node::Link(Link {
                 position,
-                url: data.url.clone(),
+                url: self.api.format_url(&data.url),
                 title: data.title.clone(),
                 children: vec![Node::Text(Text {
                     position: None,

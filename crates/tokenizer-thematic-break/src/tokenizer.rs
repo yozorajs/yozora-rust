@@ -1,9 +1,10 @@
 use yozora_ast::{Node, Point, Position, ThematicBreak, THEMATIC_BREAK_TYPE};
-use yozora_character::VirtualCodePoint;
+use yozora_character::{is_whitespace_character, AsciiCodePoint};
 use yozora_core_tokenizer::engine::{
-    BlockToken, EatOpenerResult, EngineBlockTokenizer, EngineTokenizer, MatchBlockHook,
-    MatchBlockPhaseApi as EngineMatchBlockPhaseApi, ParseBlockHook,
-    ParseBlockPhaseApi as EngineParseBlockPhaseApi, PhrasingContentLine, TokenizerType,
+    BlockToken, EatAndInterruptPreviousSiblingResult, EatOpenerResult, EngineBlockTokenizer,
+    EngineTokenizer, MatchBlockHook, MatchBlockPhaseApi as EngineMatchBlockPhaseApi,
+    ParseBlockHook, ParseBlockPhaseApi as EngineParseBlockPhaseApi, PhrasingContentLine,
+    RemainingSibling, TokenizerType,
 };
 use yozora_core_tokenizer::{
     BlockTokenizeResult, BlockTokenizer, MatchBlockPhaseApi, Tokenizer, TokenizerKind,
@@ -92,13 +93,65 @@ impl MatchBlockHook for ThematicBreakMatchHook {
         line: &PhrasingContentLine,
         _parent_token: &BlockToken,
     ) -> Option<EatOpenerResult> {
-        let source = line_to_string(line);
-        r#match::match_thematic_break_token(&source)?;
+        if line.count_of_precede_spaces >= 4 {
+            return None;
+        }
+
+        if line.first_non_whitespace_index + 2 >= line.end_index {
+            return None;
+        }
+
+        let node_points = line.node_points.as_ref();
+        let mut marker: Option<i32> = None;
+        let mut count = 0usize;
+
+        for i in line.first_non_whitespace_index..line.end_index {
+            let code_point = node_points[i].code_point;
+            if is_whitespace_character(code_point) {
+                continue;
+            }
+
+            match code_point {
+                x if x == AsciiCodePoint::MINUS_SIGN as i32
+                    || x == AsciiCodePoint::UNDERSCORE as i32
+                    || x == AsciiCodePoint::ASTERISK as i32 =>
+                {
+                    if let Some(existed) = marker {
+                        if existed != x {
+                            return None;
+                        }
+                    } else {
+                        marker = Some(x);
+                    }
+                    count += 1;
+                }
+                _ => return None,
+            }
+        }
+
+        if count < 3 {
+            return None;
+        }
 
         Some(EatOpenerResult {
             token: BlockToken::new("", THEMATIC_BREAK_TYPE, calc_line_position(line)),
             next_index: line.end_index,
             saturated: true,
+        })
+    }
+
+    fn eat_and_interrupt_previous_sibling(
+        &mut self,
+        line: &PhrasingContentLine,
+        prev_sibling_token: &BlockToken,
+        _parent_token: &BlockToken,
+    ) -> Option<EatAndInterruptPreviousSiblingResult> {
+        let opener = self.eat_opener(line, prev_sibling_token)?;
+        Some(EatAndInterruptPreviousSiblingResult {
+            token: opener.token,
+            next_index: opener.next_index,
+            saturated: opener.saturated,
+            remaining_sibling: RemainingSibling::One(prev_sibling_token.clone()),
         })
     }
 }
@@ -138,30 +191,6 @@ impl EngineBlockTokenizer for ThematicBreakTokenizer {
     ) -> Box<dyn ParseBlockHook + 'a> {
         Box::new(ThematicBreakParseHook { api })
     }
-}
-
-fn line_to_string(line: &PhrasingContentLine) -> String {
-    let mut source = String::new();
-    for point in line
-        .node_points
-        .iter()
-        .skip(line.start_index)
-        .take(line.end_index.saturating_sub(line.start_index))
-    {
-        let code_point = point.code_point;
-        let ch = if code_point == VirtualCodePoint::Space as i32 {
-            Some(' ')
-        } else if code_point == VirtualCodePoint::LineEnd as i32 {
-            Some('\n')
-        } else {
-            char::from_u32(code_point as u32)
-        };
-
-        if let Some(ch) = ch {
-            source.push(ch);
-        }
-    }
-    source
 }
 
 fn calc_line_position(line: &PhrasingContentLine) -> Option<Position> {

@@ -40,7 +40,7 @@ fn fixture_batch_report() {
     let fixture_files = collect_fixture_files(&fixtures_root).expect("collect fixture files");
 
     let parse_options = Some(ParseOptions {
-        should_reserve_position: matches!(assert_level, AssertLevel::L2),
+        shouldReservePosition: Some(matches!(assert_level, AssertLevel::L2)),
         ..ParseOptions::default()
     });
 

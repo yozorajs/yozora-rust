@@ -1,5 +1,7 @@
 use yozora_ast::{EcmaImport, EcmaImportNamedImport, Node, Point, Position, ECMA_IMPORT_TYPE};
-use yozora_character::VirtualCodePoint;
+use yozora_character::{
+    calc_string_from_node_points, calc_trim_boundary_of_code_points, AsciiCodePoint,
+};
 use yozora_core_tokenizer::engine::{
     BlockToken, EatOpenerResult, EngineBlockTokenizer, EngineTokenizer, MatchBlockHook,
     MatchBlockPhaseApi as EngineMatchBlockPhaseApi, ParseBlockHook,
@@ -99,7 +101,30 @@ impl MatchBlockHook for EcmaImportMatchHook {
         line: &PhrasingContentLine,
         _parent_token: &BlockToken,
     ) -> Option<EatOpenerResult> {
-        let source = line_to_string(line);
+        if line.count_of_precede_spaces >= 4
+            || line.first_non_whitespace_index + 8 >= line.end_index
+        {
+            return None;
+        }
+
+        let node_points = line.node_points.as_ref();
+        let i = line.first_non_whitespace_index;
+        if node_points[i].code_point != AsciiCodePoint::LOWERCASE_I as i32
+            || node_points[i + 1].code_point != AsciiCodePoint::LOWERCASE_M as i32
+            || node_points[i + 2].code_point != AsciiCodePoint::LOWERCASE_P as i32
+            || node_points[i + 3].code_point != AsciiCodePoint::LOWERCASE_O as i32
+            || node_points[i + 4].code_point != AsciiCodePoint::LOWERCASE_R as i32
+            || node_points[i + 5].code_point != AsciiCodePoint::LOWERCASE_T as i32
+        {
+            return None;
+        }
+
+        let (left, right) = calc_trim_boundary_of_code_points(
+            node_points,
+            line.first_non_whitespace_index,
+            line.end_index,
+        );
+        let source = calc_string_from_node_points(node_points, left, right, false);
         let matched = r#match::match_ecma_import_token(&source)?;
 
         let token = BlockToken::new("", ECMA_IMPORT_TYPE, calc_line_position(line)).with_data(
@@ -161,30 +186,6 @@ impl EngineBlockTokenizer for EcmaImportTokenizer {
     ) -> Box<dyn ParseBlockHook + 'a> {
         Box::new(EcmaImportParseHook { api })
     }
-}
-
-fn line_to_string(line: &PhrasingContentLine) -> String {
-    let mut source = String::new();
-    for point in line
-        .node_points
-        .iter()
-        .skip(line.start_index)
-        .take(line.end_index.saturating_sub(line.start_index))
-    {
-        let code_point = point.code_point;
-        let ch = if code_point == VirtualCodePoint::Space as i32 {
-            Some(' ')
-        } else if code_point == VirtualCodePoint::LineEnd as i32 {
-            Some('\n')
-        } else {
-            char::from_u32(code_point as u32)
-        };
-
-        if let Some(ch) = ch {
-            source.push(ch);
-        }
-    }
-    source
 }
 
 fn calc_line_position(line: &PhrasingContentLine) -> Option<Position> {

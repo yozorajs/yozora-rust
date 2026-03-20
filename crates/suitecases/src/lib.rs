@@ -6,6 +6,13 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use serde_json::Value;
 
+mod runner;
+
+pub use runner::{
+    format_unexpected_report, run_fixture_batch, run_fixture_subset, SuiteAdapter, SuiteRunOptions,
+    SuiteRunReport,
+};
+
 #[derive(Debug, Deserialize)]
 pub struct FixtureDocument {
     pub title: Option<String>,

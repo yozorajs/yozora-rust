@@ -1,10 +1,9 @@
 use std::path::PathBuf;
 
-use yozora_core_parser::ParseOptions;
-use yozora_parser::YozoraParser;
-use yozora_suitecases::{
-    compare_parse_answer, expand_fixture_cases, load_fixture_document, AssertLevel,
-};
+use yozora_suitecases::{format_unexpected_report, run_fixture_subset, SuiteRunOptions};
+
+mod support;
+use support::{env_assert_level, ParserSuiteAdapter};
 
 #[test]
 fn fixture_custom_subset_l1() {
@@ -20,37 +19,24 @@ fn fixture_custom_subset_l1() {
         "custom/table/backslash.json",
     ];
 
-    let assert_level = std::env::var("YOZORA_ASSERT_LEVEL")
-        .ok()
-        .and_then(|value| AssertLevel::from_str(&value))
-        .unwrap_or(AssertLevel::L2);
-    let parse_options = Some(ParseOptions {
-        shouldReservePosition: Some(matches!(assert_level, AssertLevel::L2)),
-        ..ParseOptions::default()
-    });
+    let assert_level = env_assert_level();
+    let adapter = ParserSuiteAdapter::new("yozora", assert_level);
+    let options = SuiteRunOptions {
+        fixtures_root: &fixtures_root,
+        parser_profile: "yozora",
+        assert_level,
+        profile_map: None,
+        known_failures: &[],
+    };
 
-    let parser = YozoraParser::default();
-    for fixture_rel in fixture_paths {
-        let fixture_abs = fixtures_root.join(fixture_rel);
-        let fixture = load_fixture_document(&fixture_abs)
-            .unwrap_or_else(|err| panic!("failed to load fixture {fixture_rel}: {err}"));
-        let cases = expand_fixture_cases(fixture_rel, fixture);
-
-        for case in &cases {
-            let actual_root = parser.parse(&case.input, parse_options.clone());
-            let actual = serde_json::to_value(actual_root)
-                .expect("failed to serialize parser output to json value");
-            let expected = case
-                .parse_answer
-                .as_ref()
-                .expect("fixture case should contain parseAnswer");
-
-            if let Err(diff) = compare_parse_answer(expected, &actual, assert_level) {
-                panic!(
-                    "fixture custom subset mismatch\nfixture_path={}\ncase_id={}\n{}",
-                    case.fixture_path, case.case_id, diff
-                );
-            }
-        }
-    }
+    let report = run_fixture_subset(&adapter, &options, &fixture_paths);
+    assert!(
+        report.is_clean(),
+        "{}",
+        format_unexpected_report(&report, 20)
+    );
+    assert!(
+        report.total_cases > 0,
+        "fixture subset should execute cases"
+    );
 }

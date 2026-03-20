@@ -1,13 +1,12 @@
 use std::path::PathBuf;
 
-use yozora_core_parser::ParseOptions;
-use yozora_parser::YozoraParser;
-use yozora_parser_gfm::GfmParser;
-use yozora_parser_gfm_ex::GfmExParser;
 use yozora_suitecases::{
-    compare_parse_answer, expand_fixture_cases, is_fixture_enabled_for_profile, is_known_failure,
-    load_fixture_document, parse_known_failures_toml, parse_profile_map_toml, AssertLevel,
+    format_unexpected_report, is_fixture_enabled_for_profile, parse_known_failures_toml,
+    parse_profile_map_toml, run_fixture_subset, SuiteRunOptions,
 };
+
+mod support;
+use support::{env_assert_level, env_parser_profile, ParserSuiteAdapter};
 
 #[test]
 fn suitecases_smoke_case() {
@@ -25,15 +24,12 @@ fn suitecases_smoke_case() {
     let known_failures = parse_known_failures_toml(&known_failures_text)
         .expect("failed to parse fixtures/known-failures.toml");
 
-    let parser_profile =
-        std::env::var("YOZORA_PARSER_PROFILE").unwrap_or_else(|_| "yozora".to_string());
-    let assert_level = std::env::var("YOZORA_ASSERT_LEVEL")
-        .ok()
-        .and_then(|value| AssertLevel::from_str(&value))
-        .unwrap_or(AssertLevel::L2);
+    let parser_profile = env_parser_profile();
+    let assert_level = env_assert_level();
 
     let fixture_rel = "gfm/heading/#032.json";
-    let fixture_path = repo_root.join("fixtures").join(fixture_rel);
+    let fixtures_root = repo_root.join("fixtures");
+    let fixture_path = fixtures_root.join(fixture_rel);
     let enabled = is_fixture_enabled_for_profile(&profile_map, &parser_profile, fixture_rel)
         .expect("parser profile should exist in profile-map.toml");
     assert!(
@@ -41,48 +37,22 @@ fn suitecases_smoke_case() {
         "fixture should be enabled for selected parser profile"
     );
 
-    let doc = load_fixture_document(&fixture_path).expect("failed to load upstream smoke fixture");
-    let cases = expand_fixture_cases(fixture_rel, doc);
+    assert!(fixture_path.exists(), "smoke fixture should exist");
+
+    let adapter = ParserSuiteAdapter::new(&parser_profile, assert_level);
+    let options = SuiteRunOptions {
+        fixtures_root: &fixtures_root,
+        parser_profile: &parser_profile,
+        assert_level,
+        profile_map: Some(&profile_map),
+        known_failures: &known_failures,
+    };
+
+    let report = run_fixture_subset(&adapter, &options, &[fixture_rel]);
+    assert!(report.total_cases > 0, "smoke fixture should contain cases");
     assert!(
-        !cases.is_empty(),
-        "smoke fixture should contain at least one case"
+        report.is_clean(),
+        "{}",
+        format_unexpected_report(&report, 20)
     );
-
-    let parse_options = Some(ParseOptions {
-        shouldReservePosition: Some(matches!(assert_level, AssertLevel::L2)),
-        ..ParseOptions::default()
-    });
-
-    for case in &cases {
-        let root = match parser_profile.as_str() {
-            "yozora" => YozoraParser::default().parse(&case.input, parse_options.clone()),
-            "gfm" => GfmParser::default().parse(&case.input, parse_options.clone()),
-            "gfm_ex" => GfmExParser::default().parse(&case.input, parse_options.clone()),
-            other => panic!("unsupported parser profile: {other}"),
-        };
-
-        let actual = serde_json::to_value(root).expect("failed to serialize parse result");
-        let expected = case
-            .parse_answer
-            .as_ref()
-            .expect("smoke fixture case should contain parseAnswer");
-
-        if let Err(diff) = compare_parse_answer(expected, &actual, assert_level) {
-            let known = is_known_failure(
-                &known_failures,
-                &case.case_id,
-                &parser_profile,
-                assert_level,
-            );
-            assert!(
-                known,
-                "unexpected fixture diff\nfixture_path={}\ncase_id={}\nparser_profile={}\nassert_level={:?}\n{}",
-                case.fixture_path,
-                case.case_id,
-                parser_profile,
-                assert_level,
-                diff,
-            );
-        }
-    }
 }

@@ -84,7 +84,7 @@ impl MatchBlockPhaseApi for MatchBlockApiAdapter<'_> {
         }
 
         let group = vec![lines.to_vec()];
-        let root = match_block_tokens_with_shared(self.shared.clone(), &group);
+        let root = match_block_tokens_with_shared(self.shared.clone(), group);
         root.children
     }
 
@@ -278,11 +278,14 @@ impl MatchInlineFallbackPhaseApi for MatchInlineApiAdapter<'_, '_> {
 }
 
 impl ParserProcessor<'_> {
-    fn match_block_tokens(
+    fn match_block_tokens<L>(
         &self,
-        lines: &[Vec<PhrasingContentLine>],
+        lines: L,
         identifiers: Rc<RefCell<IdentifierState>>,
-    ) -> BlockToken {
+    ) -> BlockToken
+    where
+        L: IntoIterator<Item = Vec<PhrasingContentLine>>,
+    {
         let shared = Rc::new(MatchBlockApiShared {
             block_tokenizers: self.options.block_tokenizers,
             block_tokenizer_map: self.options.block_tokenizer_map,
@@ -343,7 +346,10 @@ impl ParserProcessor<'_> {
 }
 
 impl Processor for ParserProcessor<'_> {
-    fn process(&mut self, lines: &[Vec<PhrasingContentLine>]) -> Root {
+    fn process<L>(&mut self, lines: L) -> Root
+    where
+        L: IntoIterator<Item = Vec<PhrasingContentLine>>,
+    {
         self.definition_identifiers.clear();
         self.footnote_definition_identifiers.clear();
 
@@ -409,7 +415,7 @@ fn find_block_tokenizer_by_name<'a>(
 
 fn match_block_tokens_with_shared(
     shared: Rc<MatchBlockApiShared<'_>>,
-    lines: &[Vec<PhrasingContentLine>],
+    lines: impl IntoIterator<Item = Vec<PhrasingContentLine>>,
 ) -> BlockToken {
     let api = MatchBlockApiAdapter {
         shared: shared.clone(),
@@ -432,7 +438,7 @@ fn match_block_tokens_with_shared(
 
     let mut processor = create_block_content_processor(hooks, fallback_hook);
     for group in lines {
-        for line in group {
+        for line in &group {
             processor.consume(line);
         }
     }

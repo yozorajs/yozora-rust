@@ -11,9 +11,9 @@ struct TempLine {
     count_of_precede_spaces: usize,
 }
 
-pub fn create_phrasing_line_groups(
+pub fn create_phrasing_line_generator(
     node_point_chunks: Vec<Vec<NodePoint>>,
-) -> Vec<Vec<PhrasingContentLine>> {
+) -> impl Iterator<Item = Vec<PhrasingContentLine>> {
     let mut all_node_points: Vec<NodePoint> = Vec::new();
     let mut line_groups: Vec<Vec<TempLine>> = Vec::new();
 
@@ -66,7 +66,7 @@ pub fn create_phrasing_line_groups(
     let shared_points = Arc::new(all_node_points);
     line_groups
         .into_iter()
-        .map(|group| {
+        .map(move |group| {
             group
                 .into_iter()
                 .map(|line| PhrasingContentLine {
@@ -78,5 +78,10 @@ pub fn create_phrasing_line_groups(
                 })
                 .collect()
         })
-        .collect()
+}
+
+pub fn create_phrasing_line_groups(
+    node_point_chunks: Vec<Vec<NodePoint>>,
+) -> Vec<Vec<PhrasingContentLine>> {
+    create_phrasing_line_generator(node_point_chunks).collect()
 }

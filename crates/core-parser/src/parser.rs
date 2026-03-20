@@ -9,7 +9,7 @@ use yozora_core_tokenizer::{BlockTokenizer, InlineFallbackTokenizer, InlineToken
 
 use crate::processor::{create_processor, Processor, ProcessorOptions};
 use crate::types::{DefaultParserProps, FormatUrlFn, ParseContents, ParseOptions, Parser};
-use crate::util::phrasing_line::create_phrasing_line_groups;
+use crate::util::phrasing_line::create_phrasing_line_generator;
 
 #[derive(Clone)]
 struct ResolvedParseOptions {
@@ -143,7 +143,7 @@ impl DefaultParser {
         let parse_options = self.resolveParseOptions(options.unwrap_or_default());
         let chunks = normalize_contents_to_chunks(contents.into());
         let node_point_chunks = create_node_point_generator(chunks);
-        let line_groups = create_phrasing_line_groups(node_point_chunks);
+        let lines_iterator = create_phrasing_line_generator(node_point_chunks);
 
         let mut processor = create_processor(ProcessorOptions {
             inline_tokenizers: &self.inlineTokenizers,
@@ -158,7 +158,7 @@ impl DefaultParser {
             format_url: parse_options.formatUrl,
         });
 
-        processor.process(&line_groups)
+        processor.process(lines_iterator)
     }
 
     fn resolveParseOptions(&self, options: ParseOptions) -> ResolvedParseOptions {

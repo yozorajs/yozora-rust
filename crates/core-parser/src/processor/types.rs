@@ -1,9 +1,7 @@
 use std::collections::HashMap;
 
 use yozora_ast::Association;
-use yozora_core_tokenizer::{
-    BlockTokenizer, InlineFallbackTokenizer, InlineTokenizer, PhrasingContentLine,
-};
+use yozora_core_tokenizer::{BlockTokenizer, InlineFallbackTokenizer, InlineTokenizer};
 
 use crate::types::FormatUrlFn;
 
@@ -21,5 +19,7 @@ pub struct ProcessorOptions<'a> {
 }
 
 pub trait Processor {
-    fn process(&mut self, lines: &[Vec<PhrasingContentLine>]) -> yozora_ast::Root;
+    fn process<L>(&mut self, lines: L) -> yozora_ast::Root
+    where
+        L: IntoIterator<Item = Vec<yozora_core_tokenizer::PhrasingContentLine>>;
 }

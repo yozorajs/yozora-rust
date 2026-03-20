@@ -1,4 +1,4 @@
-use yozora_ast::{Point, Position, FOOTNOTE_DEFINITION_TYPE};
+use yozora_ast::{Position, FOOTNOTE_DEFINITION_TYPE};
 use yozora_character::{
     calc_string_from_node_points, is_whitespace_character, AsciiCodePoint, NodePoint,
     VirtualCodePoint,
@@ -60,8 +60,6 @@ pub(crate) fn eat_continuation_text(
     token: &mut BlockToken,
     indent: usize,
 ) -> EatContinuationTextResult {
-    update_token_end_position(token, line);
-
     if line.first_non_whitespace_index >= line.end_index {
         return EatContinuationTextResult::Opening {
             next_index: std::cmp::min(line.end_index.saturating_sub(1), line.start_index + indent),
@@ -141,20 +139,4 @@ fn calc_line_position(line: &PhrasingContentLine, end_index: usize) -> Option<Po
         end: calc_end_point(line.node_points.as_ref(), end_index),
         indent: None,
     })
-}
-
-fn update_token_end_position(token: &mut BlockToken, line: &PhrasingContentLine) {
-    let Some(position) = token.position.as_mut() else {
-        return;
-    };
-    if line.start_index >= line.end_index {
-        return;
-    }
-
-    let end = line.node_points[line.end_index - 1];
-    position.end = Point {
-        line: end.line,
-        column: end.column + 1,
-        offset: Some(end.offset + 1),
-    };
 }

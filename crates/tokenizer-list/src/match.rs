@@ -236,7 +236,12 @@ fn parse_list_opener(
     {
         count_of_top_blank_line = 1;
 
-        if count_of_spaces > 0 {
+        // Keep behavior aligned with TS implementation:
+        // nextIndex -= countOfSpaces - 1
+        // which means +1 when count_of_spaces == 0.
+        if count_of_spaces == 0 {
+            next_index += 1;
+        } else {
             next_index -= count_of_spaces - 1;
         }
         count_of_spaces = 1;

@@ -11,7 +11,7 @@ cargo test -p yozora-suitecases --test suitecases_upstream_subset
 for profile in yozora gfm gfm_ex yozora_inline_math_backtick_required; do
   echo "[fixture-batch] profile=$profile"
   YOZORA_PARSER_PROFILE="$profile" \
-  YOZORA_ASSERT_LEVEL="L1" \
+  YOZORA_ASSERT_LEVEL="L2" \
   YOZORA_FAIL_ON_DIFF="1" \
   cargo test -p yozora-suitecases --test suitecases_upstream_batch_report -- --ignored
  done

@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use yozora_core_parser::ParseOptions;
 use yozora_parser_gfm::GfmParser;
 use yozora_suitecases::{
     compare_parse_answer, expand_fixture_cases, load_fixture_document, AssertLevel,
@@ -30,6 +31,15 @@ fn fixture_gfm_subset_l1() {
         "gfm/html-block/#119.json",
     ];
 
+    let assert_level = std::env::var("YOZORA_ASSERT_LEVEL")
+        .ok()
+        .and_then(|value| AssertLevel::from_str(&value))
+        .unwrap_or(AssertLevel::L2);
+    let parse_options = Some(ParseOptions {
+        shouldReservePosition: Some(matches!(assert_level, AssertLevel::L2)),
+        ..ParseOptions::default()
+    });
+
     let parser = GfmParser::default();
     for fixture_rel in fixture_paths {
         let fixture_abs = fixtures_root.join(fixture_rel);
@@ -38,7 +48,7 @@ fn fixture_gfm_subset_l1() {
         let cases = expand_fixture_cases(fixture_rel, fixture);
 
         for case in &cases {
-            let actual_root = parser.parse(&case.input, None);
+            let actual_root = parser.parse(&case.input, parse_options.clone());
             let actual = serde_json::to_value(actual_root)
                 .expect("failed to serialize parser output to json value");
             let expected = case
@@ -46,7 +56,7 @@ fn fixture_gfm_subset_l1() {
                 .as_ref()
                 .expect("fixture case should contain parseAnswer");
 
-            if let Err(diff) = compare_parse_answer(expected, &actual, AssertLevel::L1) {
+            if let Err(diff) = compare_parse_answer(expected, &actual, assert_level) {
                 panic!(
                     "fixture gfm subset mismatch\nfixture_path={}\ncase_id={}\n{}",
                     case.fixture_path, case.case_id, diff

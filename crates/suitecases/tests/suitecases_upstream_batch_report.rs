@@ -29,7 +29,7 @@ fn fixture_batch_report() {
     let assert_level = std::env::var("YOZORA_ASSERT_LEVEL")
         .ok()
         .and_then(|v| AssertLevel::from_str(&v))
-        .unwrap_or(AssertLevel::L1);
+        .unwrap_or(AssertLevel::L2);
     let fail_on_diff = std::env::var("YOZORA_FAIL_ON_DIFF").is_ok_and(|v| v == "1");
     let max_print = std::env::var("YOZORA_REPORT_MAX_PRINT")
         .ok()

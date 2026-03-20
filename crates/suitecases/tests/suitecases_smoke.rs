@@ -30,7 +30,7 @@ fn suitecases_smoke_case() {
     let assert_level = std::env::var("YOZORA_ASSERT_LEVEL")
         .ok()
         .and_then(|value| AssertLevel::from_str(&value))
-        .unwrap_or(AssertLevel::L1);
+        .unwrap_or(AssertLevel::L2);
 
     let fixture_rel = "gfm/heading/#032.json";
     let fixture_path = repo_root.join("fixtures").join(fixture_rel);

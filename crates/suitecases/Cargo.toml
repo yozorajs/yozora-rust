@@ -1,5 +1,5 @@
 [package]
-name = "yozora-test-util"
+name = "yozora-suitecases"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

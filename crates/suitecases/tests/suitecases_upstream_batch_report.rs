@@ -4,7 +4,7 @@ use yozora_core_parser::ParseOptions;
 use yozora_parser::YozoraParser;
 use yozora_parser_gfm::GfmParser;
 use yozora_parser_gfm_ex::GfmExParser;
-use yozora_test_util::{
+use yozora_suitecases::{
     collect_fixture_files, compare_parse_answer, expand_fixture_cases,
     is_fixture_enabled_for_profile, is_known_failure, load_fixture_document,
     parse_known_failures_toml, parse_profile_map_toml, AssertLevel,
@@ -69,6 +69,9 @@ fn fixture_batch_report() {
             total_cases += 1;
             let root = match parser_profile.as_str() {
                 "yozora" => YozoraParser::default().parse(&case.input, parse_options.clone()),
+                "yozora_inline_math_backtick_required" => {
+                    YozoraParser::default().parse(&case.input, parse_options.clone())
+                }
                 "gfm" => GfmParser::default().parse(&case.input, parse_options.clone()),
                 "gfm_ex" => GfmExParser::default().parse(&case.input, parse_options.clone()),
                 other => panic!("unsupported parser profile: {other}"),

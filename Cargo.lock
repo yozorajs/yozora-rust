@@ -228,7 +228,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "yozora-test-util"
+name = "yozora-suitecases"
 version = "0.1.0"
 dependencies = [
  "serde",

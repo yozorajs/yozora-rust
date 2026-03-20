@@ -4,13 +4,13 @@ use yozora_core_parser::ParseOptions;
 use yozora_parser::YozoraParser;
 use yozora_parser_gfm::GfmParser;
 use yozora_parser_gfm_ex::GfmExParser;
-use yozora_test_util::{
+use yozora_suitecases::{
     compare_parse_answer, expand_fixture_cases, is_fixture_enabled_for_profile, is_known_failure,
     load_fixture_document, parse_known_failures_toml, parse_profile_map_toml, AssertLevel,
 };
 
 #[test]
-fn fixture_runner_smoke_case() {
+fn suitecases_smoke_case() {
     let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let profile_map_path = repo_root.join("fixtures/profile-map.toml");
     let known_failures_path = repo_root.join("fixtures/known-failures.toml");
@@ -32,7 +32,7 @@ fn fixture_runner_smoke_case() {
         .and_then(|value| AssertLevel::from_str(&value))
         .unwrap_or(AssertLevel::L1);
 
-    let fixture_rel = "local/smoke/minimal.json";
+    let fixture_rel = "gfm/heading/#032.json";
     let fixture_path = repo_root.join("fixtures").join(fixture_rel);
     let enabled = is_fixture_enabled_for_profile(&profile_map, &parser_profile, fixture_rel)
         .expect("parser profile should exist in profile-map.toml");
@@ -41,7 +41,7 @@ fn fixture_runner_smoke_case() {
         "fixture should be enabled for selected parser profile"
     );
 
-    let doc = load_fixture_document(&fixture_path).expect("failed to load local smoke fixture");
+    let doc = load_fixture_document(&fixture_path).expect("failed to load upstream smoke fixture");
     let cases = expand_fixture_cases(fixture_rel, doc);
     assert!(
         !cases.is_empty(),

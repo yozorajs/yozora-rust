@@ -9,7 +9,7 @@ members = [
   "crates/parser",
   "crates/parser-gfm",
   "crates/parser-gfm-ex",
-  "crates/test-util",
+  "crates/suitecases",
   "crates/tokenizer-admonition",
   "crates/tokenizer-autolink",
   "crates/tokenizer-autolink-extension",

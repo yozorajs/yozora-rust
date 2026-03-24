@@ -42,3 +42,13 @@ yozora-tokenizer-thematic-break = { path = "../tokenizer-thematic-break" }
 
 [lib]
 path = "src/lib.rs"
+
+[dev-dependencies]
+criterion = "0.5"
+yozora-core-parser = { path = "../core-parser" }
+yozora-parser-gfm = { path = "../parser-gfm" }
+yozora-parser-gfm-ex = { path = "../parser-gfm-ex" }
+
+[[bench]]
+name = "parser_parse"
+harness = false

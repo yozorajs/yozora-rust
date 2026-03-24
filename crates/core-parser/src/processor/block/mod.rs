@@ -283,10 +283,13 @@ impl<'a> BlockContentProcessor<'a> {
                         first_non_whitespace_index,
                         count_of_precede_spaces,
                     );
+                    let parent_path = self.state_stack[self.current_stack_index].path.clone();
+                    let parent_snapshot = token_ref(&self.root, &parent_path).clone();
 
                     for hook_idx in 0..self.normal_hook_len {
                         if self.consume_new_opener(
                             hook_idx,
+                            &parent_snapshot,
                             &eating_info,
                             &mut i,
                             &mut first_non_whitespace_index,
@@ -356,8 +359,11 @@ impl<'a> BlockContentProcessor<'a> {
                     first_non_whitespace_index,
                     count_of_precede_spaces,
                 );
+                let parent_path = self.state_stack[self.current_stack_index].path.clone();
+                let parent_snapshot = token_ref(&self.root, &parent_path).clone();
                 let _ = self.consume_new_opener(
                     fallback_hook_idx,
+                    &parent_snapshot,
                     &eating_info,
                     &mut i,
                     &mut first_non_whitespace_index,
@@ -401,6 +407,7 @@ impl<'a> BlockContentProcessor<'a> {
     fn consume_new_opener<F>(
         &mut self,
         hook_idx: usize,
+        parent_snapshot: &BlockToken,
         line: &PhrasingContentLine,
         i: &mut usize,
         first_non_whitespace_index: &mut usize,
@@ -410,13 +417,10 @@ impl<'a> BlockContentProcessor<'a> {
     where
         F: Fn(&mut Self, &mut usize, &mut usize, &mut usize, usize, bool),
     {
-        let parent_path = self.state_stack[self.current_stack_index].path.clone();
-        let parent_snapshot = token_ref(&self.root, &parent_path).clone();
-
         let result = self.hooks[hook_idx]
             .hook
             .borrow_mut()
-            .eat_opener(line, &parent_snapshot);
+            .eat_opener(line, parent_snapshot);
         let Some(result) = result else {
             return false;
         };

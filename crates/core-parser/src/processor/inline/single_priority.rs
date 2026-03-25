@@ -105,6 +105,7 @@ impl SinglePriorityDelimiterProcessor {
         }
 
         let hook_name = hooks[hook_index].name.clone();
+        let hook_tokenizer_id = hooks[hook_index].tokenizer_id;
 
         let mut remain_closer_delimiter = Some(closer_delimiter);
         let mut internal_tokens: Vec<InlineToken> = Vec::new();
@@ -153,6 +154,7 @@ impl SinglePriorityDelimiterProcessor {
                             .processSingleDelimiter(&opener_delimiter);
                         for token in &mut tokens {
                             token.tokenizer = hook_name.clone();
+                            token.tokenizer_id = hook_tokenizer_id;
                         }
                         if !tokens.is_empty() {
                             tokens.append(&mut internal_tokens);
@@ -168,6 +170,7 @@ impl SinglePriorityDelimiterProcessor {
                             .processSingleDelimiter(&closer_delimiter);
                         for token in &mut tokens {
                             token.tokenizer = hook_name.clone();
+                            token.tokenizer_id = hook_tokenizer_id;
                         }
                         if !tokens.is_empty() {
                             internal_tokens.append(&mut tokens);
@@ -190,6 +193,7 @@ impl SinglePriorityDelimiterProcessor {
                 for token in &mut tokens {
                     if token.tokenizer.is_empty() {
                         token.tokenizer = hook_name.clone();
+                        token.tokenizer_id = hook_tokenizer_id;
                     }
                 }
 
@@ -227,6 +231,7 @@ impl SinglePriorityDelimiterProcessor {
                 .processSingleDelimiter(&remain_closer_delimiter);
             for token in &mut tokens {
                 token.tokenizer = hook_name.clone();
+                token.tokenizer_id = hook_tokenizer_id;
             }
             self.token_stack.append(&mut tokens);
             return None;
@@ -267,9 +272,11 @@ impl SinglePriorityDelimiterProcessor {
             }
             DelimiterType::Full => {
                 let hook_name = hooks[hook_index].name.clone();
+                let hook_tokenizer_id = hooks[hook_index].tokenizer_id;
                 let mut tokens = hooks[hook_index].processSingleDelimiter(&delimiter);
                 for token in &mut tokens {
                     token.tokenizer = hook_name.clone();
+                    token.tokenizer_id = hook_tokenizer_id;
                 }
                 self.token_stack.append(&mut tokens);
             }
@@ -280,11 +287,13 @@ impl SinglePriorityDelimiterProcessor {
         let mut tokens = Vec::new();
         for item in &self.delimiter_stack {
             let hook_name = hooks[item.hook_index].name.clone();
+            let hook_tokenizer_id = hooks[item.hook_index].tokenizer_id;
             let mut next_tokens = hooks[item.hook_index]
                 .hook
                 .processSingleDelimiter(&item.delimiter);
             for token in &mut next_tokens {
                 token.tokenizer = hook_name.clone();
+                token.tokenizer_id = hook_tokenizer_id;
             }
             tokens.append(&mut next_tokens);
         }

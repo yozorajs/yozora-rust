@@ -20,7 +20,9 @@ pub use types::match_inline::{
 pub use types::parse_block::{ParseBlockHook, ParseBlockPhaseApi};
 pub use types::parse_inline::{ParseInlineHook, ParseInlinePhaseApi};
 pub use types::phrasing_content::PhrasingContentLine;
-pub use types::token::{BlockToken, InlineToken, TokenData, TokenDelimiter};
+pub use types::token::{
+    BlockToken, InlineToken, TokenData, TokenDelimiter, TokenizerId, UNKNOWN_TOKENIZER_ID,
+};
 pub use types::tokenizer::{BlockTokenizer, InlineFallbackTokenizer, InlineTokenizer, Tokenizer};
 pub use types::util::NodeInterval;
 pub use util::phrasing_content::{

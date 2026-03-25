@@ -6,6 +6,8 @@ use yozora_ast::{NodeType, Position};
 use crate::constant::DelimiterType;
 
 pub type TokenData = Arc<dyn Any + Send + Sync + 'static>;
+pub type TokenizerId = u64;
+pub const UNKNOWN_TOKENIZER_ID: TokenizerId = u64::MAX;
 
 #[derive(Debug, Clone)]
 pub struct TokenDelimiter {
@@ -18,7 +20,8 @@ pub struct TokenDelimiter {
 
 #[derive(Debug, Clone)]
 pub struct InlineToken {
-    pub tokenizer: String,
+    pub tokenizer: Arc<str>,
+    pub tokenizer_id: TokenizerId,
     pub node_type: NodeType,
     pub start_index: usize,
     pub end_index: usize,
@@ -27,12 +30,13 @@ pub struct InlineToken {
 
 impl InlineToken {
     pub fn new(
-        tokenizer: impl Into<String>,
+        tokenizer: impl Into<Arc<str>>,
         node_type: NodeType,
         interval: (usize, usize),
     ) -> Self {
         Self {
             tokenizer: tokenizer.into(),
+            tokenizer_id: UNKNOWN_TOKENIZER_ID,
             node_type,
             start_index: interval.0,
             end_index: interval.1,
@@ -58,7 +62,8 @@ impl InlineToken {
 
 #[derive(Debug, Clone)]
 pub struct BlockToken {
-    pub tokenizer: String,
+    pub tokenizer: Arc<str>,
+    pub tokenizer_id: TokenizerId,
     pub node_type: NodeType,
     pub position: Option<Position>,
     pub children: Vec<BlockToken>,
@@ -67,12 +72,13 @@ pub struct BlockToken {
 
 impl BlockToken {
     pub fn new(
-        tokenizer: impl Into<String>,
+        tokenizer: impl Into<Arc<str>>,
         node_type: NodeType,
         position: Option<Position>,
     ) -> Self {
         Self {
             tokenizer: tokenizer.into(),
+            tokenizer_id: UNKNOWN_TOKENIZER_ID,
             node_type,
             position,
             children: Vec::new(),

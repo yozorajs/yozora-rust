@@ -6,8 +6,10 @@ use yozora_ast::{Point, Position, PARAGRAPH_TYPE, ROOT_TYPE};
 use yozora_character::{is_space_character, is_whitespace_character};
 use yozora_core_tokenizer::{
     BlockToken, EatContinuationTextResult, EatLazyContinuationTextResult, OnCloseResult,
-    PhrasingContentLine, RemainingSibling,
+    PhrasingContentLine, RemainingSibling, TokenizerId, UNKNOWN_TOKENIZER_ID,
 };
+
+use crate::util::tokenizer_uid::calc_tokenizer_uid;
 
 #[derive(Debug, Clone)]
 struct MatchBlockState {
@@ -20,6 +22,7 @@ struct MatchBlockState {
 pub struct BlockContentProcessor<'a> {
     hooks: Vec<MatchBlockProcessorHook<'a>>,
     hook_index_mapping: Vec<usize>,
+    hook_tokenizer_uid_mapping: Vec<TokenizerId>,
     normal_hook_len: usize,
     fallback_hook_index: Option<usize>,
     root: BlockToken,
@@ -32,7 +35,38 @@ pub fn create_block_content_processor<'a>(
     fallback_hook: Option<MatchBlockProcessorHook<'a>>,
 ) -> BlockContentProcessor<'a> {
     let hook_index_mapping = (0..hooks.len()).collect::<Vec<_>>();
-    create_block_content_processor_with_mapping(hooks, fallback_hook, hook_index_mapping, None)
+    let hook_uid_mapping = hooks
+        .iter()
+        .map(|hook| calc_tokenizer_uid(hook.name.as_ref()))
+        .collect::<Vec<_>>();
+    let fallback_uid_mapping = fallback_hook
+        .as_ref()
+        .map(|hook| calc_tokenizer_uid(hook.name.as_ref()));
+    create_block_content_processor_with_mapping(
+        hooks,
+        fallback_hook,
+        hook_index_mapping,
+        None,
+        hook_uid_mapping,
+        fallback_uid_mapping,
+    )
+}
+
+pub fn create_block_content_processor_with_uid_mapping<'a>(
+    hooks: Vec<MatchBlockProcessorHook<'a>>,
+    fallback_hook: Option<MatchBlockProcessorHook<'a>>,
+    hook_uid_mapping: Vec<TokenizerId>,
+    fallback_uid_mapping: Option<TokenizerId>,
+) -> BlockContentProcessor<'a> {
+    let hook_index_mapping = (0..hooks.len()).collect::<Vec<_>>();
+    create_block_content_processor_with_mapping(
+        hooks,
+        fallback_hook,
+        hook_index_mapping,
+        None,
+        hook_uid_mapping,
+        fallback_uid_mapping,
+    )
 }
 
 fn create_block_content_processor_with_mapping<'a>(
@@ -40,15 +74,20 @@ fn create_block_content_processor_with_mapping<'a>(
     fallback_hook: Option<MatchBlockProcessorHook<'a>>,
     hook_index_mapping: Vec<usize>,
     fallback_hook_mapping: Option<usize>,
+    hook_tokenizer_uid_mapping: Vec<TokenizerId>,
+    fallback_tokenizer_uid_mapping: Option<TokenizerId>,
 ) -> BlockContentProcessor<'a> {
     let normal_hook_len = hooks.len();
 
     let mut hooks = hooks;
     let mut hook_index_mapping = hook_index_mapping;
+    let mut hook_tokenizer_uid_mapping = hook_tokenizer_uid_mapping;
     let fallback_hook_index = fallback_hook.map(|hook| {
         let index = hooks.len();
         hooks.push(hook);
         hook_index_mapping.push(fallback_hook_mapping.unwrap_or(index));
+        hook_tokenizer_uid_mapping
+            .push(fallback_tokenizer_uid_mapping.unwrap_or(UNKNOWN_TOKENIZER_ID));
         index
     });
 
@@ -80,6 +119,7 @@ fn create_block_content_processor_with_mapping<'a>(
     BlockContentProcessor {
         hooks,
         hook_index_mapping,
+        hook_tokenizer_uid_mapping,
         normal_hook_len,
         fallback_hook_index,
         root,
@@ -383,8 +423,20 @@ impl<'a> BlockContentProcessor<'a> {
         self.root
     }
 
-    fn into_snapshot(self) -> (BlockToken, Vec<MatchBlockState>, Vec<usize>) {
-        (self.root, self.state_stack, self.hook_index_mapping)
+    fn into_snapshot(
+        self,
+    ) -> (
+        BlockToken,
+        Vec<MatchBlockState>,
+        Vec<usize>,
+        Vec<TokenizerId>,
+    ) {
+        (
+            self.root,
+            self.state_stack,
+            self.hook_index_mapping,
+            self.hook_tokenizer_uid_mapping,
+        )
     }
 
     fn eating_info(
@@ -438,6 +490,7 @@ impl<'a> BlockContentProcessor<'a> {
 
         let mut next_token = result.token;
         next_token.tokenizer = self.hooks[hook_idx].name.clone();
+        next_token.tokenizer_id = self.hook_tokenizer_uid_mapping[hook_idx];
         self.push(hook_idx, next_token, result.saturated);
         true
     }
@@ -497,6 +550,7 @@ impl<'a> BlockContentProcessor<'a> {
 
         let mut token = result.token;
         token.tokenizer = self.hooks[hook_idx].name.clone();
+        token.tokenizer_id = self.hook_tokenizer_uid_mapping[hook_idx];
         self.push(hook_idx, token, result.saturated);
         true
     }
@@ -512,22 +566,26 @@ impl<'a> BlockContentProcessor<'a> {
 
         let mut candidate_hooks = Vec::with_capacity(self.normal_hook_len.saturating_sub(1));
         let mut candidate_mapping = Vec::with_capacity(self.normal_hook_len.saturating_sub(1));
+        let mut candidate_uid_mapping = Vec::with_capacity(self.normal_hook_len.saturating_sub(1));
         for hook_index in 0..self.normal_hook_len {
             if hook_index == excluded_hook_index {
                 continue;
             }
             candidate_hooks.push(self.hooks[hook_index].clone());
             candidate_mapping.push(self.hook_index_mapping[hook_index]);
+            candidate_uid_mapping.push(self.hook_tokenizer_uid_mapping[hook_index]);
         }
 
-        let (fallback_hook, fallback_hook_mapping) =
-            self.fallback_hook_index.map_or((None, None), |hook_index| {
+        let (fallback_hook, fallback_hook_mapping, fallback_uid_mapping) = self
+            .fallback_hook_index
+            .map_or((None, None, None), |hook_index| {
                 if hook_index == excluded_hook_index {
-                    (None, None)
+                    (None, None, None)
                 } else {
                     (
                         Some(self.hooks[hook_index].clone()),
                         Some(self.hook_index_mapping[hook_index]),
+                        Some(self.hook_tokenizer_uid_mapping[hook_index]),
                     )
                 }
             });
@@ -537,6 +595,8 @@ impl<'a> BlockContentProcessor<'a> {
             fallback_hook,
             candidate_mapping,
             fallback_hook_mapping,
+            candidate_uid_mapping,
+            fallback_uid_mapping,
         );
         for line in lines {
             processor.consume(line);
@@ -554,7 +614,7 @@ impl<'a> BlockContentProcessor<'a> {
             return false;
         };
 
-        let (mut internal_root, internal_state_stack, hook_index_mapping) =
+        let (mut internal_root, internal_state_stack, hook_index_mapping, _) =
             processor.into_snapshot();
 
         let parent_path = self.state_stack[parent_stack_index].path.clone();
@@ -725,7 +785,7 @@ mod tests {
     use yozora_character::{create_node_point_generator, AsciiCodePoint};
     use yozora_core_tokenizer::{
         BlockToken, EatContinuationTextResult, EatOpenerResult, MatchBlockHook, OnCloseResult,
-        PhrasingContentLine,
+        PhrasingContentLine, UNKNOWN_TOKENIZER_ID,
     };
 
     use super::{create_block_content_processor, MatchBlockProcessorHook};
@@ -1102,7 +1162,8 @@ mod tests {
         let root = processor.done();
 
         assert_eq!(root.children.len(), 1);
-        assert_eq!(root.children[0].tokenizer, "echo");
+        assert_eq!(root.children[0].tokenizer.as_ref(), "echo");
+        assert_ne!(root.children[0].tokenizer_id, UNKNOWN_TOKENIZER_ID);
     }
 
     #[test]
@@ -1120,7 +1181,7 @@ mod tests {
         processor.consume(&make_line("b"));
 
         assert_eq!(processor.root.children.len(), 1);
-        assert_eq!(processor.root.children[0].tokenizer, "b");
+        assert_eq!(processor.root.children[0].tokenizer.as_ref(), "b");
         assert!(processor.state_stack.len() >= 2);
         assert!(processor
             .state_stack
@@ -1141,7 +1202,7 @@ mod tests {
         let root = processor.done();
 
         assert_eq!(root.children.len(), 1);
-        assert_eq!(root.children[0].tokenizer, "d");
+        assert_eq!(root.children[0].tokenizer.as_ref(), "d");
     }
 
     #[test]
@@ -1156,8 +1217,8 @@ mod tests {
         let root = processor.done();
 
         assert_eq!(root.children.len(), 2);
-        assert_eq!(root.children[0].tokenizer, "c");
-        assert_eq!(root.children[1].tokenizer, "d");
+        assert_eq!(root.children[0].tokenizer.as_ref(), "c");
+        assert_eq!(root.children[1].tokenizer.as_ref(), "d");
     }
 
     #[test]
@@ -1173,7 +1234,7 @@ mod tests {
         let root = processor.done();
 
         assert_eq!(root.children.len(), 1);
-        assert_eq!(root.children[0].tokenizer, "high");
+        assert_eq!(root.children[0].tokenizer.as_ref(), "high");
     }
 
     #[test]
@@ -1189,7 +1250,7 @@ mod tests {
         processor.consume(&make_line("x"));
 
         assert_eq!(processor.root.children.len(), 1);
-        assert_eq!(processor.root.children[0].tokenizer, "lazy");
+        assert_eq!(processor.root.children[0].tokenizer.as_ref(), "lazy");
         assert_eq!(processor.state_stack.len(), 2);
         assert_eq!(processor.state_stack[1].hook_index, Some(0));
     }
@@ -1208,6 +1269,6 @@ mod tests {
         let root = processor.done();
 
         assert_eq!(root.children.len(), 1);
-        assert_eq!(root.children[0].tokenizer, "fallback");
+        assert_eq!(root.children[0].tokenizer.as_ref(), "fallback");
     }
 }

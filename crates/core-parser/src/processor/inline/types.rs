@@ -1,10 +1,13 @@
+use std::sync::Arc;
+
 use yozora_core_tokenizer::{
     FindDelimiterGenerator, InlineToken, IsDelimiterPairResult, MatchInlineHook,
-    ProcessDelimiterPairResult, TokenDelimiter,
+    ProcessDelimiterPairResult, TokenDelimiter, TokenizerId,
 };
 
 pub struct MatchInlineProcessorHook<'a> {
-    pub name: String,
+    pub name: Arc<str>,
+    pub tokenizer_id: TokenizerId,
     pub priority: i32,
     pub hook: Box<dyn MatchInlineHook<'a> + 'a>,
     find_delimiter: Box<dyn FindDelimiterGenerator + 'a>,
@@ -14,13 +17,15 @@ pub struct MatchInlineProcessorHook<'a> {
 impl<'a> MatchInlineProcessorHook<'a> {
     pub fn new(
         name: impl Into<String>,
+        tokenizer_id: TokenizerId,
         priority: i32,
         hook: Box<dyn MatchInlineHook<'a> + 'a>,
     ) -> Self {
         let find_delimiter = hook.findDelimiter();
 
         Self {
-            name: name.into(),
+            name: Arc::<str>::from(name.into()),
+            tokenizer_id,
             priority,
             hook,
             find_delimiter,

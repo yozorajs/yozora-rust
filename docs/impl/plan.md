@@ -143,6 +143,37 @@ yozora-rust/
 - `replace` 等价于“先卸载同名，再按规则插入”。
 - 同类型 tokenizer（block/inline）各自维护独立有序列表与索引映射。
 
+### 6.1 Tokenizer UID 规范（跨 parser 稳定）
+
+目标：确保“同语义 tokenizer”在不同 parser profile（Rust/TS）与不同注册顺序下，身份一致且可稳定 dispatch。
+
+- `uid` 是 tokenizer 的语义身份（semantic identity），不是运行时 slot/index。
+- parser 在 tokenizer 注册阶段必须为其分配 `uid`。
+- `uid` 必须由 `tokenizer.name()` 通过稳定算法计算（建议 `FNV-1a 64-bit`）。
+- `uid` 必须与注册顺序、priority、`register_before`、内部数组下标解耦。
+- fallback tokenizer 也必须遵循同一 `uid` 规则，禁止使用 `len()` 或临时 index。
+- token 结构可同时保留 `tokenizer_name`（调试标签）与 `tokenizer_uid`（分发键）。
+- parse 阶段 dispatch 必须以 `tokenizer_uid` 为主键；`tokenizer_name` 仅用于诊断与一致性断言。
+
+冲突与错误处理：
+
+- 注册阶段必须维护 `uid -> name` 映射。
+- 若出现“同 `uid` 不同 `name`”，必须立即报错并拒绝启动（视为配置/实现错误）。
+- 允许“同 `name` 重复注册”沿用现有规则直接报错，不进入 `uid` 分配阶段。
+
+示例对比：
+
+- 示例 A（正确）：
+  - Parser A 顺序：`[emphasis, inline-code, link]`
+  - Parser B 顺序：`[link, emphasis, inline-code]`
+  - 结果：`uid(emphasis)` 在 A/B 恒定一致，dispatch 语义不变。
+- 示例 B（错误）：
+  - 若 `uid = tokenizer_index`，则 A/B 中 `emphasis` 的 `uid` 会随顺序变化。
+  - 影响：跨 parser 比对与调试日志出现语义漂移，不满足“跨 parser 稳定”。
+- 示例 C（冲突防护）：
+  - 若 `uid(X) == uid(Y)` 且 `X != Y`（极低概率 hash collision），注册阶段直接失败。
+  - 影响：宁可 fail-fast，也不能带着不确定 dispatch 进入运行期。
+
 
 ## 7. 三个关键实现示例（含对比）
 

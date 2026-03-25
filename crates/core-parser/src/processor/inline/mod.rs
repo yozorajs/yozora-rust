@@ -287,6 +287,7 @@ mod tests {
     fn should_pair_delimiters_into_one_token() {
         let mut hooks = vec![MatchInlineProcessorHook::new(
             "em",
+            0,
             1,
             Box::new(DummyHook::new(
                 vec![
@@ -300,7 +301,7 @@ mod tests {
         let tokens = match_inline_tokens(&mut hooks, &[], 0, 3);
 
         assert_eq!(tokens.len(), 1);
-        assert_eq!(tokens[0].tokenizer, "em");
+        assert_eq!(tokens[0].tokenizer.as_ref(), "em");
         assert_eq!(tokens[0].start_index, 0);
         assert_eq!(tokens[0].end_index, 3);
     }
@@ -309,6 +310,7 @@ mod tests {
     fn should_keep_higher_priority_token_order() {
         let mut hooks = vec![MatchInlineProcessorHook::new(
             "full",
+            0,
             1,
             Box::new(DummyHook::new(
                 vec![delimiter(DelimiterType::Full, 3, 4)],
@@ -320,8 +322,8 @@ mod tests {
         let tokens = match_inline_tokens(&mut hooks, &higher_priority_tokens, 0, 4);
 
         assert_eq!(tokens.len(), 2);
-        assert_eq!(tokens[0].tokenizer, "hp");
-        assert_eq!(tokens[1].tokenizer, "full");
+        assert_eq!(tokens[0].tokenizer.as_ref(), "hp");
+        assert_eq!(tokens[1].tokenizer.as_ref(), "full");
     }
 
     #[test]
@@ -329,6 +331,7 @@ mod tests {
         let mut hooks = vec![
             MatchInlineProcessorHook::new(
                 "high",
+                0,
                 10,
                 Box::new(DummyHook::new(
                     vec![delimiter(DelimiterType::Full, 0, 1)],
@@ -337,6 +340,7 @@ mod tests {
             ),
             MatchInlineProcessorHook::new(
                 "low",
+                1,
                 1,
                 Box::new(DummyHook::new(
                     vec![delimiter(DelimiterType::Full, 2, 3)],
@@ -348,7 +352,7 @@ mod tests {
         let tokens = match_inline_tokens(&mut hooks, &[], 0, 3);
 
         assert_eq!(tokens.len(), 2);
-        assert_eq!(tokens[0].tokenizer, "high");
-        assert_eq!(tokens[1].tokenizer, "low");
+        assert_eq!(tokens[0].tokenizer.as_ref(), "high");
+        assert_eq!(tokens[1].tokenizer.as_ref(), "low");
     }
 }

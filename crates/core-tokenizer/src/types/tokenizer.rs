@@ -22,20 +22,11 @@ pub trait Tokenizer {
 }
 
 pub trait BlockTokenizer: Tokenizer {
-    fn r#match<'a>(
-        &'a self,
-        api: &'a dyn MatchBlockPhaseApi,
-    ) -> Box<dyn MatchBlockHook + 'a>;
+    fn r#match<'a>(&'a self, api: &'a dyn MatchBlockPhaseApi) -> Box<dyn MatchBlockHook + 'a>;
 
-    fn parse<'a>(
-        &'a self,
-        api: &'a dyn ParseBlockPhaseApi,
-    ) -> Box<dyn ParseBlockHook + 'a>;
+    fn parse<'a>(&'a self, api: &'a dyn ParseBlockPhaseApi) -> Box<dyn ParseBlockHook + 'a>;
 
-    fn extractPhrasingContentLines(
-        &self,
-        _token: &BlockToken,
-    ) -> Option<Vec<PhrasingContentLine>> {
+    fn extractPhrasingContentLines(&self, _token: &BlockToken) -> Option<Vec<PhrasingContentLine>> {
         None
     }
 
@@ -49,15 +40,10 @@ pub trait BlockTokenizer: Tokenizer {
 }
 
 pub trait InlineTokenizer: Tokenizer {
-    fn r#match<'a>(
-        &'a self,
-        api: &'a dyn MatchInlinePhaseApi,
-    ) -> Box<dyn MatchInlineHook<'a> + 'a>;
+    fn r#match<'a>(&'a self, api: &'a dyn MatchInlinePhaseApi)
+        -> Box<dyn MatchInlineHook<'a> + 'a>;
 
-    fn parse<'a>(
-        &'a self,
-        api: &'a dyn ParseInlinePhaseApi,
-    ) -> Box<dyn ParseInlineHook + 'a>;
+    fn parse<'a>(&'a self, api: &'a dyn ParseInlinePhaseApi) -> Box<dyn ParseInlineHook + 'a>;
 }
 
 pub trait InlineFallbackTokenizer: InlineTokenizer {

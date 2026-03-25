@@ -26,7 +26,10 @@ impl Default for FencedBlockTokenizerOptions {
             name: None,
             priority: None,
             node_type: FENCED_BLOCK_TYPE,
-            markers: vec![AsciiCodePoint::BACKTICK as i32, AsciiCodePoint::TILDE as i32],
+            markers: vec![
+                AsciiCodePoint::BACKTICK as i32,
+                AsciiCodePoint::TILDE as i32,
+            ],
             markers_required: 3,
             check_info_string: None,
         }

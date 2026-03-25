@@ -23,14 +23,15 @@ impl ImageReferenceTokenizer {
     pub fn new(options: TokenizerOptions) -> Self {
         Self {
             meta: TokenizerMeta {
-                name: options.name.unwrap_or_else(|| IMAGE_REFERENCE_TOKENIZER_NAME.to_string()),
+                name: options
+                    .name
+                    .unwrap_or_else(|| IMAGE_REFERENCE_TOKENIZER_NAME.to_string()),
                 kind: TokenizerKind::Inline,
                 priority: options.priority.unwrap_or(TokenizerPriority::LINKS),
             },
         }
     }
 }
-
 
 impl Tokenizer for ImageReferenceTokenizer {
     fn r#type(&self) -> TokenizerType {
@@ -77,18 +78,16 @@ impl<'a> MatchInlineHook<'a> for ImageReferenceMatchHook<'a> {
         let api = self.api;
         let delimiters = Rc::clone(&self.delimiters);
 
-        Box::new(genFindDelimiter(
-            move |start_index, end_index| {
-                let entry = r#match::find_image_reference_delimiter_entry(
-                    api.getNodePoints(),
-                    start_index,
-                    end_index,
-                )?;
-                let delimiter = entry.delimiter.clone();
-                delimiters.borrow_mut().push(entry);
-                Some(delimiter)
-            },
-        ))
+        Box::new(genFindDelimiter(move |start_index, end_index| {
+            let entry = r#match::find_image_reference_delimiter_entry(
+                api.getNodePoints(),
+                start_index,
+                end_index,
+            )?;
+            let delimiter = entry.delimiter.clone();
+            delimiters.borrow_mut().push(entry);
+            Some(delimiter)
+        }))
     }
 
     fn isDelimiterPair(

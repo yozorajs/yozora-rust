@@ -20,14 +20,15 @@ impl ThematicBreakTokenizer {
     pub fn new(options: TokenizerOptions) -> Self {
         Self {
             meta: TokenizerMeta {
-                name: options.name.unwrap_or_else(|| THEMATIC_BREAK_TOKENIZER_NAME.to_string()),
+                name: options
+                    .name
+                    .unwrap_or_else(|| THEMATIC_BREAK_TOKENIZER_NAME.to_string()),
                 kind: TokenizerKind::Block,
                 priority: options.priority.unwrap_or(TokenizerPriority::ATOMIC),
             },
         }
     }
 }
-
 
 impl Tokenizer for ThematicBreakTokenizer {
     fn r#type(&self) -> TokenizerType {

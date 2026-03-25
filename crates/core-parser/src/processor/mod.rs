@@ -13,8 +13,8 @@ use yozora_ast::{Node, Point, Position, Root, ROOT_TYPE};
 use yozora_character::NodePoint;
 use yozora_core_tokenizer::NodeInterval;
 use yozora_core_tokenizer::{
-    BlockToken, InlineToken, MatchBlockPhaseApi, MatchInlineFallbackPhaseApi,
-    MatchInlinePhaseApi, ParseBlockPhaseApi, ParseInlinePhaseApi, PhrasingContentLine,
+    BlockToken, InlineToken, MatchBlockPhaseApi, MatchInlineFallbackPhaseApi, MatchInlinePhaseApi,
+    ParseBlockPhaseApi, ParseInlinePhaseApi, PhrasingContentLine,
 };
 
 use crate::processor::block::{create_block_content_processor, MatchBlockProcessorHook};
@@ -614,8 +614,7 @@ fn resolveFallbackTokens_with_api(
     }
 
     if i < token_end_index {
-        let mut fallback_token =
-            fallback_tokenizer.findAndHandleDelimiter(i, token_end_index, api);
+        let mut fallback_token = fallback_tokenizer.findAndHandleDelimiter(i, token_end_index, api);
         fallback_token.tokenizer = fallback_tokenizer.name().to_string();
         results.push(fallback_token);
     }
@@ -670,10 +669,7 @@ fn parseInlineTokens_with_context(
     results
 }
 
-fn calcPosition_from_node_points(
-    node_points: &[NodePoint],
-    interval: NodeInterval,
-) -> Position {
+fn calcPosition_from_node_points(node_points: &[NodePoint], interval: NodeInterval) -> Position {
     if interval.start_index >= interval.end_index {
         panic!(
             "[parseInline.calcPosition] invalid interval: start_index({}) >= end_index({})",

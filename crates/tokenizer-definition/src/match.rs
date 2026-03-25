@@ -1,7 +1,7 @@
 use yozora_ast::{Point, Position, DEFINITION_TYPE};
 use yozora_character::{
-    calc_string_from_node_points, fold_case, is_ascii_control_character,
-    is_whitespace_character, AsciiCodePoint, NodePoint, VirtualCodePoint,
+    calc_string_from_node_points, fold_case, is_ascii_control_character, is_whitespace_character,
+    AsciiCodePoint, NodePoint, VirtualCodePoint,
 };
 use yozora_core_tokenizer::*;
 

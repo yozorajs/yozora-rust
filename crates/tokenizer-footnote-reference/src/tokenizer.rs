@@ -27,14 +27,15 @@ impl FootnoteReferenceTokenizer {
     pub fn new(options: TokenizerOptions) -> Self {
         Self {
             meta: TokenizerMeta {
-                name: options.name.unwrap_or_else(|| FOOTNOTE_REFERENCE_TOKENIZER_NAME.to_string()),
+                name: options
+                    .name
+                    .unwrap_or_else(|| FOOTNOTE_REFERENCE_TOKENIZER_NAME.to_string()),
                 kind: TokenizerKind::Inline,
                 priority: options.priority.unwrap_or(TokenizerPriority::ATOMIC),
             },
         }
     }
 }
-
 
 impl Tokenizer for FootnoteReferenceTokenizer {
     fn r#type(&self) -> TokenizerType {
@@ -58,12 +59,10 @@ impl<'a> MatchInlineHook<'a> for FootnoteReferenceMatchHook<'a> {
     fn findDelimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
         let api = self.api;
 
-        Box::new(genFindDelimiter(
-            |start_index, end_index| {
-                let entry = r#match::find_delimiter_entry(api, start_index, end_index)?;
-                Some(entry.delimiter)
-            },
-        ))
+        Box::new(genFindDelimiter(|start_index, end_index| {
+            let entry = r#match::find_delimiter_entry(api, start_index, end_index)?;
+            Some(entry.delimiter)
+        }))
     }
 
     fn processSingleDelimiter(&self, delimiter: &TokenDelimiter) -> Vec<InlineToken> {

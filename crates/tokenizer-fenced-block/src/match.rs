@@ -7,8 +7,7 @@ use yozora_core_tokenizer::{
     MatchBlockHook, PhrasingContentLine, RemainingSibling,
 };
 
-pub type CheckInfoStringFn =
-    Arc<dyn Fn(&[NodePoint], i32, usize) -> bool + Send + Sync + 'static>;
+pub type CheckInfoStringFn = Arc<dyn Fn(&[NodePoint], i32, usize) -> bool + Send + Sync + 'static>;
 
 #[derive(Clone)]
 pub struct FencedBlockHookContext {
@@ -87,7 +86,12 @@ pub fn eat_opener(
         return None;
     }
 
-    let i = eat_optional_characters(node_points, first_non_whitespace_index + 1, line.end_index, marker);
+    let i = eat_optional_characters(
+        node_points,
+        first_non_whitespace_index + 1,
+        line.end_index,
+        marker,
+    );
     let marker_count = i - first_non_whitespace_index;
     if marker_count < context.markers_required {
         return None;

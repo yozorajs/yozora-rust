@@ -23,14 +23,17 @@ impl DeleteTokenizer {
     pub fn new(options: TokenizerOptions) -> Self {
         Self {
             meta: TokenizerMeta {
-                name: options.name.unwrap_or_else(|| DELETE_TOKENIZER_NAME.to_string()),
+                name: options
+                    .name
+                    .unwrap_or_else(|| DELETE_TOKENIZER_NAME.to_string()),
                 kind: TokenizerKind::Inline,
-                priority: options.priority.unwrap_or(TokenizerPriority::CONTAINING_INLINE),
+                priority: options
+                    .priority
+                    .unwrap_or(TokenizerPriority::CONTAINING_INLINE),
             },
         }
     }
 }
-
 
 impl Tokenizer for DeleteTokenizer {
     fn r#type(&self) -> TokenizerType {
@@ -54,15 +57,9 @@ impl<'a> MatchInlineHook<'a> for DeleteMatchHook<'a> {
     fn findDelimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
         let api = self.api;
 
-        Box::new(genFindDelimiter(
-            |start_index, end_index| {
-                r#match::find_delete_delimiter(
-                    api.getNodePoints(),
-                    start_index,
-                    end_index,
-                )
-            },
-        ))
+        Box::new(genFindDelimiter(|start_index, end_index| {
+            r#match::find_delete_delimiter(api.getNodePoints(), start_index, end_index)
+        }))
     }
 
     fn processDelimiterPair(
@@ -107,10 +104,7 @@ impl InlineTokenizer for DeleteTokenizer {
         Box::new(DeleteMatchHook { api })
     }
 
-    fn parse<'a>(
-        &'a self,
-        api: &'a dyn ParseInlinePhaseApi,
-    ) -> Box<dyn ParseInlineHook + 'a> {
+    fn parse<'a>(&'a self, api: &'a dyn ParseInlinePhaseApi) -> Box<dyn ParseInlineHook + 'a> {
         Box::new(DeleteParseHook { api })
     }
 }

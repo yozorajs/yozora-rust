@@ -1,7 +1,6 @@
 use yozora_core_tokenizer::{
     FindDelimiterGenerator, InlineToken, IsDelimiterPairResult, MatchInlineHook,
-    ProcessDelimiterPairResult,
-    TokenDelimiter,
+    ProcessDelimiterPairResult, TokenDelimiter,
 };
 
 pub struct MatchInlineProcessorHook<'a> {

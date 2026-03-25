@@ -32,7 +32,10 @@ pub(crate) fn eat_continuation_text(
 fn create_context() -> FencedBlockHookContext {
     FencedBlockHookContext {
         node_type: CODE_TYPE,
-        markers: vec![AsciiCodePoint::BACKTICK as i32, AsciiCodePoint::TILDE as i32],
+        markers: vec![
+            AsciiCodePoint::BACKTICK as i32,
+            AsciiCodePoint::TILDE as i32,
+        ],
         markers_required: 3,
         check_info_string: Some(Arc::new(|info_string, marker, _marker_count| {
             // Backtick fenced code info string cannot contain backticks.

@@ -16,16 +16,15 @@ pub(crate) fn eat_opener(line: &PhrasingContentLine) -> Option<EatOpenerResult> 
 
     // If there is no non-blank info string, it is a standard multi-line math block.
     let data = result.token.data_as::<FencedBlockTokenData>()?.clone();
-    let (left, right) = calc_trim_boundary_of_code_points(&data.info_string, 0, data.info_string.len());
+    let (left, right) =
+        calc_trim_boundary_of_code_points(&data.info_string, 0, data.info_string.len());
     if left >= right {
         return Some(result);
     }
 
     // Otherwise, treat it as a one-line math block wrapped by the same marker count.
     let mut i = right;
-    while i > left
-        && data.info_string[i - 1].code_point == AsciiCodePoint::DOLLAR_SIGN as i32
-    {
+    while i > left && data.info_string[i - 1].code_point == AsciiCodePoint::DOLLAR_SIGN as i32 {
         i -= 1;
     }
     let count_of_trailing_marker = right - i;

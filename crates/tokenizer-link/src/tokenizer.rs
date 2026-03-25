@@ -26,14 +26,15 @@ impl LinkTokenizer {
     pub fn new(options: TokenizerOptions) -> Self {
         Self {
             meta: TokenizerMeta {
-                name: options.name.unwrap_or_else(|| LINK_TOKENIZER_NAME.to_string()),
+                name: options
+                    .name
+                    .unwrap_or_else(|| LINK_TOKENIZER_NAME.to_string()),
                 kind: TokenizerKind::Inline,
                 priority: options.priority.unwrap_or(TokenizerPriority::LINKS),
             },
         }
     }
 }
-
 
 impl Tokenizer for LinkTokenizer {
     fn r#type(&self) -> TokenizerType {
@@ -100,22 +101,20 @@ impl<'a> MatchInlineHook<'a> for LinkMatchHook<'a> {
         let block_end_index = self.block_end_index;
         let delimiters = Rc::clone(&self.delimiters);
 
-        Box::new(genFindDelimiter(
-            move |start_index, end_index| {
-                let entry = r#match::find_link_delimiter_entry(
-                    &source,
-                    &char_starts,
-                    api.getNodePoints(),
-                    block_start_index,
-                    block_end_index,
-                    start_index,
-                    end_index,
-                )?;
-                let delimiter = entry.delimiter.clone();
-                delimiters.borrow_mut().push(entry);
-                Some(delimiter)
-            },
-        ))
+        Box::new(genFindDelimiter(move |start_index, end_index| {
+            let entry = r#match::find_link_delimiter_entry(
+                &source,
+                &char_starts,
+                api.getNodePoints(),
+                block_start_index,
+                block_end_index,
+                start_index,
+                end_index,
+            )?;
+            let delimiter = entry.delimiter.clone();
+            delimiters.borrow_mut().push(entry);
+            Some(delimiter)
+        }))
     }
 
     fn isDelimiterPair(
@@ -211,10 +210,7 @@ impl InlineTokenizer for LinkTokenizer {
         Box::new(LinkMatchHook::new(api))
     }
 
-    fn parse<'b>(
-        &'b self,
-        api: &'b dyn ParseInlinePhaseApi,
-    ) -> Box<dyn ParseInlineHook + 'b> {
+    fn parse<'b>(&'b self, api: &'b dyn ParseInlinePhaseApi) -> Box<dyn ParseInlineHook + 'b> {
         Box::new(LinkParseHook { api })
     }
 }
@@ -267,7 +263,11 @@ mod tests {
             start_index: usize,
             end_index: usize,
         ) -> Vec<InlineToken> {
-            vec![InlineToken::new("text", TEXT_TYPE, (start_index, end_index))]
+            vec![InlineToken::new(
+                "text",
+                TEXT_TYPE,
+                (start_index, end_index),
+            )]
         }
     }
 
@@ -340,7 +340,11 @@ mod tests {
             .expect("expected closer");
 
         let result = hook.processDelimiterPair(&opener, &closer, &[]);
-        let token = result.tokens.into_iter().next().expect("expected link token");
+        let token = result
+            .tokens
+            .into_iter()
+            .next()
+            .expect("expected link token");
         (token, node_points)
     }
 

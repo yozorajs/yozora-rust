@@ -42,100 +42,82 @@ impl Default for GfmParser {
 }
 
 fn register_gfm_tokenizers(inner: &mut DefaultParser) {
-    inner
-        .useTokenizer(
-            AnyTokenizer::Block(Box::new(IndentedCodeTokenizer::default())),
-            None,
-        );
-    inner
-        .useTokenizer(
-            AnyTokenizer::Block(Box::new(HtmlBlockTokenizer::default())),
-            None,
-        );
-    inner
-        .useTokenizer(
-            AnyTokenizer::Block(Box::new(SetextHeadingTokenizer::default())),
-            None,
-        );
-    inner
-        .useTokenizer(
-            AnyTokenizer::Block(Box::new(ThematicBreakTokenizer::default())),
-            None,
-        );
-    inner
-        .useTokenizer(
-            AnyTokenizer::Block(Box::new(BlockquoteTokenizer::default())),
-            None,
-        );
-    inner
-        .useTokenizer(
-            AnyTokenizer::Block(Box::new(ListTokenizer::new(ListTokenizerOptions {
-                enable_task_list_item: false,
-                ..ListTokenizerOptions::default()
-            }))),
-            None,
-        );
-    inner
-        .useTokenizer(
-            AnyTokenizer::Block(Box::new(HeadingTokenizer::default())),
-            None,
-        );
-    inner
-        .useTokenizer(
-            AnyTokenizer::Block(Box::new(FencedCodeTokenizer::default())),
-            None,
-        );
-    inner
-        .useTokenizer(
-            AnyTokenizer::Block(Box::new(DefinitionTokenizer::default())),
-            None,
-        );
+    inner.useTokenizer(
+        AnyTokenizer::Block(Box::new(IndentedCodeTokenizer::default())),
+        None,
+    );
+    inner.useTokenizer(
+        AnyTokenizer::Block(Box::new(HtmlBlockTokenizer::default())),
+        None,
+    );
+    inner.useTokenizer(
+        AnyTokenizer::Block(Box::new(SetextHeadingTokenizer::default())),
+        None,
+    );
+    inner.useTokenizer(
+        AnyTokenizer::Block(Box::new(ThematicBreakTokenizer::default())),
+        None,
+    );
+    inner.useTokenizer(
+        AnyTokenizer::Block(Box::new(BlockquoteTokenizer::default())),
+        None,
+    );
+    inner.useTokenizer(
+        AnyTokenizer::Block(Box::new(ListTokenizer::new(ListTokenizerOptions {
+            enable_task_list_item: false,
+            ..ListTokenizerOptions::default()
+        }))),
+        None,
+    );
+    inner.useTokenizer(
+        AnyTokenizer::Block(Box::new(HeadingTokenizer::default())),
+        None,
+    );
+    inner.useTokenizer(
+        AnyTokenizer::Block(Box::new(FencedCodeTokenizer::default())),
+        None,
+    );
+    inner.useTokenizer(
+        AnyTokenizer::Block(Box::new(DefinitionTokenizer::default())),
+        None,
+    );
 
-    inner
-        .useTokenizer(
-            AnyTokenizer::Inline(Box::new(HtmlInlineTokenizer::default())),
-            None,
-        );
-    inner
-        .useTokenizer(
-            AnyTokenizer::Inline(Box::new(InlineCodeTokenizer::default())),
-            None,
-        );
-    inner
-        .useTokenizer(
-            AnyTokenizer::Inline(Box::new(AutolinkTokenizer::default())),
-            None,
-        );
-    inner
-        .useTokenizer(
-            AnyTokenizer::Inline(Box::new(BreakTokenizer::default())),
-            None,
-        );
-    inner
-        .useTokenizer(
-            AnyTokenizer::Inline(Box::new(ImageTokenizer::default())),
-            None,
-        );
-    inner
-        .useTokenizer(
-            AnyTokenizer::Inline(Box::new(ImageReferenceTokenizer::default())),
-            None,
-        );
-    inner
-        .useTokenizer(
-            AnyTokenizer::Inline(Box::new(LinkTokenizer::default())),
-            None,
-        );
-    inner
-        .useTokenizer(
-            AnyTokenizer::Inline(Box::new(LinkReferenceTokenizer::default())),
-            None,
-        );
-    inner
-        .useTokenizer(
-            AnyTokenizer::Inline(Box::new(EmphasisTokenizer::default())),
-            None,
-        );
+    inner.useTokenizer(
+        AnyTokenizer::Inline(Box::new(HtmlInlineTokenizer::default())),
+        None,
+    );
+    inner.useTokenizer(
+        AnyTokenizer::Inline(Box::new(InlineCodeTokenizer::default())),
+        None,
+    );
+    inner.useTokenizer(
+        AnyTokenizer::Inline(Box::new(AutolinkTokenizer::default())),
+        None,
+    );
+    inner.useTokenizer(
+        AnyTokenizer::Inline(Box::new(BreakTokenizer::default())),
+        None,
+    );
+    inner.useTokenizer(
+        AnyTokenizer::Inline(Box::new(ImageTokenizer::default())),
+        None,
+    );
+    inner.useTokenizer(
+        AnyTokenizer::Inline(Box::new(ImageReferenceTokenizer::default())),
+        None,
+    );
+    inner.useTokenizer(
+        AnyTokenizer::Inline(Box::new(LinkTokenizer::default())),
+        None,
+    );
+    inner.useTokenizer(
+        AnyTokenizer::Inline(Box::new(LinkReferenceTokenizer::default())),
+        None,
+    );
+    inner.useTokenizer(
+        AnyTokenizer::Inline(Box::new(EmphasisTokenizer::default())),
+        None,
+    );
 }
 
 impl GfmParser {
@@ -153,7 +135,8 @@ impl GfmParser {
         tokenizer: AnyTokenizer,
         registerBeforeTokenizer: Option<&str>,
     ) -> &mut Self {
-        self.inner.replaceTokenizer(tokenizer, registerBeforeTokenizer);
+        self.inner
+            .replaceTokenizer(tokenizer, registerBeforeTokenizer);
         self
     }
 

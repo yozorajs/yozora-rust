@@ -20,14 +20,17 @@ impl TableTokenizer {
     pub fn new(options: TokenizerOptions) -> Self {
         Self {
             meta: TokenizerMeta {
-                name: options.name.unwrap_or_else(|| TABLE_TOKENIZER_NAME.to_string()),
+                name: options
+                    .name
+                    .unwrap_or_else(|| TABLE_TOKENIZER_NAME.to_string()),
                 kind: TokenizerKind::Block,
-                priority: options.priority.unwrap_or(TokenizerPriority::INTERRUPTABLE_BLOCK),
+                priority: options
+                    .priority
+                    .unwrap_or(TokenizerPriority::INTERRUPTABLE_BLOCK),
             },
         }
     }
 }
-
 
 impl Tokenizer for TableTokenizer {
     fn r#type(&self) -> TokenizerType {

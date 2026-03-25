@@ -23,14 +23,15 @@ impl TextTokenizer {
     pub fn new(options: TokenizerOptions) -> Self {
         Self {
             meta: TokenizerMeta {
-                name: options.name.unwrap_or_else(|| TEXT_TOKENIZER_NAME.to_string()),
+                name: options
+                    .name
+                    .unwrap_or_else(|| TEXT_TOKENIZER_NAME.to_string()),
                 kind: TokenizerKind::Inline,
                 priority: options.priority.unwrap_or(TokenizerPriority::FALLBACK),
             },
         }
     }
 }
-
 
 impl Tokenizer for TextTokenizer {
     fn r#type(&self) -> TokenizerType {
@@ -50,9 +51,9 @@ struct TextMatchHook;
 
 impl<'a> MatchInlineHook<'a> for TextMatchHook {
     fn findDelimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
-        Box::new(genFindDelimiter(
-            |start_index, end_index| Some(r#match::find_text_delimiter(start_index, end_index)),
-        ))
+        Box::new(genFindDelimiter(|start_index, end_index| {
+            Some(r#match::find_text_delimiter(start_index, end_index))
+        }))
     }
 
     fn processSingleDelimiter(&self, delimiter: &TokenDelimiter) -> Vec<InlineToken> {

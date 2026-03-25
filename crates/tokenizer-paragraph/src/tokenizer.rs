@@ -20,14 +20,15 @@ impl ParagraphTokenizer {
     pub fn new(options: TokenizerOptions) -> Self {
         Self {
             meta: TokenizerMeta {
-                name: options.name.unwrap_or_else(|| PARAGRAPH_TOKENIZER_NAME.to_string()),
+                name: options
+                    .name
+                    .unwrap_or_else(|| PARAGRAPH_TOKENIZER_NAME.to_string()),
                 kind: TokenizerKind::Block,
                 priority: options.priority.unwrap_or(TokenizerPriority::FALLBACK),
             },
         }
     }
 }
-
 
 impl Tokenizer for ParagraphTokenizer {
     fn r#type(&self) -> TokenizerType {
@@ -96,10 +97,7 @@ impl BlockTokenizer for ParagraphTokenizer {
         Box::new(ParagraphParseHook { api })
     }
 
-    fn extractPhrasingContentLines(
-        &self,
-        token: &BlockToken,
-    ) -> Option<Vec<PhrasingContentLine>> {
+    fn extractPhrasingContentLines(&self, token: &BlockToken) -> Option<Vec<PhrasingContentLine>> {
         r#match::extract_lines(token)
     }
 

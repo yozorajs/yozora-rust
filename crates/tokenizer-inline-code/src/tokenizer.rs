@@ -23,14 +23,15 @@ impl InlineCodeTokenizer {
     pub fn new(options: TokenizerOptions) -> Self {
         Self {
             meta: TokenizerMeta {
-                name: options.name.unwrap_or_else(|| INLINE_CODE_TOKENIZER_NAME.to_string()),
+                name: options
+                    .name
+                    .unwrap_or_else(|| INLINE_CODE_TOKENIZER_NAME.to_string()),
                 kind: TokenizerKind::Inline,
                 priority: options.priority.unwrap_or(TokenizerPriority::ATOMIC),
             },
         }
     }
 }
-
 
 impl Tokenizer for InlineCodeTokenizer {
     fn r#type(&self) -> TokenizerType {
@@ -89,10 +90,7 @@ impl InlineTokenizer for InlineCodeTokenizer {
         Box::new(InlineCodeMatchHook { api })
     }
 
-    fn parse<'a>(
-        &'a self,
-        api: &'a dyn ParseInlinePhaseApi,
-    ) -> Box<dyn ParseInlineHook + 'a> {
+    fn parse<'a>(&'a self, api: &'a dyn ParseInlinePhaseApi) -> Box<dyn ParseInlineHook + 'a> {
         Box::new(InlineCodeParseHook { api })
     }
 }

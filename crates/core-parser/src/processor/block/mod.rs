@@ -259,10 +259,10 @@ impl<'a> BlockContentProcessor<'a> {
                     first_non_whitespace_index,
                     count_of_precede_spaces,
                 );
-                let last_state_is_lazy_continuation = self
-                    .state_stack
-                    .last()
-                    .is_some_and(|state| token_ref(&self.root, &state.path).node_type == PARAGRAPH_TYPE);
+                let last_state_is_lazy_continuation =
+                    self.state_stack.last().is_some_and(|state| {
+                        token_ref(&self.root, &state.path).node_type == PARAGRAPH_TYPE
+                    });
 
                 if last_state_is_lazy_continuation && eating_info.count_of_precede_spaces >= 4 {
                     skip_step2 = true;

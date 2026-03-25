@@ -26,14 +26,15 @@ impl LinkReferenceTokenizer {
     pub fn new(options: TokenizerOptions) -> Self {
         Self {
             meta: TokenizerMeta {
-                name: options.name.unwrap_or_else(|| LINK_REFERENCE_TOKENIZER_NAME.to_string()),
+                name: options
+                    .name
+                    .unwrap_or_else(|| LINK_REFERENCE_TOKENIZER_NAME.to_string()),
                 kind: TokenizerKind::Inline,
                 priority: options.priority.unwrap_or(TokenizerPriority::LINKS),
             },
         }
     }
 }
-
 
 impl Tokenizer for LinkReferenceTokenizer {
     fn r#type(&self) -> TokenizerType {
@@ -84,18 +85,16 @@ impl<'a> MatchInlineHook<'a> for LinkReferenceMatchHook<'a> {
         let api = self.api;
         let delimiters = Rc::clone(&self.delimiters);
 
-        Box::new(genFindDelimiter(
-            move |start_index, end_index| {
-                let entry = r#match::find_link_reference_delimiter_entry(
-                    api.getNodePoints(),
-                    start_index,
-                    end_index,
-                )?;
-                let delimiter = entry.delimiter.clone();
-                delimiters.borrow_mut().push(entry);
-                Some(delimiter)
-            },
-        ))
+        Box::new(genFindDelimiter(move |start_index, end_index| {
+            let entry = r#match::find_link_reference_delimiter_entry(
+                api.getNodePoints(),
+                start_index,
+                end_index,
+            )?;
+            let delimiter = entry.delimiter.clone();
+            delimiters.borrow_mut().push(entry);
+            Some(delimiter)
+        }))
     }
 
     fn isDelimiterPair(
@@ -183,7 +182,8 @@ impl<'a> MatchInlineHook<'a> for LinkReferenceMatchHook<'a> {
             };
         };
 
-        let (Some(label), Some(identifier)) = (first.label.clone(), first.identifier.clone()) else {
+        let (Some(label), Some(identifier)) = (first.label.clone(), first.identifier.clone())
+        else {
             return ProcessDelimiterPairResult {
                 tokens,
                 remainOpenerDelimiter: None,
@@ -237,12 +237,7 @@ impl<'a> MatchInlineHook<'a> for LinkReferenceMatchHook<'a> {
 
     fn processSingleDelimiter(&self, delimiter: &TokenDelimiter) -> Vec<InlineToken> {
         let brackets = self.lookup_brackets(delimiter);
-        r#match::process_single_delimiter(
-            self.api,
-            delimiter,
-            &brackets,
-            self.api.getNodePoints(),
-        )
+        r#match::process_single_delimiter(self.api, delimiter, &brackets, self.api.getNodePoints())
     }
 }
 
@@ -267,10 +262,7 @@ impl InlineTokenizer for LinkReferenceTokenizer {
         })
     }
 
-    fn parse<'a>(
-        &'a self,
-        api: &'a dyn ParseInlinePhaseApi,
-    ) -> Box<dyn ParseInlineHook + 'a> {
+    fn parse<'a>(&'a self, api: &'a dyn ParseInlinePhaseApi) -> Box<dyn ParseInlineHook + 'a> {
         Box::new(LinkReferenceParseHook { api })
     }
 }
@@ -336,7 +328,11 @@ mod tests {
             start_index: usize,
             end_index: usize,
         ) -> Vec<InlineToken> {
-            vec![InlineToken::new("text", TEXT_TYPE, (start_index, end_index))]
+            vec![InlineToken::new(
+                "text",
+                TEXT_TYPE,
+                (start_index, end_index),
+            )]
         }
     }
 

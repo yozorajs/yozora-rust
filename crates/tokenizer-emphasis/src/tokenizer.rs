@@ -23,14 +23,17 @@ impl EmphasisTokenizer {
     pub fn new(options: TokenizerOptions) -> Self {
         Self {
             meta: TokenizerMeta {
-                name: options.name.unwrap_or_else(|| EMPHASIS_TOKENIZER_NAME.to_string()),
+                name: options
+                    .name
+                    .unwrap_or_else(|| EMPHASIS_TOKENIZER_NAME.to_string()),
                 kind: TokenizerKind::Inline,
-                priority: options.priority.unwrap_or(TokenizerPriority::CONTAINING_INLINE),
+                priority: options
+                    .priority
+                    .unwrap_or(TokenizerPriority::CONTAINING_INLINE),
             },
         }
     }
 }
-
 
 impl Tokenizer for EmphasisTokenizer {
     fn r#type(&self) -> TokenizerType {

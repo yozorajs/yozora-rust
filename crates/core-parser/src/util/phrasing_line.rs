@@ -64,20 +64,18 @@ pub fn create_phrasing_line_generator(
     }
 
     let shared_points = Arc::new(all_node_points);
-    line_groups
-        .into_iter()
-        .map(move |group| {
-            group
-                .into_iter()
-                .map(|line| PhrasingContentLine {
-                    node_points: shared_points.clone(),
-                    start_index: line.start_index,
-                    end_index: line.end_index,
-                    first_non_whitespace_index: line.first_non_whitespace_index,
-                    count_of_precede_spaces: line.count_of_precede_spaces,
-                })
-                .collect()
-        })
+    line_groups.into_iter().map(move |group| {
+        group
+            .into_iter()
+            .map(|line| PhrasingContentLine {
+                node_points: shared_points.clone(),
+                start_index: line.start_index,
+                end_index: line.end_index,
+                first_non_whitespace_index: line.first_non_whitespace_index,
+                count_of_precede_spaces: line.count_of_precede_spaces,
+            })
+            .collect()
+    })
 }
 
 pub fn create_phrasing_line_groups(

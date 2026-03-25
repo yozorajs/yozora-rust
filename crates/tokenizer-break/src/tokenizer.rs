@@ -23,16 +23,15 @@ impl BreakTokenizer {
     pub fn new(options: TokenizerOptions) -> Self {
         Self {
             meta: TokenizerMeta {
-                name: options.name.unwrap_or_else(|| BREAK_TOKENIZER_NAME.to_string()),
+                name: options
+                    .name
+                    .unwrap_or_else(|| BREAK_TOKENIZER_NAME.to_string()),
                 kind: TokenizerKind::Inline,
                 priority: options.priority.unwrap_or(TokenizerPriority::SOFT_INLINE),
             },
         }
     }
 }
-
-
-
 
 impl Tokenizer for BreakTokenizer {
     fn r#type(&self) -> TokenizerType {
@@ -56,11 +55,9 @@ impl<'a> MatchInlineHook<'a> for BreakMatchHook<'a> {
     fn findDelimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
         let api = self.api;
 
-        Box::new(genFindDelimiter(
-            |start_index, end_index| {
-                r#match::find_break_delimiter(api, start_index, end_index)
-            },
-        ))
+        Box::new(genFindDelimiter(|start_index, end_index| {
+            r#match::find_break_delimiter(api, start_index, end_index)
+        }))
     }
 
     fn processSingleDelimiter(&self, delimiter: &TokenDelimiter) -> Vec<InlineToken> {
@@ -90,10 +87,7 @@ impl InlineTokenizer for BreakTokenizer {
         Box::new(BreakMatchHook { api })
     }
 
-    fn parse<'a>(
-        &'a self,
-        api: &'a dyn ParseInlinePhaseApi,
-    ) -> Box<dyn ParseInlineHook + 'a> {
+    fn parse<'a>(&'a self, api: &'a dyn ParseInlinePhaseApi) -> Box<dyn ParseInlineHook + 'a> {
         Box::new(BreakParseHook { api })
     }
 }

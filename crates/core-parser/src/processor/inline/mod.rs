@@ -131,10 +131,10 @@ pub fn match_inline_tokens(
     let mut processor = SinglePriorityDelimiterProcessor::default();
 
     let mut tokens = higher_priority_tokens.to_vec();
-        for hook_indices in hook_groups {
-            for &hook_index in &hook_indices {
-                hooks[hook_index].reset();
-            }
+    for hook_indices in hook_groups {
+        for &hook_index in &hook_indices {
+            hooks[hook_index].reset();
+        }
 
         let mut token_index = 0usize;
         processor.reset(&tokens);

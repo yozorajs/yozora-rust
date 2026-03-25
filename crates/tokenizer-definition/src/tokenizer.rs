@@ -20,14 +20,15 @@ impl DefinitionTokenizer {
     pub fn new(options: TokenizerOptions) -> Self {
         Self {
             meta: TokenizerMeta {
-                name: options.name.unwrap_or_else(|| DEFINITION_TOKENIZER_NAME.to_string()),
+                name: options
+                    .name
+                    .unwrap_or_else(|| DEFINITION_TOKENIZER_NAME.to_string()),
                 kind: TokenizerKind::Block,
                 priority: options.priority.unwrap_or(TokenizerPriority::ATOMIC),
             },
         }
     }
 }
-
 
 impl Tokenizer for DefinitionTokenizer {
     fn r#type(&self) -> TokenizerType {
@@ -85,17 +86,11 @@ impl ParseBlockHook for DefinitionParseHook<'_> {
 }
 
 impl BlockTokenizer for DefinitionTokenizer {
-    fn r#match<'a>(
-        &'a self,
-        api: &'a dyn MatchBlockPhaseApi,
-    ) -> Box<dyn MatchBlockHook + 'a> {
+    fn r#match<'a>(&'a self, api: &'a dyn MatchBlockPhaseApi) -> Box<dyn MatchBlockHook + 'a> {
         Box::new(DefinitionMatchHook { api })
     }
 
-    fn parse<'a>(
-        &'a self,
-        api: &'a dyn ParseBlockPhaseApi,
-    ) -> Box<dyn ParseBlockHook + 'a> {
+    fn parse<'a>(&'a self, api: &'a dyn ParseBlockPhaseApi) -> Box<dyn ParseBlockHook + 'a> {
         Box::new(DefinitionParseHook { api })
     }
 }

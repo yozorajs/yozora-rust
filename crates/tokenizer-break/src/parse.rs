@@ -1,7 +1,10 @@
 use yozora_ast::{BreakNode, Node};
 use yozora_core_tokenizer::{InlineToken, NodeInterval, ParseInlinePhaseApi};
 
-pub(crate) fn parse_break_tokens(tokens: &[InlineToken], parse_api: &dyn ParseInlinePhaseApi) -> Vec<Node> {
+pub(crate) fn parse_break_tokens(
+    tokens: &[InlineToken],
+    parse_api: &dyn ParseInlinePhaseApi,
+) -> Vec<Node> {
     let mut nodes = Vec::with_capacity(tokens.len());
 
     for token in tokens {

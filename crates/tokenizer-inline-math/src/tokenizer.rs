@@ -46,16 +46,20 @@ impl Default for InlineMathTokenizer {
 impl InlineMathTokenizer {
     pub fn new(options: InlineMathTokenizerOptions) -> Self {
         let (default_name, default_priority) = if options.backtick_required {
-            (INLINE_MATH_WITH_BACKTICK_TOKENIZER_NAME, TokenizerPriority::ATOMIC)
+            (
+                INLINE_MATH_WITH_BACKTICK_TOKENIZER_NAME,
+                TokenizerPriority::ATOMIC,
+            )
         } else {
-            (INLINE_MATH_TOKENIZER_NAME, TokenizerPriority::INTERRUPTABLE_INLINE)
+            (
+                INLINE_MATH_TOKENIZER_NAME,
+                TokenizerPriority::INTERRUPTABLE_INLINE,
+            )
         };
 
         Self {
             meta: TokenizerMeta {
-                name: options
-                    .name
-                    .unwrap_or_else(|| default_name.to_string()),
+                name: options.name.unwrap_or_else(|| default_name.to_string()),
                 kind: TokenizerKind::Inline,
                 priority: options.priority.unwrap_or(default_priority),
             },

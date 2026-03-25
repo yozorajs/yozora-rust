@@ -20,14 +20,17 @@ impl FootnoteDefinitionTokenizer {
     pub fn new(options: TokenizerOptions) -> Self {
         Self {
             meta: TokenizerMeta {
-                name: options.name.unwrap_or_else(|| FOOTNOTE_DEFINITION_TOKENIZER_NAME.to_string()),
+                name: options
+                    .name
+                    .unwrap_or_else(|| FOOTNOTE_DEFINITION_TOKENIZER_NAME.to_string()),
                 kind: TokenizerKind::Block,
-                priority: options.priority.unwrap_or(TokenizerPriority::CONTAINING_BLOCK),
+                priority: options
+                    .priority
+                    .unwrap_or(TokenizerPriority::CONTAINING_BLOCK),
             },
         }
     }
 }
-
 
 impl Tokenizer for FootnoteDefinitionTokenizer {
     fn r#type(&self) -> TokenizerType {

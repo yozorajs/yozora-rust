@@ -15,7 +15,8 @@ pub(crate) fn parse_definition_tokens(
             continue;
         };
 
-        let Some((label, identifier)) = resolve_label_and_identifier(&data.label.node_points) else {
+        let Some((label, identifier)) = resolve_label_and_identifier(&data.label.node_points)
+        else {
             continue;
         };
 
@@ -39,7 +40,12 @@ pub(crate) fn parse_definition_tokens(
                 true,
             )
         } else {
-            calc_escaped_string_from_node_points(destination_points, 0, destination_points.len(), true)
+            calc_escaped_string_from_node_points(
+                destination_points,
+                0,
+                destination_points.len(),
+                true,
+            )
         };
 
         let title = if let Some(title_state) = &data.title {

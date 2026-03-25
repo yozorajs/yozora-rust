@@ -20,14 +20,15 @@ impl HtmlBlockTokenizer {
     pub fn new(options: TokenizerOptions) -> Self {
         Self {
             meta: TokenizerMeta {
-                name: options.name.unwrap_or_else(|| HTML_BLOCK_TOKENIZER_NAME.to_string()),
+                name: options
+                    .name
+                    .unwrap_or_else(|| HTML_BLOCK_TOKENIZER_NAME.to_string()),
                 kind: TokenizerKind::Block,
                 priority: options.priority.unwrap_or(TokenizerPriority::ATOMIC),
             },
         }
     }
 }
-
 
 impl Tokenizer for HtmlBlockTokenizer {
     fn r#type(&self) -> TokenizerType {

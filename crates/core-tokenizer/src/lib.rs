@@ -6,7 +6,9 @@ pub mod util;
 use yozora_ast::Node;
 
 pub use constant::{DelimiterType, TokenizerPriority, TokenizerType};
-pub use tokenizers::{gen_find_delimiter, genFindDelimiter, BaseBlockTokenizer, BaseInlineTokenizer};
+pub use tokenizers::{
+    genFindDelimiter, gen_find_delimiter, BaseBlockTokenizer, BaseInlineTokenizer,
+};
 pub use types::match_block::{
     EatAndInterruptPreviousSiblingResult, EatContinuationTextResult, EatLazyContinuationTextResult,
     EatOpenerResult, MatchBlockHook, MatchBlockPhaseApi, OnCloseResult, RemainingSibling,

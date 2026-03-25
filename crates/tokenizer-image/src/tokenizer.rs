@@ -23,14 +23,15 @@ impl ImageTokenizer {
     pub fn new(options: TokenizerOptions) -> Self {
         Self {
             meta: TokenizerMeta {
-                name: options.name.unwrap_or_else(|| IMAGE_TOKENIZER_NAME.to_string()),
+                name: options
+                    .name
+                    .unwrap_or_else(|| IMAGE_TOKENIZER_NAME.to_string()),
                 kind: TokenizerKind::Inline,
                 priority: options.priority.unwrap_or(TokenizerPriority::LINKS),
             },
         }
     }
 }
-
 
 impl Tokenizer for ImageTokenizer {
     fn r#type(&self) -> TokenizerType {
@@ -59,8 +60,7 @@ impl<'a> ImageMatchHook<'a> {
     fn new(api: &'a dyn MatchInlinePhaseApi) -> Self {
         let block_start_index = api.getBlockStartIndex();
         let block_end_index = api.getBlockEndIndex();
-        let source =
-            r#match::build_source(api.getNodePoints(), block_start_index, block_end_index);
+        let source = r#match::build_source(api.getNodePoints(), block_start_index, block_end_index);
         let char_starts = r#match::build_char_starts(&source);
 
         Self {
@@ -98,22 +98,20 @@ impl<'a> MatchInlineHook<'a> for ImageMatchHook<'a> {
         let block_end_index = self.block_end_index;
         let delimiters = Rc::clone(&self.delimiters);
 
-        Box::new(genFindDelimiter(
-            move |start_index, end_index| {
-                let entry = r#match::find_image_delimiter_entry(
-                    &source,
-                    &char_starts,
-                    api.getNodePoints(),
-                    block_start_index,
-                    block_end_index,
-                    start_index,
-                    end_index,
-                )?;
-                let delimiter = entry.delimiter.clone();
-                delimiters.borrow_mut().push(entry);
-                Some(delimiter)
-            },
-        ))
+        Box::new(genFindDelimiter(move |start_index, end_index| {
+            let entry = r#match::find_image_delimiter_entry(
+                &source,
+                &char_starts,
+                api.getNodePoints(),
+                block_start_index,
+                block_end_index,
+                start_index,
+                end_index,
+            )?;
+            let delimiter = entry.delimiter.clone();
+            delimiters.borrow_mut().push(entry);
+            Some(delimiter)
+        }))
     }
 
     fn isDelimiterPair(

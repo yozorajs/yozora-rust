@@ -64,7 +64,8 @@ pub(crate) fn find_link_reference_delimiter_entry(
             let mut delimiter_end = i + 1;
             let mut j = next_index;
 
-            while j < end_index && node_points[j].code_point == AsciiCodePoint::OPEN_BRACKET as i32 {
+            while j < end_index && node_points[j].code_point == AsciiCodePoint::OPEN_BRACKET as i32
+            {
                 let (next_j, label_and_identifier) = eat_link_label(node_points, j, end_index);
 
                 if next_j < 0 {
@@ -133,7 +134,8 @@ pub(crate) fn find_link_reference_delimiter_entry(
             let mut delimiter_end = next_index;
             let mut j = next_index;
 
-            while j < end_index && node_points[j].code_point == AsciiCodePoint::OPEN_BRACKET as i32 {
+            while j < end_index && node_points[j].code_point == AsciiCodePoint::OPEN_BRACKET as i32
+            {
                 let (next_j, label_and_identifier) = eat_link_label(node_points, j, end_index);
                 if next_j < 0 {
                     delimiter_type = DelimiterType::Both;
@@ -333,7 +335,8 @@ pub(crate) fn check_balanced_brackets_status(
     let mut i = start_index;
     let mut bracket_count = 0i32;
 
-    let update = |idx: usize, count: &mut i32, i_ref: &mut usize| match node_points[idx].code_point {
+    let update = |idx: usize, count: &mut i32, i_ref: &mut usize| match node_points[idx].code_point
+    {
         x if x == AsciiCodePoint::BACKSLASH as i32 => {
             *i_ref += 1;
         }

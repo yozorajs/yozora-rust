@@ -12,14 +12,13 @@ pub(crate) enum AutolinkExtensionContentType {
 #[derive(Debug, Clone)]
 pub(crate) struct AutolinkExtensionTokenData {
     pub content_type: AutolinkExtensionContentType,
-    pub children_tokens: Vec<InlineToken>,
 }
 
 pub(crate) fn parse_autolink_extension_tokens(
     tokens: &[InlineToken],
     parse_api: &dyn ParseInlinePhaseApi,
 ) -> Vec<Node> {
-    let node_points = parse_api.getNodePoints();
+    let node_points = parse_api.get_node_points();
     let mut nodes = Vec::with_capacity(tokens.len());
 
     for token in tokens {
@@ -43,8 +42,8 @@ pub(crate) fn parse_autolink_extension_tokens(
             AutolinkExtensionContentType::Uri => {}
         }
 
-        let position = if parse_api.shouldReservePosition() {
-            Some(parse_api.calcPosition(NodeInterval {
+        let position = if parse_api.should_reserve_position() {
+            Some(parse_api.calc_position(NodeInterval {
                 start_index: token.start_index,
                 end_index: token.end_index,
             }))
@@ -54,9 +53,9 @@ pub(crate) fn parse_autolink_extension_tokens(
 
         nodes.push(Node::Link(Link {
             position,
-            url,
+            url: parse_api.format_url(&url),
             title: None,
-            children: parse_api.parseInlineTokens(Some(&data.children_tokens)),
+            children: parse_api.parse_inline_tokens(Some(&token.children)),
         }));
     }
 

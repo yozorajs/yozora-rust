@@ -11,3 +11,6 @@ pub use tokenizer::{
     FencedBlockTokenizer, FencedBlockTokenizerOptions, FENCED_BLOCK_TOKENIZER_NAME,
     FENCED_BLOCK_TYPE,
 };
+
+pub type FencedBlockToken = yozora_core_tokenizer::BlockToken;
+pub type FencedBlockTokenizerProps = FencedBlockTokenizerOptions;

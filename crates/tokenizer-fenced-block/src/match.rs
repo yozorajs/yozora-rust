@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
-use yozora_ast::{NodeType, Point, Position};
+use yozora_ast::{NodeType, Position};
 use yozora_character::{calc_trim_boundary_of_code_points, is_space_character, NodePoint};
 use yozora_core_tokenizer::{
-    BlockToken, EatAndInterruptPreviousSiblingResult, EatContinuationTextResult, EatOpenerResult,
-    MatchBlockHook, PhrasingContentLine, RemainingSibling,
+    calc_end_point, calc_start_point, BlockToken, EatAndInterruptPreviousSiblingResult,
+    EatContinuationTextResult, EatOpenerResult, MatchBlockHook, PhrasingContentLine,
+    RemainingSibling,
 };
 
 pub type CheckInfoStringFn = Arc<dyn Fn(&[NodePoint], i32, usize) -> bool + Send + Sync + 'static>;
@@ -184,6 +185,7 @@ pub fn eat_continuation_text(
         start_index: first_index,
         end_index: line.end_index,
         first_non_whitespace_index: line.first_non_whitespace_index,
+        indent_width: line.indent_width.saturating_sub(data.indent),
         count_of_precede_spaces: line.count_of_precede_spaces,
     });
 
@@ -218,20 +220,9 @@ fn calc_line_position(line: &PhrasingContentLine) -> Option<Position> {
         return None;
     }
 
-    let start = line.node_points[line.start_index];
-    let end = line.node_points[line.end_index - 1];
-
     Some(Position {
-        start: Point {
-            line: start.line,
-            column: start.column,
-            offset: Some(start.offset),
-        },
-        end: Point {
-            line: end.line,
-            column: end.column + 1,
-            offset: Some(end.offset + 1),
-        },
+        start: calc_start_point(line.node_points.as_ref(), line.start_index),
+        end: calc_end_point(line.node_points.as_ref(), line.end_index - 1),
         indent: None,
     })
 }
@@ -244,10 +235,5 @@ fn update_token_end_position(token: &mut BlockToken, line: &PhrasingContentLine)
         return;
     }
 
-    let end = line.node_points[line.end_index - 1];
-    position.end = Point {
-        line: end.line,
-        column: end.column + 1,
-        offset: Some(end.offset + 1),
-    };
+    position.end = calc_end_point(line.node_points.as_ref(), line.end_index - 1);
 }

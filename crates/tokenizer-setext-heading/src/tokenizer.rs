@@ -70,7 +70,7 @@ impl MatchBlockHook for SetextHeadingMatchHook<'_> {
         r#match::eat_and_interrupt_previous_sibling(
             line,
             prev_sibling_token,
-            self.api.extractPhrasingLines(prev_sibling_token),
+            self.api.extract_phrasing_lines(prev_sibling_token),
         )
     }
 }

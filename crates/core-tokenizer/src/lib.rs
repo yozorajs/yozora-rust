@@ -3,12 +3,11 @@ pub mod tokenizers;
 pub mod types;
 pub mod util;
 
+use std::fmt::{Display, Formatter};
 use yozora_ast::Node;
 
 pub use constant::{DelimiterType, TokenizerPriority, TokenizerType};
-pub use tokenizers::{
-    genFindDelimiter, gen_find_delimiter, BaseBlockTokenizer, BaseInlineTokenizer,
-};
+pub use tokenizers::{gen_find_delimiter, BaseBlockTokenizer, BaseInlineTokenizer};
 pub use types::match_block::{
     EatAndInterruptPreviousSiblingResult, EatContinuationTextResult, EatLazyContinuationTextResult,
     EatOpenerResult, MatchBlockHook, MatchBlockPhaseApi, OnCloseResult, RemainingSibling,
@@ -17,26 +16,29 @@ pub use types::match_inline::{
     FindDelimiterGenerator, IsDelimiterPairResult, MatchInlineFallbackPhaseApi, MatchInlineHook,
     MatchInlinePhaseApi, ProcessDelimiterPairResult,
 };
-pub use types::parse_block::{ParseBlockHook, ParseBlockPhaseApi};
+pub use types::parse_block::{
+    ParseBlockHook, ParseBlockPhaseApi, ParseBlockTask, ParseBlockTaskStep,
+};
 pub use types::parse_inline::{ParseInlineHook, ParseInlinePhaseApi};
 pub use types::phrasing_content::PhrasingContentLine;
-pub use types::token::{
-    BlockToken, InlineToken, TokenData, TokenDelimiter, TokenizerId, UNKNOWN_TOKENIZER_ID,
-};
+pub use types::token::{BlockToken, BlockTokenChildren, InlineToken, TokenData, TokenDelimiter};
 pub use types::tokenizer::{BlockTokenizer, InlineFallbackTokenizer, InlineTokenizer, Tokenizer};
-pub use types::util::NodeInterval;
+pub use types::util::{NodeInterval, ResultOfOptionalEater, ResultOfRequiredEater};
 pub use util::phrasing_content::{
     calc_position_from_phrasing_content_lines, merge_and_strip_content_lines,
     merge_content_lines_faithfully,
 };
 pub use util::point::{calc_end_point, calc_start_point};
 pub use util::uri::{
-    eat_link_label, encode_link_destination, is_link_token, resolve_label_to_identifier,
+    check_balanced_brackets_status, contains_link_token, eat_link_label, encode_link_destination,
+    is_link_token, is_valid_link_text, resolve_label_to_identifier,
     resolve_link_label_and_identifier,
 };
 pub use util::whitespace::{
+    calc_indent_width, eat_indentation, eat_optional_blank_lines, eat_optional_characters,
+    eat_optional_whitespaces, eat_optional_whitespaces_reverse, is_blank_range,
     leading_indent_columns, split_indent_prefix, strip_indent_columns,
-    strip_indent_columns_with_base,
+    strip_indent_columns_with_base, trim_blank_lines,
 };
 
 #[derive(Debug, Clone)]
@@ -97,13 +99,11 @@ impl AnyTokenizer {
             Self::Inline(t) => t.priority(),
         }
     }
+}
 
-    #[allow(non_snake_case)]
-    pub fn toString(&self) -> String {
-        match self {
-            Self::Block(t) => t.toString(),
-            Self::Inline(t) => t.toString(),
-        }
+impl Display for AnyTokenizer {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.name())
     }
 }
 
@@ -133,12 +133,10 @@ impl AnyFallbackTokenizer {
             Self::Inline(t) => t.name(),
         }
     }
+}
 
-    #[allow(non_snake_case)]
-    pub fn toString(&self) -> String {
-        match self {
-            Self::Block(t) => t.toString(),
-            Self::Inline(t) => t.toString(),
-        }
+impl Display for AnyFallbackTokenizer {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.name())
     }
 }

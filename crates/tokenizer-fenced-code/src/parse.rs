@@ -24,7 +24,7 @@ pub(crate) fn parse_fenced_code_tokens(
         }
 
         nodes.push(Node::Code(Code {
-            position: if parse_api.shouldReservePosition() {
+            position: if parse_api.should_reserve_position() {
                 token.position.clone()
             } else {
                 None

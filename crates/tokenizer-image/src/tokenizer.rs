@@ -58,9 +58,10 @@ struct ImageMatchHook<'a> {
 
 impl<'a> ImageMatchHook<'a> {
     fn new(api: &'a dyn MatchInlinePhaseApi) -> Self {
-        let block_start_index = api.getBlockStartIndex();
-        let block_end_index = api.getBlockEndIndex();
-        let source = r#match::build_source(api.getNodePoints(), block_start_index, block_end_index);
+        let block_start_index = api.get_block_start_index();
+        let block_end_index = api.get_block_end_index();
+        let source =
+            r#match::build_source(api.get_node_points(), block_start_index, block_end_index);
         let char_starts = r#match::build_char_starts(&source);
 
         Self {
@@ -88,7 +89,7 @@ impl<'a> ImageMatchHook<'a> {
 }
 
 impl<'a> MatchInlineHook<'a> for ImageMatchHook<'a> {
-    fn findDelimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
+    fn find_delimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
         self.delimiters.borrow_mut().clear();
 
         let source = self.source.clone();
@@ -98,11 +99,11 @@ impl<'a> MatchInlineHook<'a> for ImageMatchHook<'a> {
         let block_end_index = self.block_end_index;
         let delimiters = Rc::clone(&self.delimiters);
 
-        Box::new(genFindDelimiter(move |start_index, end_index| {
+        Box::new(gen_find_delimiter(move |start_index, end_index| {
             let entry = r#match::find_image_delimiter_entry(
                 &source,
                 &char_starts,
-                api.getNodePoints(),
+                api.get_node_points(),
                 block_start_index,
                 block_end_index,
                 start_index,
@@ -114,7 +115,7 @@ impl<'a> MatchInlineHook<'a> for ImageMatchHook<'a> {
         }))
     }
 
-    fn isDelimiterPair(
+    fn is_delimiter_pair(
         &self,
         opener_delimiter: &TokenDelimiter,
         closer_delimiter: &TokenDelimiter,
@@ -124,7 +125,7 @@ impl<'a> MatchInlineHook<'a> for ImageMatchHook<'a> {
             opener_delimiter.end_index,
             closer_delimiter.start_index,
             internal_tokens,
-            self.api.getNodePoints(),
+            self.api.get_node_points(),
         );
 
         match status {
@@ -144,7 +145,7 @@ impl<'a> MatchInlineHook<'a> for ImageMatchHook<'a> {
         }
     }
 
-    fn processDelimiterPair(
+    fn process_delimiter_pair(
         &self,
         opener_delimiter: &TokenDelimiter,
         closer_delimiter: &TokenDelimiter,
@@ -153,12 +154,12 @@ impl<'a> MatchInlineHook<'a> for ImageMatchHook<'a> {
         let Some(data) = self.lookup_data(closer_delimiter) else {
             return ProcessDelimiterPairResult {
                 tokens: Vec::new(),
-                remainOpenerDelimiter: None,
-                remainCloserDelimiter: None,
+                remain_opener_delimiter: None,
+                remain_closer_delimiter: None,
             };
         };
 
-        let children_tokens = self.api.resolveInternalTokens(
+        let children_tokens = self.api.resolve_internal_tokens(
             internal_tokens,
             opener_delimiter.end_index,
             closer_delimiter.start_index,
@@ -174,8 +175,8 @@ impl<'a> MatchInlineHook<'a> for ImageMatchHook<'a> {
 
         ProcessDelimiterPairResult {
             tokens: vec![token],
-            remainOpenerDelimiter: None,
-            remainCloserDelimiter: None,
+            remain_opener_delimiter: None,
+            remain_closer_delimiter: None,
         }
     }
 }

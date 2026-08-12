@@ -57,7 +57,7 @@ pub(crate) fn eat_opener(
 
 pub(crate) fn eat_continuation_text(
     line: &PhrasingContentLine,
-    token: &mut BlockToken,
+    _token: &mut BlockToken,
     indent: usize,
 ) -> EatContinuationTextResult {
     if line.first_non_whitespace_index >= line.end_index {
@@ -80,7 +80,7 @@ pub(crate) fn on_close(token: &BlockToken, api: &dyn MatchBlockPhaseApi) {
         return;
     };
 
-    api.registerFootnoteDefinitionIdentifier(&data.identifier);
+    api.register_footnote_definition_identifier(&data.identifier);
 }
 
 pub fn eat_footnote_label(

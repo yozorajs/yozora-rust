@@ -7,7 +7,7 @@ use yozora_core_tokenizer::{
 use crate::parse::LinkReferenceTokenData;
 
 #[derive(Debug, Clone)]
-pub(crate) struct LinkReferenceDelimiterBracket {
+pub struct LinkReferenceDelimiterBracket {
     pub start_index: usize,
     pub end_index: usize,
     pub label: Option<String>,
@@ -197,7 +197,7 @@ pub(crate) fn process_single_delimiter(
         while bracket_index < brackets.len() {
             let bracket = &brackets[bracket_index];
             if let Some(identifier) = &bracket.identifier {
-                if api.hasDefinition(identifier) {
+                if api.has_definition(identifier) {
                     found_index = Some(bracket_index);
                     break;
                 }
@@ -219,7 +219,7 @@ pub(crate) fn process_single_delimiter(
         // Full reference: `[label0][label1]` where the second bracket resolves.
         if (last_bracket_index + 1) < current_index as isize {
             let previous = &brackets[current_index - 1];
-            let children_tokens = api.resolveInternalTokens(
+            let children_tokens = api.resolve_internal_tokens(
                 &[],
                 previous.start_index + 1,
                 previous.end_index.saturating_sub(1),
@@ -244,7 +244,7 @@ pub(crate) fn process_single_delimiter(
 
         // Shortcut reference: `[label]`.
         if current_index + 1 == brackets.len() {
-            let children_tokens = api.resolveInternalTokens(
+            let children_tokens = api.resolve_internal_tokens(
                 &[],
                 bracket.start_index + 1,
                 bracket.end_index.saturating_sub(1),
@@ -267,7 +267,7 @@ pub(crate) fn process_single_delimiter(
         // Collapsed reference: `[label][]`.
         if current_index + 1 < brackets.len() && brackets[current_index + 1].identifier.is_none() {
             let collapsed_tail = &brackets[current_index + 1];
-            let children_tokens = api.resolveInternalTokens(
+            let children_tokens = api.resolve_internal_tokens(
                 &[],
                 bracket.start_index + 1,
                 bracket.end_index.saturating_sub(1),
@@ -297,6 +297,7 @@ pub(crate) fn process_single_delimiter(
     tokens
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn create_reference_token(
     node_points: &[NodePoint],
     start_index: usize,
@@ -315,15 +316,15 @@ pub(crate) fn create_reference_token(
         false,
     );
 
-    InlineToken::new("", LINK_REFERENCE_TYPE, (start_index, end_index)).with_data(
-        LinkReferenceTokenData {
+    let token_children = children_tokens.clone();
+    InlineToken::new("", LINK_REFERENCE_TYPE, (start_index, end_index))
+        .with_children(token_children)
+        .with_data(LinkReferenceTokenData {
             identifier,
             label,
             reference_type,
             child_text,
-            children_tokens,
-        },
-    )
+        })
 }
 
 pub(crate) fn check_balanced_brackets_status(

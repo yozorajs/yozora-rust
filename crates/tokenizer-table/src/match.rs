@@ -34,7 +34,7 @@ pub(crate) fn eat_and_interrupt_previous_sibling(
         return None;
     }
 
-    let lines = match_api.extractPhrasingLines(prev_sibling_token)?;
+    let lines = match_api.extract_phrasing_lines(prev_sibling_token)?;
     if lines.is_empty() {
         return None;
     }
@@ -54,7 +54,7 @@ pub(crate) fn eat_and_interrupt_previous_sibling(
 
     let remaining_lines = &lines[..lines.len() - 1];
     let remaining_sibling_tokens =
-        match_api.rollbackPhrasingLines(remaining_lines, Some(prev_sibling_token));
+        match_api.rollback_phrasing_lines(remaining_lines, Some(prev_sibling_token));
 
     let remaining_sibling = match remaining_sibling_tokens.len() {
         0 => RemainingSibling::None,
@@ -280,6 +280,7 @@ fn calc_table_row(
                 start_index: cell_start_index,
                 end_index: cell_end_index,
                 first_non_whitespace_index: cell_first_non_whitespace_index,
+                indent_width: cell_first_non_whitespace_index.saturating_sub(cell_start_index),
                 count_of_precede_spaces: cell_first_non_whitespace_index
                     .saturating_sub(cell_start_index),
             }]

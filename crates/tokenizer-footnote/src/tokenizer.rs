@@ -49,16 +49,17 @@ struct FootnoteMatchHook<'a> {
 }
 
 impl<'a> MatchInlineHook<'a> for FootnoteMatchHook<'a> {
-    fn findDelimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
+    fn find_delimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
         let api = self.api;
 
-        Box::new(genFindDelimiter(|start_index, end_index| {
-            let entry = r#match::find_delimiter_entry(api.getNodePoints(), start_index, end_index)?;
+        Box::new(gen_find_delimiter(|start_index, end_index| {
+            let entry =
+                r#match::find_delimiter_entry(api.get_node_points(), start_index, end_index)?;
             Some(entry.delimiter)
         }))
     }
 
-    fn isDelimiterPair(
+    fn is_delimiter_pair(
         &self,
         opener_delimiter: &TokenDelimiter,
         closer_delimiter: &TokenDelimiter,
@@ -72,7 +73,7 @@ impl<'a> MatchInlineHook<'a> for FootnoteMatchHook<'a> {
         )
     }
 
-    fn processDelimiterPair(
+    fn process_delimiter_pair(
         &self,
         opener_delimiter: &TokenDelimiter,
         closer_delimiter: &TokenDelimiter,

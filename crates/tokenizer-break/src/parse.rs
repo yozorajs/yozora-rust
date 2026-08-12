@@ -8,8 +8,8 @@ pub(crate) fn parse_break_tokens(
     let mut nodes = Vec::with_capacity(tokens.len());
 
     for token in tokens {
-        let position = if parse_api.shouldReservePosition() {
-            Some(parse_api.calcPosition(NodeInterval {
+        let position = if parse_api.should_reserve_position() {
+            Some(parse_api.calc_position(NodeInterval {
                 start_index: token.start_index,
                 end_index: token.end_index,
             }))

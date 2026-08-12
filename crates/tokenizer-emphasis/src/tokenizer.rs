@@ -54,14 +54,14 @@ struct EmphasisMatchHook<'a> {
 }
 
 impl<'a> MatchInlineHook<'a> for EmphasisMatchHook<'a> {
-    fn findDelimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
+    fn find_delimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
         let api = self.api;
-        Box::new(genFindDelimiter(move |start_index, end_index| {
+        Box::new(gen_find_delimiter(move |start_index, end_index| {
             r#match::find_delimiter(api, start_index, end_index)
         }))
     }
 
-    fn isDelimiterPair(
+    fn is_delimiter_pair(
         &self,
         opener_delimiter: &TokenDelimiter,
         closer_delimiter: &TokenDelimiter,
@@ -70,7 +70,7 @@ impl<'a> MatchInlineHook<'a> for EmphasisMatchHook<'a> {
         r#match::is_delimiter_pair(self.api, opener_delimiter, closer_delimiter)
     }
 
-    fn processDelimiterPair(
+    fn process_delimiter_pair(
         &self,
         opener_delimiter: &TokenDelimiter,
         closer_delimiter: &TokenDelimiter,
@@ -120,27 +120,27 @@ mod tests {
     }
 
     impl MatchInlinePhaseApi for DummyMatchApi {
-        fn hasDefinition(&self, _identifier: &str) -> bool {
+        fn has_definition(&self, _identifier: &str) -> bool {
             false
         }
 
-        fn hasFootnoteDefinition(&self, _identifier: &str) -> bool {
+        fn has_footnote_definition(&self, _identifier: &str) -> bool {
             false
         }
 
-        fn getNodePoints(&self) -> &[NodePoint] {
+        fn get_node_points(&self) -> &[NodePoint] {
             &self.node_points
         }
 
-        fn getBlockStartIndex(&self) -> usize {
+        fn get_block_start_index(&self) -> usize {
             0
         }
 
-        fn getBlockEndIndex(&self) -> usize {
+        fn get_block_end_index(&self) -> usize {
             self.node_points.len()
         }
 
-        fn resolveFallbackTokens(
+        fn resolve_fallback_tokens(
             &self,
             _tokens: &[InlineToken],
             _token_start_index: usize,
@@ -149,7 +149,7 @@ mod tests {
             Vec::new()
         }
 
-        fn resolveInternalTokens(
+        fn resolve_internal_tokens(
             &self,
             _higher_priority_tokens: &[InlineToken],
             _start_index: usize,
@@ -162,31 +162,31 @@ mod tests {
     struct DummyParseApi;
 
     impl ParseInlinePhaseApi for DummyParseApi {
-        fn shouldReservePosition(&self) -> bool {
+        fn should_reserve_position(&self) -> bool {
             false
         }
 
-        fn calcPosition(&self, _interval: NodeInterval) -> yozora_ast::Position {
-            panic!("calcPosition should not be called in this test")
+        fn calc_position(&self, _interval: NodeInterval) -> yozora_ast::Position {
+            panic!("calc_position should not be called in this test")
         }
 
-        fn formatUrl(&self, url: &str) -> String {
+        fn format_url(&self, url: &str) -> String {
             url.to_string()
         }
 
-        fn getNodePoints(&self) -> &[NodePoint] {
+        fn get_node_points(&self) -> &[NodePoint] {
             &[]
         }
 
-        fn hasDefinition(&self, _identifier: &str) -> bool {
+        fn has_definition(&self, _identifier: &str) -> bool {
             false
         }
 
-        fn hasFootnoteDefinition(&self, _identifier: &str) -> bool {
+        fn has_footnote_definition(&self, _identifier: &str) -> bool {
             false
         }
 
-        fn parseInlineTokens(&self, tokens: Option<&[InlineToken]>) -> Vec<Node> {
+        fn parse_inline_tokens(&self, tokens: Option<&[InlineToken]>) -> Vec<Node> {
             let Some(tokens) = tokens else {
                 return Vec::new();
             };
@@ -214,9 +214,9 @@ mod tests {
         };
 
         let hook = tokenizer.r#match(&api);
-        let mut find_delimiter = hook.findDelimiter();
+        let mut find_delimiter = hook.find_delimiter();
         let delimiter = find_delimiter
-            .next((0, api.getBlockEndIndex()))
+            .next((0, api.get_block_end_index()))
             .expect("expected delimiter");
 
         assert_eq!(delimiter.start_index, 0);
@@ -238,7 +238,7 @@ mod tests {
         };
 
         let hook = tokenizer.r#match(&api);
-        let result = hook.processDelimiterPair(
+        let result = hook.process_delimiter_pair(
             &TokenDelimiter {
                 delimiter_type: DelimiterType::Opener,
                 start_index: 0,
@@ -265,13 +265,16 @@ mod tests {
             .data_as::<parse::EmphasisTokenData>()
             .expect("expected emphasis token data");
         assert_eq!(data.thickness, 2);
-        assert_eq!(data.children.len(), resolved_tokens.len());
-        assert_eq!(data.children[0].tokenizer, resolved_tokens[0].tokenizer);
-        assert_eq!(data.children[0].node_type, resolved_tokens[0].node_type);
-        assert_eq!(data.children[0].start_index, resolved_tokens[0].start_index);
-        assert_eq!(data.children[0].end_index, resolved_tokens[0].end_index);
-        assert!(result.remainOpenerDelimiter.is_none());
-        assert!(result.remainCloserDelimiter.is_none());
+        assert_eq!(token.children.len(), resolved_tokens.len());
+        assert_eq!(token.children[0].tokenizer, resolved_tokens[0].tokenizer);
+        assert_eq!(token.children[0].node_type, resolved_tokens[0].node_type);
+        assert_eq!(
+            token.children[0].start_index,
+            resolved_tokens[0].start_index
+        );
+        assert_eq!(token.children[0].end_index, resolved_tokens[0].end_index);
+        assert!(result.remain_opener_delimiter.is_none());
+        assert!(result.remain_closer_delimiter.is_none());
     }
 
     #[test]
@@ -280,12 +283,9 @@ mod tests {
         let api = DummyParseApi;
         let parse_hook = tokenizer.parse(&api);
 
-        let token = InlineToken::new(EMPHASIS_TOKENIZER_NAME, EMPHASIS_TYPE, (1, 4)).with_data(
-            parse::EmphasisTokenData {
-                thickness: 1,
-                children: vec![InlineToken::new("text", TEXT_TYPE, (2, 3))],
-            },
-        );
+        let token = InlineToken::new(EMPHASIS_TOKENIZER_NAME, EMPHASIS_TYPE, (1, 4))
+            .with_children(vec![InlineToken::new("text", TEXT_TYPE, (2, 3))])
+            .with_data(parse::EmphasisTokenData { thickness: 1 });
 
         let nodes = parse_hook.parse(&[token]);
         assert_eq!(nodes.len(), 1);

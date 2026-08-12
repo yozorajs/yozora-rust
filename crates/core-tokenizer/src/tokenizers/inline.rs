@@ -91,11 +91,3 @@ where
 {
     FindDelimiterGeneratorBy::new(find_delimiter)
 }
-
-#[allow(non_snake_case)]
-pub fn genFindDelimiter<F>(find_delimiter: F) -> FindDelimiterGeneratorBy<F>
-where
-    F: FnMut(usize, usize) -> Option<TokenDelimiter>,
-{
-    gen_find_delimiter(find_delimiter)
-}

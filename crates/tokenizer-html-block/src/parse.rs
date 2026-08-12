@@ -18,7 +18,7 @@ pub(crate) fn parse_html_block_tokens(
         let contents = merge_content_lines_faithfully(&data.lines, 0, data.lines.len());
         let value = calc_string_from_node_points(&contents, 0, contents.len(), false);
         nodes.push(Node::Html(Html {
-            position: if parse_api.shouldReservePosition() {
+            position: if parse_api.should_reserve_position() {
                 token.position.clone()
             } else {
                 None

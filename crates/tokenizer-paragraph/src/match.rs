@@ -97,7 +97,7 @@ pub(crate) fn trim_blank_lines(lines: &[PhrasingContentLine]) -> Vec<PhrasingCon
     lines[left..right].to_vec()
 }
 
-pub(crate) fn buildBlockToken(
+pub(crate) fn build_block_token(
     lines: &[PhrasingContentLine],
     original_token: &BlockToken,
 ) -> Option<BlockToken> {

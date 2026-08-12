@@ -11,18 +11,15 @@ pub enum IsDelimiterPairResult {
 }
 
 #[derive(Debug, Clone)]
-#[allow(non_snake_case)]
 pub struct ProcessDelimiterPairResult {
     pub tokens: Vec<InlineToken>,
-    pub remainOpenerDelimiter: Option<TokenDelimiter>,
-    pub remainCloserDelimiter: Option<TokenDelimiter>,
+    pub remain_opener_delimiter: Option<TokenDelimiter>,
+    pub remain_closer_delimiter: Option<TokenDelimiter>,
 }
-
-#[allow(non_snake_case)]
 pub trait MatchInlineHook<'hook> {
-    fn findDelimiter(&self) -> Box<dyn FindDelimiterGenerator + 'hook>;
+    fn find_delimiter(&self) -> Box<dyn FindDelimiterGenerator + 'hook>;
 
-    fn isDelimiterPair(
+    fn is_delimiter_pair(
         &self,
         _opener_delimiter: &TokenDelimiter,
         _closer_delimiter: &TokenDelimiter,
@@ -31,7 +28,7 @@ pub trait MatchInlineHook<'hook> {
         IsDelimiterPairResult::Paired
     }
 
-    fn processDelimiterPair(
+    fn process_delimiter_pair(
         &self,
         opener_delimiter: &TokenDelimiter,
         closer_delimiter: &TokenDelimiter,
@@ -45,8 +42,8 @@ pub trait MatchInlineHook<'hook> {
 
         ProcessDelimiterPairResult {
             tokens: passthrough,
-            remainOpenerDelimiter: Some(opener_delimiter.clone()),
-            remainCloserDelimiter: Some(TokenDelimiter {
+            remain_opener_delimiter: Some(opener_delimiter.clone()),
+            remain_closer_delimiter: Some(TokenDelimiter {
                 start_index: token_start,
                 end_index: token_end,
                 ..closer_delimiter.clone()
@@ -54,7 +51,7 @@ pub trait MatchInlineHook<'hook> {
         }
     }
 
-    fn processSingleDelimiter(&self, _delimiter: &TokenDelimiter) -> Vec<InlineToken> {
+    fn process_single_delimiter(&self, _delimiter: &TokenDelimiter) -> Vec<InlineToken> {
         Vec::new()
     }
 }

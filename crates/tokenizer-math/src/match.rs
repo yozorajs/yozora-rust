@@ -37,6 +37,7 @@ pub(crate) fn eat_opener(line: &PhrasingContentLine) -> Option<EatOpenerResult> 
         start_index: 0,
         end_index: right - count_of_trailing_marker,
         first_non_whitespace_index: left,
+        indent_width: 0,
         count_of_precede_spaces: 0,
     }];
 

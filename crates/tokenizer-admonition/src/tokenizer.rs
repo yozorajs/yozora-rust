@@ -73,7 +73,7 @@ impl MatchBlockHook for AdmonitionMatchHook<'_> {
 
     fn on_close(&mut self, token: &mut BlockToken) -> Option<OnCloseResult> {
         if let Some(data) = token.data_as::<FencedBlockTokenData>() {
-            token.children = self.api.rollbackPhrasingLines(&data.lines, None);
+            token.children = self.api.rollback_phrasing_lines(&data.lines, None).into();
         }
         None
     }
@@ -86,6 +86,10 @@ struct AdmonitionParseHook<'a> {
 impl ParseBlockHook for AdmonitionParseHook<'_> {
     fn parse(&self, tokens: &[BlockToken]) -> Vec<Node> {
         parse::parse_admonition_tokens(tokens, self.api)
+    }
+
+    fn parse_task(&self, tokens: &[BlockToken]) -> Option<Box<dyn ParseBlockTask>> {
+        Some(parse::create_admonition_parse_task(tokens, self.api))
     }
 }
 

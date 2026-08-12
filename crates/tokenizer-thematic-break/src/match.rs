@@ -20,8 +20,12 @@ pub(crate) fn eat_opener(line: &PhrasingContentLine) -> Option<EatOpenerResult> 
     let mut continuous = true;
     let mut has_potential_internal_space = false;
 
-    for i in line.first_non_whitespace_index..line.end_index {
-        let code_point = node_points[i].code_point;
+    for point in node_points
+        .iter()
+        .take(line.end_index)
+        .skip(line.first_non_whitespace_index)
+    {
+        let code_point = point.code_point;
         if is_whitespace_character(code_point) {
             has_potential_internal_space = true;
             continue;

@@ -23,9 +23,9 @@ pub(crate) struct InlineCodeDelimiterFinder {
 
 impl InlineCodeDelimiterFinder {
     pub(crate) fn new(api: &dyn MatchInlinePhaseApi) -> Self {
-        let node_points = api.getNodePoints();
-        let block_start_index = api.getBlockStartIndex();
-        let block_end_index = api.getBlockEndIndex();
+        let node_points = api.get_node_points();
+        let block_start_index = api.get_block_start_index();
+        let block_end_index = api.get_block_end_index();
 
         Self {
             potential_delimiters: collect_potential_delimiters(

@@ -2,14 +2,12 @@ use yozora_ast::Node;
 use yozora_character::NodePoint;
 
 use crate::types::token::BlockToken;
-
-#[allow(non_snake_case)]
 pub trait ParseBlockPhaseApi {
-    fn shouldReservePosition(&self) -> bool;
+    fn should_reserve_position(&self) -> bool;
 
-    fn formatUrl(&self, url: &str) -> String;
+    fn format_url(&self, url: &str) -> String;
 
-    fn processInlines(&self, node_points: &[NodePoint]) -> Vec<Node>;
+    fn process_inlines(&self, node_points: &[NodePoint]) -> Vec<Node>;
 
-    fn parseBlockTokens(&self, tokens: Option<&[BlockToken]>) -> Vec<Node>;
+    fn parse_block_tokens(&self, tokens: Option<&[BlockToken]>) -> Vec<Node>;
 }

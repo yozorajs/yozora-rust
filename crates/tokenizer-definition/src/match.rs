@@ -6,14 +6,14 @@ use yozora_character::{
 use yozora_core_tokenizer::*;
 
 #[derive(Debug, Clone)]
-pub(crate) struct LinkLabelCollectingState {
+pub struct LinkLabelCollectingState {
     pub saturated: bool,
     pub node_points: Vec<NodePoint>,
     pub has_non_whitespace_character: bool,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct LinkDestinationCollectingState {
+pub struct LinkDestinationCollectingState {
     pub saturated: bool,
     pub node_points: Vec<NodePoint>,
     pub has_open_angle_bracket: bool,
@@ -21,16 +21,16 @@ pub(crate) struct LinkDestinationCollectingState {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct LinkTitleCollectingState {
+pub struct LinkTitleCollectingState {
     pub saturated: bool,
     pub node_points: Vec<NodePoint>,
     pub wrap_symbol: Option<i32>,
 }
 
 #[derive(Debug, Clone)]
-struct CollectResult<T> {
-    next_index: isize,
-    state: T,
+pub struct CollectResult<T> {
+    pub next_index: isize,
+    pub state: T,
 }
 
 #[derive(Debug, Clone)]
@@ -339,7 +339,7 @@ pub(crate) fn on_close(
     }
 
     let (_, identifier) = resolve_label_and_identifier(&data.label.node_points)?;
-    match_api.registerDefinitionIdentifier(&identifier);
+    match_api.register_definition_identifier(&identifier);
     result
 }
 
@@ -355,7 +355,7 @@ fn eat_optional_whitespaces(
     i
 }
 
-fn eat_and_collect_link_label(
+pub fn eat_and_collect_link_label(
     node_points: &[NodePoint],
     start_index: usize,
     end_index: usize,
@@ -391,6 +391,13 @@ fn eat_and_collect_link_label(
     }
 
     while i < end_index {
+        if state.node_points.len() > 1000 {
+            return CollectResult {
+                next_index: -1,
+                state,
+            };
+        }
+
         let point = node_points[i];
         match point.code_point {
             x if x == AsciiCodePoint::BACKSLASH as i32 => {
@@ -433,12 +440,12 @@ fn eat_and_collect_link_label(
     }
 
     CollectResult {
-        next_index: end_index as isize,
+        next_index: 1,
         state,
     }
 }
 
-fn eat_and_collect_link_destination(
+pub fn eat_and_collect_link_destination(
     node_points: &[NodePoint],
     start_index: usize,
     end_index: usize,
@@ -474,11 +481,16 @@ fn eat_and_collect_link_destination(
             let point = node_points[i];
             match point.code_point {
                 x if x == AsciiCodePoint::BACKSLASH as i32 => {
-                    if i + 1 < end_index {
-                        state.node_points.push(point);
+                    state.node_points.push(point);
+                    if i + 1 < end_index
+                        && yozora_character::is_ascii_punctuation_character(
+                            node_points[i + 1].code_point,
+                        )
+                    {
                         state.node_points.push(node_points[i + 1]);
+                        i += 1;
                     }
-                    i += 2;
+                    i += 1;
                 }
                 x if x == AsciiCodePoint::OPEN_ANGLE as i32
                     || x == VirtualCodePoint::LineEnd as i32 =>
@@ -513,11 +525,16 @@ fn eat_and_collect_link_destination(
         let point = node_points[i];
         match point.code_point {
             x if x == AsciiCodePoint::BACKSLASH as i32 => {
-                if i + 1 < end_index {
-                    state.node_points.push(point);
+                state.node_points.push(point);
+                if i + 1 < end_index
+                    && yozora_character::is_ascii_punctuation_character(
+                        node_points[i + 1].code_point,
+                    )
+                {
                     state.node_points.push(node_points[i + 1]);
+                    i += 1;
                 }
-                i += 2;
+                i += 1;
             }
             x if x == AsciiCodePoint::OPEN_PARENTHESIS as i32 => {
                 state.open_parens_count += 1;
@@ -539,7 +556,7 @@ fn eat_and_collect_link_destination(
                 if is_whitespace_character(point.code_point)
                     || is_ascii_control_character(point.code_point)
                 {
-                    state.saturated = true;
+                    state.saturated = state.open_parens_count == 0;
                     return CollectResult {
                         next_index: i as isize,
                         state,
@@ -552,14 +569,14 @@ fn eat_and_collect_link_destination(
         }
     }
 
-    state.saturated = true;
+    state.saturated = state.open_parens_count == 0;
     CollectResult {
         next_index: i as isize,
         state,
     }
 }
 
-fn eat_and_collect_link_title(
+pub fn eat_and_collect_link_title(
     node_points: &[NodePoint],
     start_index: usize,
     end_index: usize,
@@ -658,16 +675,10 @@ fn eat_and_collect_link_title(
                 };
             }
             x if x == AsciiCodePoint::CLOSE_PARENTHESIS as i32 => {
-                if i + 1 >= end_index
-                    || node_points[i + 1].code_point == VirtualCodePoint::LineEnd as i32
-                {
-                    state.node_points.push(point);
-                    state.saturated = true;
-                    break;
-                }
-
+                state.saturated = true;
+                state.node_points.push(point);
                 return CollectResult {
-                    next_index: -1,
+                    next_index: (i + 1) as isize,
                     state,
                 };
             }
@@ -702,7 +713,7 @@ pub(crate) fn resolve_label_and_identifier(label_points: &[NodePoint]) -> Option
         collapsed.push_str(part);
     }
 
-    let identifier = fold_case(&collapsed);
+    let identifier = fold_case(&collapsed.to_lowercase());
     Some((label, identifier))
 }
 
@@ -739,20 +750,9 @@ fn calc_line_position(line: &PhrasingContentLine) -> Option<Position> {
         return None;
     }
 
-    let start = line.node_points[line.start_index];
-    let end = line.node_points[line.end_index - 1];
-
     Some(Position {
-        start: Point {
-            line: start.line,
-            column: start.column,
-            offset: Some(start.offset),
-        },
-        end: Point {
-            line: end.line,
-            column: end.column + 1,
-            offset: Some(end.offset + 1),
-        },
+        start: calc_start_point(line.node_points.as_ref(), line.start_index),
+        end: calc_end_point(line.node_points.as_ref(), line.end_index - 1),
         indent: None,
     })
 }
@@ -762,12 +762,10 @@ fn calc_line_end_point(line: &PhrasingContentLine) -> Option<Point> {
         return None;
     }
 
-    let end = line.node_points[line.end_index - 1];
-    Some(Point {
-        line: end.line,
-        column: end.column + 1,
-        offset: Some(end.offset + 1),
-    })
+    Some(calc_end_point(
+        line.node_points.as_ref(),
+        line.end_index - 1,
+    ))
 }
 
 fn set_token_end_position_from_line(token: &mut BlockToken, line: &PhrasingContentLine) {
@@ -788,10 +786,5 @@ fn update_token_end_position(token: &mut BlockToken, line: &PhrasingContentLine)
         return;
     }
 
-    let end = line.node_points[line.end_index - 1];
-    position.end = Point {
-        line: end.line,
-        column: end.column + 1,
-        offset: Some(end.offset + 1),
-    };
+    position.end = calc_end_point(line.node_points.as_ref(), line.end_index - 1);
 }

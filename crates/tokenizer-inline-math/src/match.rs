@@ -25,9 +25,9 @@ pub(crate) struct InlineMathBacktickDelimiterFinder {
 impl InlineMathBacktickDelimiterFinder {
     pub(crate) fn new(api: &dyn MatchInlinePhaseApi) -> Self {
         let potential_delimiters = collect_potential_delimiters(
-            api.getNodePoints(),
-            api.getBlockStartIndex(),
-            api.getBlockEndIndex(),
+            api.get_node_points(),
+            api.get_block_start_index(),
+            api.get_block_end_index(),
         );
 
         Self {
@@ -89,9 +89,9 @@ pub(crate) fn find_delimiter(
     start_index: usize,
     end_index: usize,
 ) -> Option<TokenDelimiter> {
-    let node_points = api.getNodePoints();
-    let block_start_index = api.getBlockStartIndex();
-    let block_end_index = api.getBlockEndIndex();
+    let node_points = api.get_node_points();
+    let block_start_index = api.get_block_start_index();
+    let block_end_index = api.get_block_end_index();
 
     if start_index >= end_index || end_index > node_points.len() {
         return None;
@@ -196,8 +196,8 @@ pub(crate) fn process_delimiter_pair(
             (opener_delimiter.start_index, closer_delimiter.end_index),
         )
         .with_data(InlineMathTokenData { thickness })],
-        remainOpenerDelimiter: None,
-        remainCloserDelimiter: None,
+        remain_opener_delimiter: None,
+        remain_closer_delimiter: None,
     }
 }
 

@@ -8,7 +8,6 @@ use crate::util::calc_image_alt;
 pub(crate) struct ImageTokenData {
     pub destination_content: Option<NodeInterval>,
     pub title_content: Option<NodeInterval>,
-    pub children_tokens: Vec<InlineToken>,
 }
 
 pub(crate) fn parse_image_tokens(
@@ -16,7 +15,7 @@ pub(crate) fn parse_image_tokens(
     parse_api: &dyn ParseInlinePhaseApi,
 ) -> Vec<Node> {
     let mut nodes = Vec::with_capacity(tokens.len());
-    let node_points = parse_api.getNodePoints();
+    let node_points = parse_api.get_node_points();
 
     for token in tokens {
         let Some(data) = token.data_as::<ImageTokenData>() else {
@@ -37,10 +36,10 @@ pub(crate) fn parse_image_tokens(
 
             let destination =
                 calc_escaped_string_from_node_points(node_points, start_index, end_index, true);
-            url = parse_api.formatUrl(&destination);
+            url = parse_api.format_url(&destination);
         }
 
-        let children = parse_api.parseInlineTokens(Some(&data.children_tokens));
+        let children = parse_api.parse_inline_tokens(Some(&token.children));
         let alt = calc_image_alt(&children);
 
         let title = data.title_content.map(|title_content| {
@@ -53,8 +52,8 @@ pub(crate) fn parse_image_tokens(
             }
         });
 
-        let position = if parse_api.shouldReservePosition() {
-            Some(parse_api.calcPosition(NodeInterval {
+        let position = if parse_api.should_reserve_position() {
+            Some(parse_api.calc_position(NodeInterval {
                 start_index: token.start_index,
                 end_index: token.end_index,
             }))

@@ -1,7 +1,8 @@
-use yozora_ast::{Point, Position, CODE_TYPE};
+use yozora_ast::{Position, CODE_TYPE};
 use yozora_character::{AsciiCodePoint, VirtualCodePoint};
 use yozora_core_tokenizer::{
-    BlockToken, EatContinuationTextResult, EatOpenerResult, PhrasingContentLine,
+    calc_end_point, calc_start_point, BlockToken, EatContinuationTextResult, EatOpenerResult,
+    PhrasingContentLine,
 };
 
 use crate::parse::IndentedCodeTokenData;
@@ -33,6 +34,7 @@ pub(crate) fn eat_opener(line: &PhrasingContentLine) -> Option<EatOpenerResult> 
                 start_index: first_index,
                 end_index: line.end_index,
                 first_non_whitespace_index: line.first_non_whitespace_index,
+                indent_width: line.indent_width.saturating_sub(4),
                 count_of_precede_spaces: line
                     .count_of_precede_spaces
                     .saturating_sub(first_index.saturating_sub(line.start_index)),
@@ -65,6 +67,7 @@ pub(crate) fn eat_continuation_text(
         start_index: first_index,
         end_index: line.end_index,
         first_non_whitespace_index: line.first_non_whitespace_index,
+        indent_width: line.indent_width.saturating_sub(4),
         count_of_precede_spaces: line
             .count_of_precede_spaces
             .saturating_sub(first_index.saturating_sub(line.start_index)),
@@ -83,20 +86,9 @@ fn calc_line_position(line: &PhrasingContentLine) -> Option<Position> {
         return None;
     }
 
-    let start = line.node_points[line.start_index];
-    let end = line.node_points[line.end_index - 1];
-
     Some(Position {
-        start: Point {
-            line: start.line,
-            column: start.column,
-            offset: Some(start.offset),
-        },
-        end: Point {
-            line: end.line,
-            column: end.column + 1,
-            offset: Some(end.offset + 1),
-        },
+        start: calc_start_point(line.node_points.as_ref(), line.start_index),
+        end: calc_end_point(line.node_points.as_ref(), line.end_index - 1),
         indent: None,
     })
 }
@@ -109,10 +101,5 @@ fn update_token_end_position(token: &mut BlockToken, line: &PhrasingContentLine)
         return;
     }
 
-    let end = line.node_points[line.end_index - 1];
-    position.end = Point {
-        line: end.line,
-        column: end.column + 1,
-        offset: Some(end.offset + 1),
-    };
+    position.end = calc_end_point(line.node_points.as_ref(), line.end_index - 1);
 }

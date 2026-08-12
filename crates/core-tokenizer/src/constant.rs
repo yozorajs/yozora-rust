@@ -3,11 +3,7 @@ pub enum TokenizerType {
     Block,
     Inline,
 }
-
-#[allow(non_snake_case)]
 pub struct TokenizerPriority;
-
-#[allow(non_snake_case)]
 impl TokenizerPriority {
     pub const ATOMIC: i32 = 10;
     pub const FENCED_BLOCK: i32 = 10;

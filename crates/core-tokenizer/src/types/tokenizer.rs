@@ -14,9 +14,7 @@ pub trait Tokenizer {
     fn name(&self) -> &str;
 
     fn priority(&self) -> i32;
-
-    #[allow(non_snake_case)]
-    fn toString(&self) -> String {
+    fn to_string(&self) -> String {
         self.name().to_string()
     }
 }
@@ -26,11 +24,14 @@ pub trait BlockTokenizer: Tokenizer {
 
     fn parse<'a>(&'a self, api: &'a dyn ParseBlockPhaseApi) -> Box<dyn ParseBlockHook + 'a>;
 
-    fn extractPhrasingContentLines(&self, _token: &BlockToken) -> Option<Vec<PhrasingContentLine>> {
+    fn extract_phrasing_content_lines(
+        &self,
+        _token: &BlockToken,
+    ) -> Option<Vec<PhrasingContentLine>> {
         None
     }
 
-    fn buildBlockToken(
+    fn build_block_token(
         &self,
         _lines: &[PhrasingContentLine],
         _original_token: &BlockToken,
@@ -47,8 +48,7 @@ pub trait InlineTokenizer: Tokenizer {
 }
 
 pub trait InlineFallbackTokenizer: InlineTokenizer {
-    #[allow(non_snake_case)]
-    fn findAndHandleDelimiter(
+    fn find_and_handle_delimiter(
         &self,
         start_index: usize,
         end_index: usize,

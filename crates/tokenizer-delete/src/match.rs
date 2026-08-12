@@ -33,7 +33,8 @@ pub(crate) fn find_delete_delimiter(
         }
 
         let end = i;
-        if end.saturating_sub(start) != 2 {
+        let thickness = end - start;
+        if thickness != 1 && thickness != 2 {
             continue;
         }
 
@@ -64,8 +65,8 @@ pub(crate) fn find_delete_delimiter(
             delimiter_type,
             start_index: start,
             end_index: end,
-            thickness: 2,
-            original_thickness: 2,
+            thickness,
+            original_thickness: thickness,
         });
     }
 
@@ -77,10 +78,12 @@ pub(crate) fn create_delete_token(
     closer_delimiter: &TokenDelimiter,
     children: Vec<InlineToken>,
 ) -> InlineToken {
+    let token_children = children.clone();
     InlineToken::new(
         "",
         DELETE_TYPE,
         (opener_delimiter.start_index, closer_delimiter.end_index),
     )
-    .with_data(DeleteTokenData { children })
+    .with_children(token_children)
+    .with_data(DeleteTokenData)
 }

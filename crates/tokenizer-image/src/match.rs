@@ -139,15 +139,16 @@ pub(crate) fn create_image_token(
     title_content: Option<NodeInterval>,
     children_tokens: Vec<InlineToken>,
 ) -> InlineToken {
+    let token_children = children_tokens.clone();
     InlineToken::new(
         "",
         IMAGE_TYPE,
         (opener_delimiter.start_index, closer_delimiter.end_index),
     )
+    .with_children(token_children)
     .with_data(ImageTokenData {
         destination_content,
         title_content,
-        children_tokens,
     })
 }
 

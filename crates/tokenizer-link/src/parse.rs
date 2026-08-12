@@ -6,7 +6,6 @@ pub(crate) struct LinkTokenData {
     pub url: String,
     pub title: Option<String>,
     pub label: String,
-    pub children_tokens: Vec<InlineToken>,
 }
 
 pub(crate) fn parse_link_tokens(
@@ -20,8 +19,8 @@ pub(crate) fn parse_link_tokens(
             continue;
         };
 
-        let position = if parse_api.shouldReservePosition() {
-            Some(parse_api.calcPosition(NodeInterval {
+        let position = if parse_api.should_reserve_position() {
+            Some(parse_api.calc_position(NodeInterval {
                 start_index: token.start_index,
                 end_index: token.end_index,
             }))
@@ -31,15 +30,15 @@ pub(crate) fn parse_link_tokens(
 
         nodes.push(Node::Link(Link {
             position,
-            url: parse_api.formatUrl(&data.url),
+            url: parse_api.format_url(&data.url),
             title: data.title.clone(),
-            children: if data.children_tokens.is_empty() {
+            children: if token.children.is_empty() {
                 vec![Node::Text(Text {
                     position: None,
                     value: data.label.clone(),
                 })]
             } else {
-                parse_api.parseInlineTokens(Some(&data.children_tokens))
+                parse_api.parse_inline_tokens(Some(&token.children))
             },
         }));
     }

@@ -15,12 +15,12 @@ pub(crate) fn parse_paragraph_tokens(
         };
 
         let node_points = merge_and_strip_content_lines(&data.lines, 0, data.lines.len());
-        let children = parse_api.processInlines(&node_points);
+        let children = parse_api.process_inlines(&node_points);
         if children.is_empty() {
             continue;
         }
 
-        let position = if parse_api.shouldReservePosition() {
+        let position = if parse_api.should_reserve_position() {
             token.position.clone()
         } else {
             None

@@ -72,15 +72,15 @@ impl ImageReferenceMatchHook<'_> {
 }
 
 impl<'a> MatchInlineHook<'a> for ImageReferenceMatchHook<'a> {
-    fn findDelimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
+    fn find_delimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
         self.delimiters.borrow_mut().clear();
 
         let api = self.api;
         let delimiters = Rc::clone(&self.delimiters);
 
-        Box::new(genFindDelimiter(move |start_index, end_index| {
+        Box::new(gen_find_delimiter(move |start_index, end_index| {
             let entry = r#match::find_image_reference_delimiter_entry(
-                api.getNodePoints(),
+                api.get_node_points(),
                 start_index,
                 end_index,
             )?;
@@ -90,7 +90,7 @@ impl<'a> MatchInlineHook<'a> for ImageReferenceMatchHook<'a> {
         }))
     }
 
-    fn isDelimiterPair(
+    fn is_delimiter_pair(
         &self,
         opener_delimiter: &TokenDelimiter,
         closer_delimiter: &TokenDelimiter,
@@ -100,7 +100,7 @@ impl<'a> MatchInlineHook<'a> for ImageReferenceMatchHook<'a> {
             opener_delimiter.end_index,
             closer_delimiter.start_index,
             internal_tokens,
-            self.api.getNodePoints(),
+            self.api.get_node_points(),
         );
 
         match status {
@@ -120,7 +120,7 @@ impl<'a> MatchInlineHook<'a> for ImageReferenceMatchHook<'a> {
         }
     }
 
-    fn processDelimiterPair(
+    fn process_delimiter_pair(
         &self,
         opener_delimiter: &TokenDelimiter,
         closer_delimiter: &TokenDelimiter,
@@ -133,13 +133,13 @@ impl<'a> MatchInlineHook<'a> for ImageReferenceMatchHook<'a> {
             closer_delimiter,
             &brackets,
             internal_tokens,
-            self.api.getNodePoints(),
+            self.api.get_node_points(),
         );
 
         ProcessDelimiterPairResult {
             tokens,
-            remainOpenerDelimiter: None,
-            remainCloserDelimiter: None,
+            remain_opener_delimiter: None,
+            remain_closer_delimiter: None,
         }
     }
 }

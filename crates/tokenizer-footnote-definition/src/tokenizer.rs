@@ -87,6 +87,13 @@ impl ParseBlockHook for FootnoteDefinitionParseHook<'_> {
     fn parse(&self, tokens: &[BlockToken]) -> Vec<Node> {
         parse::parse_footnote_definition_tokens(tokens, self.api)
     }
+
+    fn parse_task(&self, tokens: &[BlockToken]) -> Option<Box<dyn ParseBlockTask>> {
+        Some(parse::create_footnote_definition_parse_task(
+            tokens,
+            self.api.should_reserve_position(),
+        ))
+    }
 }
 
 impl BlockTokenizer for FootnoteDefinitionTokenizer {

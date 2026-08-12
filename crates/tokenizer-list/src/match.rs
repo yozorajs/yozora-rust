@@ -1,4 +1,4 @@
-use yozora_ast::{NodeType, Point, Position, TaskStatus, LIST_TYPE};
+use yozora_ast::{NodeType, Position, TaskStatus, LIST_TYPE};
 use yozora_character::{
     is_ascii_digit_character, is_ascii_lower_letter, is_ascii_upper_letter, is_space_character,
     is_whitespace_character, AsciiCodePoint, NodePoint, VirtualCodePoint,
@@ -329,20 +329,9 @@ fn calc_segment_position(
         return None;
     }
 
-    let start = line.node_points[start_index];
-    let end = line.node_points[end_index - 1];
-
     Some(Position {
-        start: Point {
-            line: start.line,
-            column: start.column,
-            offset: Some(start.offset),
-        },
-        end: Point {
-            line: end.line,
-            column: end.column + 1,
-            offset: Some(end.offset + 1),
-        },
+        start: calc_start_point(line.node_points.as_ref(), start_index),
+        end: calc_end_point(line.node_points.as_ref(), end_index - 1),
         indent: None,
     })
 }
@@ -355,10 +344,5 @@ fn update_token_end_position(token: &mut BlockToken, line: &PhrasingContentLine)
         return;
     }
 
-    let end = line.node_points[line.end_index - 1];
-    position.end = Point {
-        line: end.line,
-        column: end.column + 1,
-        offset: Some(end.offset + 1),
-    };
+    position.end = calc_end_point(line.node_points.as_ref(), line.end_index - 1);
 }

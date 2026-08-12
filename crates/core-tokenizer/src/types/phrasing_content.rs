@@ -8,6 +8,7 @@ pub struct PhrasingContentLine {
     pub start_index: usize,
     pub end_index: usize,
     pub first_non_whitespace_index: usize,
+    pub indent_width: usize,
     pub count_of_precede_spaces: usize,
 }
 
@@ -19,6 +20,7 @@ impl PhrasingContentLine {
             start_index: 0,
             end_index,
             first_non_whitespace_index: 0,
+            indent_width: 0,
             count_of_precede_spaces: 0,
         }
     }

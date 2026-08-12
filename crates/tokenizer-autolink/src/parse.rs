@@ -1,9 +1,9 @@
-use yozora_ast::{Link, Node};
+use yozora_ast::{Link, Node, Text};
 use yozora_character::calc_string_from_node_points;
 use yozora_core_tokenizer::{InlineToken, NodeInterval, ParseInlinePhaseApi};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AutolinkContentType {
+pub enum AutolinkContentType {
     Uri,
     Email,
 }
@@ -11,14 +11,13 @@ pub(crate) enum AutolinkContentType {
 #[derive(Debug, Clone)]
 pub(crate) struct AutolinkTokenData {
     pub content_type: AutolinkContentType,
-    pub children_tokens: Vec<InlineToken>,
 }
 
 pub(crate) fn parse_autolink_tokens(
     tokens: &[InlineToken],
     parse_api: &dyn ParseInlinePhaseApi,
 ) -> Vec<Node> {
-    let node_points = parse_api.getNodePoints();
+    let node_points = parse_api.get_node_points();
     let mut nodes = Vec::with_capacity(tokens.len());
 
     for token in tokens {
@@ -39,20 +38,34 @@ pub(crate) fn parse_autolink_tokens(
             url = format!("mailto:{url}");
         }
 
-        let position = if parse_api.shouldReservePosition() {
-            Some(parse_api.calcPosition(NodeInterval {
-                start_index: token.start_index,
-                end_index: token.end_index,
-            }))
+        let (position, text_position) = if parse_api.should_reserve_position() {
+            (
+                Some(parse_api.calc_position(NodeInterval {
+                    start_index: token.start_index,
+                    end_index: token.end_index,
+                })),
+                Some(parse_api.calc_position(NodeInterval {
+                    start_index: token.start_index + 1,
+                    end_index: token.end_index - 1,
+                })),
+            )
         } else {
-            None
+            (None, None)
         };
 
         nodes.push(Node::Link(Link {
             position,
-            url: parse_api.formatUrl(&url),
+            url: parse_api.format_url(&url),
             title: None,
-            children: parse_api.parseInlineTokens(Some(&data.children_tokens)),
+            children: vec![Node::Text(Text {
+                position: text_position,
+                value: calc_string_from_node_points(
+                    node_points,
+                    token.start_index + 1,
+                    token.end_index - 1,
+                    false,
+                ),
+            })],
         }));
     }
 

@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use yozora_ast::Node;
@@ -10,6 +11,9 @@ use yozora_core_tokenizer::NodeInterval;
 use crate::{parse, r#match};
 
 pub const LINK_REFERENCE_TOKENIZER_NAME: &str = "@yozora/tokenizer-link-reference";
+
+type DelimiterKey = (usize, usize, u8);
+type DelimiterMap = Rc<RefCell<HashMap<DelimiterKey, r#match::DelimiterEntry>>>;
 
 #[derive(Debug, Clone)]
 pub struct LinkReferenceTokenizer {
@@ -52,12 +56,13 @@ impl Tokenizer for LinkReferenceTokenizer {
 
 struct LinkReferenceMatchHook<'a> {
     api: &'a dyn MatchInlinePhaseApi,
-    delimiters: Rc<RefCell<Vec<r#match::DelimiterEntry>>>,
+    delimiters: DelimiterMap,
 }
 
 impl LinkReferenceMatchHook<'_> {
     fn register_delimiter(&self, entry: r#match::DelimiterEntry) {
-        self.delimiters.borrow_mut().push(entry);
+        let key = delimiter_key(&entry.delimiter);
+        self.delimiters.borrow_mut().insert(key, entry);
     }
 
     fn lookup_brackets(
@@ -66,38 +71,33 @@ impl LinkReferenceMatchHook<'_> {
     ) -> Vec<r#match::LinkReferenceDelimiterBracket> {
         self.delimiters
             .borrow()
-            .iter()
-            .rev()
-            .find(|entry| {
-                entry.delimiter.start_index == delimiter.start_index
-                    && entry.delimiter.end_index == delimiter.end_index
-                    && entry.delimiter.delimiter_type == delimiter.delimiter_type
-            })
+            .get(&delimiter_key(delimiter))
             .map(|entry| entry.brackets.clone())
             .unwrap_or_default()
     }
 }
 
 impl<'a> MatchInlineHook<'a> for LinkReferenceMatchHook<'a> {
-    fn findDelimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
+    fn find_delimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
         self.delimiters.borrow_mut().clear();
 
         let api = self.api;
         let delimiters = Rc::clone(&self.delimiters);
 
-        Box::new(genFindDelimiter(move |start_index, end_index| {
+        Box::new(gen_find_delimiter(move |start_index, end_index| {
             let entry = r#match::find_link_reference_delimiter_entry(
-                api.getNodePoints(),
+                api.get_node_points(),
                 start_index,
                 end_index,
             )?;
             let delimiter = entry.delimiter.clone();
-            delimiters.borrow_mut().push(entry);
+            let key = delimiter_key(&delimiter);
+            delimiters.borrow_mut().insert(key, entry);
             Some(delimiter)
         }))
     }
 
-    fn isDelimiterPair(
+    fn is_delimiter_pair(
         &self,
         opener_delimiter: &TokenDelimiter,
         closer_delimiter: &TokenDelimiter,
@@ -115,7 +115,7 @@ impl<'a> MatchInlineHook<'a> for LinkReferenceMatchHook<'a> {
             opener_delimiter.end_index,
             closer_delimiter.start_index,
             internal_tokens,
-            self.api.getNodePoints(),
+            self.api.get_node_points(),
         );
 
         match status {
@@ -139,7 +139,7 @@ impl<'a> MatchInlineHook<'a> for LinkReferenceMatchHook<'a> {
                     };
                 };
 
-                if !self.api.hasDefinition(identifier) {
+                if !self.api.has_definition(identifier) {
                     return IsDelimiterPairResult::NotPaired {
                         opener: false,
                         closer: false,
@@ -159,7 +159,7 @@ impl<'a> MatchInlineHook<'a> for LinkReferenceMatchHook<'a> {
         }
     }
 
-    fn processDelimiterPair(
+    fn process_delimiter_pair(
         &self,
         opener_delimiter: &TokenDelimiter,
         closer_delimiter: &TokenDelimiter,
@@ -170,15 +170,15 @@ impl<'a> MatchInlineHook<'a> for LinkReferenceMatchHook<'a> {
             self.api,
             opener_delimiter,
             &opener_brackets,
-            self.api.getNodePoints(),
+            self.api.get_node_points(),
         );
 
         let brackets = self.lookup_brackets(closer_delimiter);
         let Some((first, remains)) = brackets.split_first() else {
             return ProcessDelimiterPairResult {
                 tokens,
-                remainOpenerDelimiter: None,
-                remainCloserDelimiter: None,
+                remain_opener_delimiter: None,
+                remain_closer_delimiter: None,
             };
         };
 
@@ -186,19 +186,19 @@ impl<'a> MatchInlineHook<'a> for LinkReferenceMatchHook<'a> {
         else {
             return ProcessDelimiterPairResult {
                 tokens,
-                remainOpenerDelimiter: None,
-                remainCloserDelimiter: None,
+                remain_opener_delimiter: None,
+                remain_closer_delimiter: None,
             };
         };
 
-        let children_tokens = self.api.resolveInternalTokens(
+        let children_tokens = self.api.resolve_internal_tokens(
             internal_tokens,
             opener_delimiter.end_index,
             closer_delimiter.start_index,
         );
 
         tokens.push(r#match::create_reference_token(
-            self.api.getNodePoints(),
+            self.api.get_node_points(),
             opener_delimiter.end_index.saturating_sub(1),
             first.end_index,
             yozora_ast::ReferenceType::Full,
@@ -230,14 +230,19 @@ impl<'a> MatchInlineHook<'a> for LinkReferenceMatchHook<'a> {
 
         ProcessDelimiterPairResult {
             tokens,
-            remainOpenerDelimiter: None,
-            remainCloserDelimiter: Some(remain_closer_delimiter),
+            remain_opener_delimiter: None,
+            remain_closer_delimiter: Some(remain_closer_delimiter),
         }
     }
 
-    fn processSingleDelimiter(&self, delimiter: &TokenDelimiter) -> Vec<InlineToken> {
+    fn process_single_delimiter(&self, delimiter: &TokenDelimiter) -> Vec<InlineToken> {
         let brackets = self.lookup_brackets(delimiter);
-        r#match::process_single_delimiter(self.api, delimiter, &brackets, self.api.getNodePoints())
+        r#match::process_single_delimiter(
+            self.api,
+            delimiter,
+            &brackets,
+            self.api.get_node_points(),
+        )
     }
 }
 
@@ -258,13 +263,23 @@ impl InlineTokenizer for LinkReferenceTokenizer {
     ) -> Box<dyn MatchInlineHook<'a> + 'a> {
         Box::new(LinkReferenceMatchHook {
             api,
-            delimiters: Rc::new(RefCell::new(Vec::new())),
+            delimiters: Rc::new(RefCell::new(HashMap::new())),
         })
     }
 
     fn parse<'a>(&'a self, api: &'a dyn ParseInlinePhaseApi) -> Box<dyn ParseInlineHook + 'a> {
         Box::new(LinkReferenceParseHook { api })
     }
+}
+
+fn delimiter_key(delimiter: &TokenDelimiter) -> DelimiterKey {
+    let delimiter_type = match delimiter.delimiter_type {
+        DelimiterType::Opener => 0,
+        DelimiterType::Closer => 1,
+        DelimiterType::Both => 2,
+        DelimiterType::Full => 3,
+    };
+    (delimiter.start_index, delimiter.end_index, delimiter_type)
 }
 
 #[cfg(test)]
@@ -293,27 +308,27 @@ mod tests {
     }
 
     impl MatchInlinePhaseApi for DummyMatchApi {
-        fn hasDefinition(&self, identifier: &str) -> bool {
+        fn has_definition(&self, identifier: &str) -> bool {
             self.definitions.contains(identifier)
         }
 
-        fn hasFootnoteDefinition(&self, _identifier: &str) -> bool {
+        fn has_footnote_definition(&self, _identifier: &str) -> bool {
             false
         }
 
-        fn getNodePoints(&self) -> &[NodePoint] {
+        fn get_node_points(&self) -> &[NodePoint] {
             &self.node_points
         }
 
-        fn getBlockStartIndex(&self) -> usize {
+        fn get_block_start_index(&self) -> usize {
             0
         }
 
-        fn getBlockEndIndex(&self) -> usize {
+        fn get_block_end_index(&self) -> usize {
             self.node_points.len()
         }
 
-        fn resolveFallbackTokens(
+        fn resolve_fallback_tokens(
             &self,
             tokens: &[InlineToken],
             _token_start_index: usize,
@@ -322,7 +337,7 @@ mod tests {
             tokens.to_vec()
         }
 
-        fn resolveInternalTokens(
+        fn resolve_internal_tokens(
             &self,
             _higher_priority_tokens: &[InlineToken],
             start_index: usize,
@@ -341,31 +356,31 @@ mod tests {
     }
 
     impl ParseInlinePhaseApi for DummyParseApi {
-        fn shouldReservePosition(&self) -> bool {
+        fn should_reserve_position(&self) -> bool {
             false
         }
 
-        fn calcPosition(&self, _interval: NodeInterval) -> yozora_ast::Position {
-            panic!("calcPosition should not be called in this test")
+        fn calc_position(&self, _interval: NodeInterval) -> yozora_ast::Position {
+            panic!("calc_position should not be called in this test")
         }
 
-        fn formatUrl(&self, url: &str) -> String {
+        fn format_url(&self, url: &str) -> String {
             url.to_string()
         }
 
-        fn getNodePoints(&self) -> &[NodePoint] {
+        fn get_node_points(&self) -> &[NodePoint] {
             &self.node_points
         }
 
-        fn hasDefinition(&self, _identifier: &str) -> bool {
+        fn has_definition(&self, _identifier: &str) -> bool {
             false
         }
 
-        fn hasFootnoteDefinition(&self, _identifier: &str) -> bool {
+        fn has_footnote_definition(&self, _identifier: &str) -> bool {
             false
         }
 
-        fn parseInlineTokens(&self, tokens: Option<&[InlineToken]>) -> Vec<Node> {
+        fn parse_inline_tokens(&self, tokens: Option<&[InlineToken]>) -> Vec<Node> {
             let Some(tokens) = tokens else {
                 return Vec::new();
             };
@@ -397,9 +412,9 @@ mod tests {
         let match_api = DummyMatchApi::from(definitions, node_points.clone());
         let hook = tokenizer.r#match(&match_api);
 
-        let mut find_delimiter = hook.findDelimiter();
-        let delimiter = find_delimiter.next((0, match_api.getBlockEndIndex()))?;
-        let token = hook.processSingleDelimiter(&delimiter).pop()?;
+        let mut find_delimiter = hook.find_delimiter();
+        let delimiter = find_delimiter.next((0, match_api.get_block_end_index()))?;
+        let token = hook.process_single_delimiter(&delimiter).pop()?;
         Some((token, node_points))
     }
 

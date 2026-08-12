@@ -50,13 +50,13 @@ impl Tokenizer for TextTokenizer {
 struct TextMatchHook;
 
 impl<'a> MatchInlineHook<'a> for TextMatchHook {
-    fn findDelimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
-        Box::new(genFindDelimiter(|start_index, end_index| {
+    fn find_delimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
+        Box::new(gen_find_delimiter(|start_index, end_index| {
             Some(r#match::find_text_delimiter(start_index, end_index))
         }))
     }
 
-    fn processSingleDelimiter(&self, delimiter: &TokenDelimiter) -> Vec<InlineToken> {
+    fn process_single_delimiter(&self, delimiter: &TokenDelimiter) -> Vec<InlineToken> {
         r#match::process_single_delimiter(delimiter)
     }
 }
@@ -67,7 +67,7 @@ struct TextParseHook<'a> {
 
 impl ParseInlineHook for TextParseHook<'_> {
     fn parse(&self, tokens: &[InlineToken]) -> Vec<Node> {
-        let node_points = self.api.getNodePoints();
+        let node_points = self.api.get_node_points();
         let mut nodes = Vec::with_capacity(tokens.len());
 
         for token in tokens {
@@ -75,8 +75,8 @@ impl ParseInlineHook for TextParseHook<'_> {
                 continue;
             }
 
-            let position = if self.api.shouldReservePosition() {
-                Some(self.api.calcPosition(NodeInterval {
+            let position = if self.api.should_reserve_position() {
+                Some(self.api.calc_position(NodeInterval {
                     start_index: token.start_index,
                     end_index: token.end_index,
                 }))
@@ -143,7 +143,7 @@ impl InlineTokenizer for TextTokenizer {
 }
 
 impl InlineFallbackTokenizer for TextTokenizer {
-    fn findAndHandleDelimiter(
+    fn find_and_handle_delimiter(
         &self,
         start_index: usize,
         end_index: usize,
@@ -161,27 +161,27 @@ mod tests {
     struct DummyInlineApi;
 
     impl MatchInlinePhaseApi for DummyInlineApi {
-        fn hasDefinition(&self, _identifier: &str) -> bool {
+        fn has_definition(&self, _identifier: &str) -> bool {
             false
         }
 
-        fn hasFootnoteDefinition(&self, _identifier: &str) -> bool {
+        fn has_footnote_definition(&self, _identifier: &str) -> bool {
             false
         }
 
-        fn getNodePoints(&self) -> &[NodePoint] {
+        fn get_node_points(&self) -> &[NodePoint] {
             &[]
         }
 
-        fn getBlockStartIndex(&self) -> usize {
+        fn get_block_start_index(&self) -> usize {
             0
         }
 
-        fn getBlockEndIndex(&self) -> usize {
+        fn get_block_end_index(&self) -> usize {
             0
         }
 
-        fn resolveFallbackTokens(
+        fn resolve_fallback_tokens(
             &self,
             tokens: &[InlineToken],
             _token_start_index: usize,
@@ -190,7 +190,7 @@ mod tests {
             tokens.to_vec()
         }
 
-        fn resolveInternalTokens(
+        fn resolve_internal_tokens(
             &self,
             higher_priority_tokens: &[InlineToken],
             _start_index: usize,
@@ -201,33 +201,33 @@ mod tests {
     }
 
     impl MatchInlineFallbackPhaseApi for DummyInlineApi {
-        fn hasDefinition(&self, identifier: &str) -> bool {
-            MatchInlinePhaseApi::hasDefinition(self, identifier)
+        fn has_definition(&self, identifier: &str) -> bool {
+            MatchInlinePhaseApi::has_definition(self, identifier)
         }
 
-        fn hasFootnoteDefinition(&self, identifier: &str) -> bool {
-            MatchInlinePhaseApi::hasFootnoteDefinition(self, identifier)
+        fn has_footnote_definition(&self, identifier: &str) -> bool {
+            MatchInlinePhaseApi::has_footnote_definition(self, identifier)
         }
 
-        fn getNodePoints(&self) -> &[NodePoint] {
-            MatchInlinePhaseApi::getNodePoints(self)
+        fn get_node_points(&self) -> &[NodePoint] {
+            MatchInlinePhaseApi::get_node_points(self)
         }
 
-        fn getBlockStartIndex(&self) -> usize {
-            MatchInlinePhaseApi::getBlockStartIndex(self)
+        fn get_block_start_index(&self) -> usize {
+            MatchInlinePhaseApi::get_block_start_index(self)
         }
 
-        fn getBlockEndIndex(&self) -> usize {
-            MatchInlinePhaseApi::getBlockEndIndex(self)
+        fn get_block_end_index(&self) -> usize {
+            MatchInlinePhaseApi::get_block_end_index(self)
         }
 
-        fn resolveFallbackTokens(
+        fn resolve_fallback_tokens(
             &self,
             tokens: &[InlineToken],
             token_start_index: usize,
             token_end_index: usize,
         ) -> Vec<InlineToken> {
-            MatchInlinePhaseApi::resolveFallbackTokens(
+            MatchInlinePhaseApi::resolve_fallback_tokens(
                 self,
                 tokens,
                 token_start_index,
@@ -241,31 +241,31 @@ mod tests {
     }
 
     impl ParseInlinePhaseApi for DummyParseApi {
-        fn shouldReservePosition(&self) -> bool {
+        fn should_reserve_position(&self) -> bool {
             false
         }
 
-        fn calcPosition(&self, _interval: NodeInterval) -> yozora_ast::Position {
-            panic!("calcPosition should not be called in this test")
+        fn calc_position(&self, _interval: NodeInterval) -> yozora_ast::Position {
+            panic!("calc_position should not be called in this test")
         }
 
-        fn formatUrl(&self, url: &str) -> String {
+        fn format_url(&self, url: &str) -> String {
             url.to_string()
         }
 
-        fn getNodePoints(&self) -> &[NodePoint] {
+        fn get_node_points(&self) -> &[NodePoint] {
             &self.node_points
         }
 
-        fn hasDefinition(&self, _identifier: &str) -> bool {
+        fn has_definition(&self, _identifier: &str) -> bool {
             false
         }
 
-        fn hasFootnoteDefinition(&self, _identifier: &str) -> bool {
+        fn has_footnote_definition(&self, _identifier: &str) -> bool {
             false
         }
 
-        fn parseInlineTokens(&self, _tokens: Option<&[InlineToken]>) -> Vec<Node> {
+        fn parse_inline_tokens(&self, _tokens: Option<&[InlineToken]>) -> Vec<Node> {
             Vec::new()
         }
     }
@@ -274,7 +274,7 @@ mod tests {
     fn phase_fallback_should_build_text_token_and_parse_node() {
         let tokenizer = TextTokenizer::default();
         let match_api = DummyInlineApi;
-        let token = tokenizer.findAndHandleDelimiter(6, 11, &match_api);
+        let token = tokenizer.find_and_handle_delimiter(6, 11, &match_api);
 
         let parse_api = DummyParseApi {
             node_points: create_node_point_generator("hello world")

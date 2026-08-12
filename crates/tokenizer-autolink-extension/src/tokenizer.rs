@@ -78,15 +78,15 @@ impl AutolinkExtensionMatchHook<'_> {
 }
 
 impl<'a> MatchInlineHook<'a> for AutolinkExtensionMatchHook<'a> {
-    fn findDelimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
+    fn find_delimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
         self.delimiters.borrow_mut().clear();
         let api = self.api;
         let delimiters = Rc::clone(&self.delimiters);
 
-        Box::new(genFindDelimiter(move |start_index, end_index| {
+        Box::new(gen_find_delimiter(move |start_index, end_index| {
             let entry = r#match::find_delimiter_entry(
-                api.getNodePoints(),
-                api.getBlockStartIndex(),
+                api.get_node_points(),
+                api.get_block_start_index(),
                 start_index,
                 end_index,
             )?;
@@ -96,7 +96,7 @@ impl<'a> MatchInlineHook<'a> for AutolinkExtensionMatchHook<'a> {
         }))
     }
 
-    fn processSingleDelimiter(&self, delimiter: &TokenDelimiter) -> Vec<InlineToken> {
+    fn process_single_delimiter(&self, delimiter: &TokenDelimiter) -> Vec<InlineToken> {
         let Some(content_type) = self.lookup_content_type(delimiter) else {
             return Vec::new();
         };
@@ -142,27 +142,27 @@ mod tests {
     }
 
     impl MatchInlinePhaseApi for DummyMatchApi {
-        fn hasDefinition(&self, _identifier: &str) -> bool {
+        fn has_definition(&self, _identifier: &str) -> bool {
             false
         }
 
-        fn hasFootnoteDefinition(&self, _identifier: &str) -> bool {
+        fn has_footnote_definition(&self, _identifier: &str) -> bool {
             false
         }
 
-        fn getNodePoints(&self) -> &[NodePoint] {
+        fn get_node_points(&self) -> &[NodePoint] {
             &self.node_points
         }
 
-        fn getBlockStartIndex(&self) -> usize {
+        fn get_block_start_index(&self) -> usize {
             0
         }
 
-        fn getBlockEndIndex(&self) -> usize {
+        fn get_block_end_index(&self) -> usize {
             self.node_points.len()
         }
 
-        fn resolveFallbackTokens(
+        fn resolve_fallback_tokens(
             &self,
             _tokens: &[InlineToken],
             token_start_index: usize,
@@ -175,7 +175,7 @@ mod tests {
             )]
         }
 
-        fn resolveInternalTokens(
+        fn resolve_internal_tokens(
             &self,
             _higher_priority_tokens: &[InlineToken],
             _start_index: usize,
@@ -190,31 +190,31 @@ mod tests {
     }
 
     impl ParseInlinePhaseApi for DummyParseApi {
-        fn shouldReservePosition(&self) -> bool {
+        fn should_reserve_position(&self) -> bool {
             false
         }
 
-        fn calcPosition(&self, _interval: NodeInterval) -> yozora_ast::Position {
-            panic!("calcPosition should not be called in this test")
+        fn calc_position(&self, _interval: NodeInterval) -> yozora_ast::Position {
+            panic!("calc_position should not be called in this test")
         }
 
-        fn formatUrl(&self, url: &str) -> String {
+        fn format_url(&self, url: &str) -> String {
             url.to_string()
         }
 
-        fn getNodePoints(&self) -> &[NodePoint] {
+        fn get_node_points(&self) -> &[NodePoint] {
             &self.node_points
         }
 
-        fn hasDefinition(&self, _identifier: &str) -> bool {
+        fn has_definition(&self, _identifier: &str) -> bool {
             false
         }
 
-        fn hasFootnoteDefinition(&self, _identifier: &str) -> bool {
+        fn has_footnote_definition(&self, _identifier: &str) -> bool {
             false
         }
 
-        fn parseInlineTokens(&self, tokens: Option<&[InlineToken]>) -> Vec<Node> {
+        fn parse_inline_tokens(&self, tokens: Option<&[InlineToken]>) -> Vec<Node> {
             let Some(tokens) = tokens else {
                 return Vec::new();
             };
@@ -244,9 +244,9 @@ mod tests {
         let api = DummyMatchApi { node_points };
 
         let hook = tokenizer.r#match(&api);
-        let mut find_delimiter = hook.findDelimiter();
+        let mut find_delimiter = hook.find_delimiter();
         let delimiter = find_delimiter
-            .next((0, api.getBlockEndIndex()))
+            .next((0, api.get_block_end_index()))
             .expect("expected delimiter");
 
         assert_eq!(delimiter.delimiter_type, DelimiterType::Full);
@@ -264,9 +264,9 @@ mod tests {
         let parse_hook = tokenizer.parse(&api);
 
         let token = InlineToken::new(AUTOLINK_EXTENSION_TOKENIZER_NAME, LINK_TYPE, (0, 15))
+            .with_children(vec![InlineToken::new("text", TEXT_TYPE, (0, 15))])
             .with_data(parse::AutolinkExtensionTokenData {
                 content_type: parse::AutolinkExtensionContentType::UriWww,
-                children_tokens: vec![InlineToken::new("text", TEXT_TYPE, (0, 15))],
             });
 
         let nodes = parse_hook.parse(&[token]);

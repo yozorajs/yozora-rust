@@ -24,8 +24,12 @@ pub(crate) fn eat_and_interrupt_previous_sibling(
     let mut marker: Option<i32> = None;
     let mut has_potential_internal_space = false;
 
-    for i in line.first_non_whitespace_index..line.end_index {
-        let code_point = node_points[i].code_point;
+    for point in node_points
+        .iter()
+        .take(line.end_index)
+        .skip(line.first_non_whitespace_index)
+    {
+        let code_point = point.code_point;
         if code_point == VirtualCodePoint::LineEnd as i32 {
             break;
         }

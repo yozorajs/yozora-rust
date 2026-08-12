@@ -64,14 +64,14 @@ pub(crate) fn parse_definition_tokens(
         };
 
         nodes.push(Node::Definition(Definition {
-            position: if parse_api.shouldReservePosition() {
+            position: if parse_api.should_reserve_position() {
                 calc_effective_position(token, data)
             } else {
                 None
             },
             identifier,
             label,
-            url: parse_api.formatUrl(&destination),
+            url: parse_api.format_url(&destination),
             title,
         }));
     }

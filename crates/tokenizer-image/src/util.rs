@@ -38,6 +38,7 @@ fn calc_node_alt(node: &Node) -> String {
         | Node::EcmaImport(_)
         | Node::FootnoteReference(_)
         | Node::Frontmatter(_)
-        | Node::ThematicBreak(_) => String::new(),
+        | Node::ThematicBreak(_)
+        | Node::Custom(_) => String::new(),
     }
 }

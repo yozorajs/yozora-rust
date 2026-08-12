@@ -26,10 +26,10 @@ pub(crate) fn parse_table_tokens(
                         let merged =
                             merge_and_strip_content_lines(&cell.lines, 0, cell.lines.len());
                         let contents = unescape_table_cell_contents(&merged);
-                        let children = parse_api.processInlines(&contents);
+                        let children = parse_api.process_inlines(&contents);
 
                         Node::TableCell(TableCell {
-                            position: if parse_api.shouldReservePosition() {
+                            position: if parse_api.should_reserve_position() {
                                 cell.position.clone()
                             } else {
                                 None
@@ -40,7 +40,7 @@ pub(crate) fn parse_table_tokens(
                     .collect();
 
                 Node::TableRow(TableRow {
-                    position: if parse_api.shouldReservePosition() {
+                    position: if parse_api.should_reserve_position() {
                         row.position.clone()
                     } else {
                         None
@@ -51,7 +51,7 @@ pub(crate) fn parse_table_tokens(
             .collect();
 
         nodes.push(Node::Table(Table {
-            position: if parse_api.shouldReservePosition() {
+            position: if parse_api.should_reserve_position() {
                 token.position.clone()
             } else {
                 None

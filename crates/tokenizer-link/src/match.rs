@@ -132,17 +132,14 @@ pub(crate) fn create_link_token(
         false,
     );
 
+    let token_children = children_tokens.clone();
     InlineToken::new(
         "",
         LINK_TYPE,
         (opener_delimiter.start_index, closer_delimiter.end_index),
     )
-    .with_data(LinkTokenData {
-        url,
-        title,
-        label,
-        children_tokens,
-    })
+    .with_children(token_children)
+    .with_data(LinkTokenData { url, title, label })
 }
 
 pub(crate) fn check_balanced_brackets_status(

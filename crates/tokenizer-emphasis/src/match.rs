@@ -11,9 +11,9 @@ pub(crate) fn find_delimiter(
     start_index: usize,
     end_index: usize,
 ) -> Option<TokenDelimiter> {
-    let node_points = api.getNodePoints();
-    let block_start_index = api.getBlockStartIndex();
-    let block_end_index = api.getBlockEndIndex();
+    let node_points = api.get_node_points();
+    let block_start_index = api.get_block_start_index();
+    let block_end_index = api.get_block_end_index();
 
     if start_index >= end_index || end_index > node_points.len() {
         return None;
@@ -101,7 +101,7 @@ pub(crate) fn is_delimiter_pair(
     opener_delimiter: &TokenDelimiter,
     closer_delimiter: &TokenDelimiter,
 ) -> IsDelimiterPairResult {
-    let node_points = api.getNodePoints();
+    let node_points = api.get_node_points();
 
     let Some(opener) = node_points.get(opener_delimiter.start_index) else {
         return IsDelimiterPairResult::NotPaired {
@@ -119,8 +119,9 @@ pub(crate) fn is_delimiter_pair(
     let is_same_marker = opener.code_point == closer.code_point;
     let violates_mod_three = (matches!(opener_delimiter.delimiter_type, DelimiterType::Both)
         || matches!(closer_delimiter.delimiter_type, DelimiterType::Both))
-        && (opener_delimiter.original_thickness + closer_delimiter.original_thickness) % 3 == 0
-        && opener_delimiter.original_thickness % 3 != 0;
+        && (opener_delimiter.original_thickness + closer_delimiter.original_thickness)
+            .is_multiple_of(3)
+        && !opener_delimiter.original_thickness.is_multiple_of(3);
 
     if !is_same_marker || violates_mod_three {
         return IsDelimiterPairResult::NotPaired {
@@ -144,7 +145,7 @@ pub(crate) fn process_delimiter_pair(
         1
     };
 
-    let resolved_children = api.resolveInternalTokens(
+    let resolved_children = api.resolve_internal_tokens(
         internal_tokens,
         opener_delimiter.end_index,
         closer_delimiter.start_index,
@@ -156,6 +157,7 @@ pub(crate) fn process_delimiter_pair(
         EMPHASIS_TYPE
     };
 
+    let token_children = resolved_children.clone();
     let token = InlineToken::new(
         "",
         node_type,
@@ -164,10 +166,8 @@ pub(crate) fn process_delimiter_pair(
             closer_delimiter.start_index + thickness,
         ),
     )
-    .with_data(EmphasisTokenData {
-        thickness,
-        children: resolved_children,
-    });
+    .with_children(token_children)
+    .with_data(EmphasisTokenData { thickness });
 
     let remain_opener_delimiter = if opener_delimiter.thickness > thickness {
         Some(TokenDelimiter {
@@ -195,8 +195,8 @@ pub(crate) fn process_delimiter_pair(
 
     ProcessDelimiterPairResult {
         tokens: vec![token],
-        remainOpenerDelimiter: remain_opener_delimiter,
-        remainCloserDelimiter: remain_closer_delimiter,
+        remain_opener_delimiter,
+        remain_closer_delimiter,
     }
 }
 

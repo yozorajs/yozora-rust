@@ -6,15 +6,10 @@ use crate::types::token::InlineToken;
 /// Encode link destination in a uri-safe form.
 pub fn encode_link_destination(destination: &str) -> String {
     let mut decoded = destination.to_string();
-    loop {
-        let Ok(next) = try_percent_decode_once(&decoded) else {
-            break;
-        };
-
+    while let Ok(next) = try_percent_decode_once(&decoded) {
         if next == decoded {
             break;
         }
-
         decoded = next;
     }
 
@@ -82,6 +77,83 @@ pub fn eat_link_label(
 
 pub fn is_link_token(token: &InlineToken) -> bool {
     token.node_type == LINK_TYPE || token.node_type == LINK_REFERENCE_TYPE
+}
+
+pub fn contains_link_token(tokens: &[InlineToken], start_index: usize, end_index: usize) -> bool {
+    if start_index >= end_index || tokens.is_empty() {
+        return false;
+    }
+    let mut stack = vec![(tokens, 0usize)];
+    while let Some((tokens, index)) = stack.last_mut() {
+        if *index >= tokens.len() {
+            stack.pop();
+            continue;
+        }
+        let token = &tokens[*index];
+        *index += 1;
+        if token.end_index <= start_index || token.start_index >= end_index {
+            continue;
+        }
+        if is_link_token(token) {
+            return true;
+        }
+        if !token.children.is_empty() {
+            stack.push((token.children.as_slice(), 0));
+        }
+    }
+    false
+}
+
+pub fn check_balanced_brackets_status(
+    start_index: usize,
+    end_index: usize,
+    internal_tokens: &[InlineToken],
+    node_points: &[NodePoint],
+) -> i8 {
+    let mut index = start_index;
+    let mut bracket_count = 0i32;
+    let update = |index: &mut usize, bracket_count: &mut i32| match node_points[*index].code_point {
+        code_point if code_point == AsciiCodePoint::BACKSLASH as i32 => *index += 1,
+        code_point if code_point == AsciiCodePoint::OPEN_BRACKET as i32 => *bracket_count += 1,
+        code_point if code_point == AsciiCodePoint::CLOSE_BRACKET as i32 => *bracket_count -= 1,
+        _ => {}
+    };
+    for token in internal_tokens {
+        if token.start_index < start_index {
+            continue;
+        }
+        if token.end_index > end_index {
+            break;
+        }
+        while index < token.start_index {
+            update(&mut index, &mut bracket_count);
+            if bracket_count < 0 {
+                return -1;
+            }
+            index += 1;
+        }
+        index = token.end_index;
+    }
+    while index < end_index {
+        update(&mut index, &mut bracket_count);
+        if bracket_count < 0 {
+            return -1;
+        }
+        index += 1;
+    }
+    i8::from(bracket_count > 0)
+}
+
+pub fn is_valid_link_text(
+    node_points: &[NodePoint],
+    start_index: usize,
+    end_index: usize,
+    internal_tokens: &[InlineToken],
+) -> bool {
+    start_index <= end_index
+        && end_index <= node_points.len()
+        && !contains_link_token(internal_tokens, start_index, end_index)
+        && check_balanced_brackets_status(start_index, end_index, internal_tokens, node_points) == 0
 }
 
 fn try_percent_decode_once(input: &str) -> Result<String, ()> {

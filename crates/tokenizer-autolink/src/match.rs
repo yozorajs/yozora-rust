@@ -1,9 +1,11 @@
 use yozora_ast::LINK_TYPE;
 use yozora_character::{
-    is_alphanumeric, is_ascii_character, is_ascii_control_character, is_ascii_digit_character,
-    is_ascii_letter, is_whitespace_character, AsciiCodePoint, NodePoint,
+    is_alphanumeric, is_ascii_control_character, is_ascii_digit_character, is_ascii_letter,
+    is_whitespace_character, AsciiCodePoint, NodePoint,
 };
-use yozora_core_tokenizer::{InlineToken, MatchInlinePhaseApi, TokenDelimiter};
+use yozora_core_tokenizer::{
+    InlineToken, MatchInlinePhaseApi, ResultOfRequiredEater, TokenDelimiter,
+};
 
 use crate::parse::{AutolinkContentType, AutolinkTokenData};
 
@@ -11,12 +13,6 @@ use crate::parse::{AutolinkContentType, AutolinkTokenData};
 pub(crate) struct DelimiterEntry {
     pub delimiter: TokenDelimiter,
     pub content_type: AutolinkContentType,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct EatResult {
-    valid: bool,
-    next_index: usize,
 }
 
 pub(crate) fn find_delimiter_entry(
@@ -78,27 +74,21 @@ pub(crate) fn find_delimiter_entry(
 }
 
 pub(crate) fn process_single_delimiter(
-    api: &dyn MatchInlinePhaseApi,
+    _api: &dyn MatchInlinePhaseApi,
     delimiter: &TokenDelimiter,
     content_type: AutolinkContentType,
 ) -> Vec<InlineToken> {
-    let children_tokens = if delimiter.end_index > delimiter.start_index + 1 {
-        api.resolveFallbackTokens(&[], delimiter.start_index + 1, delimiter.end_index - 1)
-    } else {
-        Vec::new()
-    };
-
     vec![
-        InlineToken::new("", LINK_TYPE, (delimiter.start_index, delimiter.end_index)).with_data(
-            AutolinkTokenData {
-                content_type,
-                children_tokens,
-            },
-        ),
+        InlineToken::new("", LINK_TYPE, (delimiter.start_index, delimiter.end_index))
+            .with_data(AutolinkTokenData { content_type }),
     ]
 }
 
-fn eat_absolute_uri(node_points: &[NodePoint], start_index: usize, end_index: usize) -> EatResult {
+pub fn eat_absolute_uri(
+    node_points: &[NodePoint],
+    start_index: usize,
+    end_index: usize,
+) -> ResultOfRequiredEater {
     let schema = eat_autolink_schema(node_points, start_index, end_index);
     let mut next_index = schema.next_index;
 
@@ -106,7 +96,7 @@ fn eat_absolute_uri(node_points: &[NodePoint], start_index: usize, end_index: us
         || next_index >= end_index
         || node_points[next_index].code_point != AsciiCodePoint::COLON as i32
     {
-        return EatResult {
+        return ResultOfRequiredEater {
             valid: false,
             next_index,
         };
@@ -115,8 +105,7 @@ fn eat_absolute_uri(node_points: &[NodePoint], start_index: usize, end_index: us
     next_index += 1;
     while next_index < end_index {
         let c = node_points[next_index].code_point;
-        if !is_ascii_character(c)
-            || is_whitespace_character(c)
+        if is_whitespace_character(c)
             || is_ascii_control_character(c)
             || c == AsciiCodePoint::OPEN_ANGLE as i32
             || c == AsciiCodePoint::CLOSE_ANGLE as i32
@@ -127,19 +116,19 @@ fn eat_absolute_uri(node_points: &[NodePoint], start_index: usize, end_index: us
         next_index += 1;
     }
 
-    EatResult {
+    ResultOfRequiredEater {
         valid: true,
         next_index,
     }
 }
 
-fn eat_autolink_schema(
+pub fn eat_autolink_schema(
     node_points: &[NodePoint],
     start_index: usize,
     end_index: usize,
-) -> EatResult {
+) -> ResultOfRequiredEater {
     if start_index >= end_index {
-        return EatResult {
+        return ResultOfRequiredEater {
             valid: false,
             next_index: start_index,
         };
@@ -148,7 +137,7 @@ fn eat_autolink_schema(
     let mut i = start_index;
     let c = node_points[i].code_point;
     if !is_ascii_letter(c) {
-        return EatResult {
+        return ResultOfRequiredEater {
             valid: false,
             next_index: i + 1,
         };
@@ -171,19 +160,23 @@ fn eat_autolink_schema(
 
     let count = i - start_index;
     if !(2..=32).contains(&count) {
-        return EatResult {
+        return ResultOfRequiredEater {
             valid: false,
             next_index: i + 1,
         };
     }
 
-    EatResult {
+    ResultOfRequiredEater {
         valid: true,
         next_index: i,
     }
 }
 
-fn eat_email_address(node_points: &[NodePoint], start_index: usize, end_index: usize) -> EatResult {
+pub fn eat_email_address(
+    node_points: &[NodePoint],
+    start_index: usize,
+    end_index: usize,
+) -> ResultOfRequiredEater {
     let mut i = start_index;
 
     while i < end_index {
@@ -225,7 +218,7 @@ fn eat_email_address(node_points: &[NodePoint], start_index: usize, end_index: u
         || node_points[i].code_point != AsciiCodePoint::AT_SIGN as i32
         || !is_alphanumeric(node_points[i + 1].code_point)
     {
-        return EatResult {
+        return ResultOfRequiredEater {
             valid: false,
             next_index: i + 1,
         };
@@ -247,7 +240,7 @@ fn eat_email_address(node_points: &[NodePoint], start_index: usize, end_index: u
         i = eat_address_part0(node_points, i + 2, end_index);
     }
 
-    EatResult {
+    ResultOfRequiredEater {
         valid: true,
         next_index: i,
     }

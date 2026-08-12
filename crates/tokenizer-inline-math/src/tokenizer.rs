@@ -13,6 +13,7 @@ use crate::{parse, r#match};
 pub const INLINE_MATH_TOKENIZER_NAME: &str = "@yozora/tokenizer-inline-math";
 pub const INLINE_MATH_WITH_BACKTICK_TOKENIZER_NAME: &str =
     "@yozora/tokenizer-inline-math_with_backtick";
+pub const INLINE_MATH_TOKENIZER_NAME_WITH_BACKTICK: &str = INLINE_MATH_WITH_BACKTICK_TOKENIZER_NAME;
 
 #[derive(Debug, Clone)]
 pub struct InlineMathTokenizerOptions {
@@ -86,15 +87,21 @@ struct InlineMathBacktickMatchHook<'a> {
     api: &'a dyn MatchInlinePhaseApi,
 }
 
+pub(crate) fn match_with_backtick<'a>(
+    api: &'a dyn MatchInlinePhaseApi,
+) -> Box<dyn MatchInlineHook<'a> + 'a> {
+    Box::new(InlineMathBacktickMatchHook { api })
+}
+
 impl<'a> MatchInlineHook<'a> for InlineMathBacktickMatchHook<'a> {
-    fn findDelimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
+    fn find_delimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
         let mut delimiter_finder = r#match::InlineMathBacktickDelimiterFinder::new(self.api);
-        Box::new(genFindDelimiter(move |start_index, _end_index| {
+        Box::new(gen_find_delimiter(move |start_index, _end_index| {
             delimiter_finder.find_next_delimiter(start_index)
         }))
     }
 
-    fn processSingleDelimiter(&self, delimiter: &TokenDelimiter) -> Vec<InlineToken> {
+    fn process_single_delimiter(&self, delimiter: &TokenDelimiter) -> Vec<InlineToken> {
         r#match::process_single_delimiter(delimiter)
     }
 }
@@ -104,14 +111,14 @@ struct InlineMathPlainMatchHook<'a> {
 }
 
 impl<'a> MatchInlineHook<'a> for InlineMathPlainMatchHook<'a> {
-    fn findDelimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
+    fn find_delimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
         let api = self.api;
-        Box::new(genFindDelimiter(move |start_index, end_index| {
+        Box::new(gen_find_delimiter(move |start_index, end_index| {
             r#match::find_delimiter(api, start_index, end_index)
         }))
     }
 
-    fn isDelimiterPair(
+    fn is_delimiter_pair(
         &self,
         opener_delimiter: &TokenDelimiter,
         closer_delimiter: &TokenDelimiter,
@@ -120,7 +127,7 @@ impl<'a> MatchInlineHook<'a> for InlineMathPlainMatchHook<'a> {
         r#match::is_delimiter_pair(opener_delimiter, closer_delimiter)
     }
 
-    fn processDelimiterPair(
+    fn process_delimiter_pair(
         &self,
         opener_delimiter: &TokenDelimiter,
         closer_delimiter: &TokenDelimiter,
@@ -146,7 +153,7 @@ impl InlineTokenizer for InlineMathTokenizer {
         api: &'a dyn MatchInlinePhaseApi,
     ) -> Box<dyn MatchInlineHook<'a> + 'a> {
         if self.backtick_required {
-            Box::new(InlineMathBacktickMatchHook { api })
+            match_with_backtick(api)
         } else {
             Box::new(InlineMathPlainMatchHook { api })
         }
@@ -168,27 +175,27 @@ mod tests {
     }
 
     impl MatchInlinePhaseApi for DummyMatchApi {
-        fn hasDefinition(&self, _identifier: &str) -> bool {
+        fn has_definition(&self, _identifier: &str) -> bool {
             false
         }
 
-        fn hasFootnoteDefinition(&self, _identifier: &str) -> bool {
+        fn has_footnote_definition(&self, _identifier: &str) -> bool {
             false
         }
 
-        fn getNodePoints(&self) -> &[NodePoint] {
+        fn get_node_points(&self) -> &[NodePoint] {
             &self.node_points
         }
 
-        fn getBlockStartIndex(&self) -> usize {
+        fn get_block_start_index(&self) -> usize {
             0
         }
 
-        fn getBlockEndIndex(&self) -> usize {
+        fn get_block_end_index(&self) -> usize {
             self.node_points.len()
         }
 
-        fn resolveFallbackTokens(
+        fn resolve_fallback_tokens(
             &self,
             _tokens: &[InlineToken],
             _token_start_index: usize,
@@ -197,7 +204,7 @@ mod tests {
             Vec::new()
         }
 
-        fn resolveInternalTokens(
+        fn resolve_internal_tokens(
             &self,
             _higher_priority_tokens: &[InlineToken],
             _start_index: usize,
@@ -212,31 +219,31 @@ mod tests {
     }
 
     impl ParseInlinePhaseApi for DummyParseApi {
-        fn shouldReservePosition(&self) -> bool {
+        fn should_reserve_position(&self) -> bool {
             false
         }
 
-        fn calcPosition(&self, _interval: NodeInterval) -> yozora_ast::Position {
-            panic!("calcPosition should not be called in this test")
+        fn calc_position(&self, _interval: NodeInterval) -> yozora_ast::Position {
+            panic!("calc_position should not be called in this test")
         }
 
-        fn formatUrl(&self, url: &str) -> String {
+        fn format_url(&self, url: &str) -> String {
             url.to_string()
         }
 
-        fn getNodePoints(&self) -> &[NodePoint] {
+        fn get_node_points(&self) -> &[NodePoint] {
             &self.node_points
         }
 
-        fn hasDefinition(&self, _identifier: &str) -> bool {
+        fn has_definition(&self, _identifier: &str) -> bool {
             false
         }
 
-        fn hasFootnoteDefinition(&self, _identifier: &str) -> bool {
+        fn has_footnote_definition(&self, _identifier: &str) -> bool {
             false
         }
 
-        fn parseInlineTokens(&self, _tokens: Option<&[InlineToken]>) -> Vec<Node> {
+        fn parse_inline_tokens(&self, _tokens: Option<&[InlineToken]>) -> Vec<Node> {
             Vec::new()
         }
     }
@@ -253,9 +260,9 @@ mod tests {
         let api = DummyMatchApi { node_points };
 
         let hook = tokenizer.r#match(&api);
-        let mut find_delimiter = hook.findDelimiter();
+        let mut find_delimiter = hook.find_delimiter();
         let delimiter = find_delimiter
-            .next((0, api.getBlockEndIndex()))
+            .next((0, api.get_block_end_index()))
             .expect("expected inline math delimiter");
 
         assert_eq!(delimiter.delimiter_type, DelimiterType::Opener);

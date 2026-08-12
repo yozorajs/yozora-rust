@@ -7,7 +7,6 @@ pub(crate) struct ImageReferenceTokenData {
     pub identifier: String,
     pub label: String,
     pub reference_type: ReferenceType,
-    pub children_tokens: Vec<InlineToken>,
 }
 
 pub(crate) fn parse_image_reference_tokens(
@@ -21,11 +20,11 @@ pub(crate) fn parse_image_reference_tokens(
             continue;
         };
 
-        let children = parse_api.parseInlineTokens(Some(&data.children_tokens));
+        let children = parse_api.parse_inline_tokens(Some(&token.children));
         let alt = calc_image_alt(&children);
 
-        let position = if parse_api.shouldReservePosition() {
-            Some(parse_api.calcPosition(NodeInterval {
+        let position = if parse_api.should_reserve_position() {
+            Some(parse_api.calc_position(NodeInterval {
                 start_index: token.start_index,
                 end_index: token.end_index,
             }))

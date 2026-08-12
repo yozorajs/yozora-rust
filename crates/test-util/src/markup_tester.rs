@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 
 use serde_json::Value;
 use yozora_ast::Root;
@@ -6,7 +7,7 @@ use yozora_ast_util::remove_positions;
 use yozora_core_parser::{ParseOptions, Parser};
 use yozora_markup_weaver::MarkupWeaverContract;
 
-use crate::{BaseTester, TestFailure, YozoraUseCaseGroup};
+use crate::{BaseTester, BaseTesterContract, TestFailure, YozoraUseCaseGroup};
 
 pub struct MarkupTester<P, W> {
     base: BaseTester,
@@ -65,10 +66,10 @@ where
         self.weaver.weave(&ast)
     }
 
-    pub fn run_answer(&mut self) -> Result<(), String> {
+    pub async fn run_answer(&mut self) -> Result<(), String> {
         let parser = &self.parser;
         let weaver = &self.weaver;
-        self.base.run_answer(|case, filepath| {
+        self.base.run_answer_with(|case, filepath| {
             case.markup_answer = Some(
                 weave_and_format(parser, weaver, &case.input)
                     .map_err(|error| format!("[handle failed] {}: {error}", filepath.display()))?
@@ -79,7 +80,7 @@ where
     }
 
     pub fn run_test(&self) -> Result<(), Vec<TestFailure>> {
-        self.base.run_test(|case, filepath| {
+        self.base.run_test_with(|case, filepath| {
             let mut failures = Vec::new();
             match weave_and_format(&self.parser, &self.weaver, &case.input) {
                 Ok(result) => {
@@ -112,6 +113,22 @@ where
             }
             failures
         })
+    }
+}
+
+impl<P, W> BaseTesterContract for MarkupTester<P, W>
+where
+    P: Parser,
+    W: MarkupWeaverContract,
+{
+    fn run_answer(
+        &mut self,
+    ) -> Pin<Box<dyn std::future::Future<Output = Result<(), String>> + '_>> {
+        Box::pin(MarkupTester::run_answer(self))
+    }
+
+    fn run_test(&self) -> Result<(), Vec<TestFailure>> {
+        MarkupTester::run_test(self)
     }
 }
 

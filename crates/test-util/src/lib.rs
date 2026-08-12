@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use yozora_core_parser::Parser;
 use yozora_markup_weaver::MarkupWeaverContract;
 
-pub use base_tester::BaseTester;
+pub use base_tester::{BaseTester, BaseTesterContract};
 pub use markup_tester::MarkupTester;
 pub use tokenizer_tester::TokenizerTester;
 pub use types::{BaseTesterProps, TestFailure, YozoraUseCase, YozoraUseCaseGroup};

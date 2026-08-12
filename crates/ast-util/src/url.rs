@@ -41,6 +41,17 @@ pub fn resolve_urls_for_ast(ast: &mut Root) {
     });
 }
 
+pub fn resolve_urls_for_ast_matching(ast: &mut Root, matcher: NodeMatcher<'_>) {
+    resolve_urls_for_ast_with(ast, matcher, |url| default_url_resolver(&[Some(url)]));
+}
+
+pub fn resolve_urls_for_ast_with_resolver<F>(ast: &mut Root, resolve_url: F)
+where
+    F: FnMut(&str) -> String,
+{
+    resolve_urls_for_ast_with(ast, default_resource_matcher(), resolve_url);
+}
+
 pub fn resolve_urls_for_ast_with<F>(ast: &mut Root, matcher: NodeMatcher<'_>, mut resolve_url: F)
 where
     F: FnMut(&str) -> String,

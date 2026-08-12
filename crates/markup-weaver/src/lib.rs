@@ -11,6 +11,6 @@ pub use types::{
 };
 pub use util::{
     create_character_escaper, find_max_continuous_symbol, minmax, split_lines,
-    ContinuousSymbolMatcher, LINE_REGEX,
+    ContinuousSymbolMatcher, LineRegex, LINE_REGEX,
 };
 pub use weaver::*;

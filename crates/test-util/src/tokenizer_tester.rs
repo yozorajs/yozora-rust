@@ -1,10 +1,11 @@
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 
 use serde_json::Value;
 use yozora_ast::Root;
 use yozora_core_parser::{ParseOptions, Parser};
 
-use crate::{BaseTester, TestFailure, YozoraUseCaseGroup};
+use crate::{BaseTester, BaseTesterContract, TestFailure, YozoraUseCaseGroup};
 
 pub struct TokenizerTester<P> {
     base: BaseTester,
@@ -59,9 +60,9 @@ where
         self.parser.parse(input, options)
     }
 
-    pub fn run_answer(&mut self) -> Result<(), String> {
+    pub async fn run_answer(&mut self) -> Result<(), String> {
         let parser = &self.parser;
-        self.base.run_answer(|case, filepath| {
+        self.base.run_answer_with(|case, filepath| {
             case.parse_answer = Some(
                 parse_and_format(parser, &case.input)
                     .map_err(|error| format!("[handle failed] {}: {error}", filepath.display()))?,
@@ -71,7 +72,7 @@ where
     }
 
     pub fn run_test(&self) -> Result<(), Vec<TestFailure>> {
-        self.base.run_test(|case, filepath| {
+        self.base.run_test_with(|case, filepath| {
             let mut failures = Vec::new();
             match (
                 parse_and_format(&self.parser, &case.input),
@@ -96,6 +97,21 @@ where
             }
             failures
         })
+    }
+}
+
+impl<P> BaseTesterContract for TokenizerTester<P>
+where
+    P: Parser,
+{
+    fn run_answer(
+        &mut self,
+    ) -> Pin<Box<dyn std::future::Future<Output = Result<(), String>> + '_>> {
+        Box::pin(TokenizerTester::run_answer(self))
+    }
+
+    fn run_test(&self) -> Result<(), Vec<TestFailure>> {
+        TokenizerTester::run_test(self)
     }
 }
 

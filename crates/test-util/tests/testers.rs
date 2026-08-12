@@ -1,9 +1,11 @@
 use std::fs;
+use std::future::Future;
+use std::task::{Context, Poll, Waker};
 
 use serde_json::json;
 use yozora_markup_weaver::{DefaultMarkupWeaver, MarkupWeaverContract};
 use yozora_parser::YozoraParser;
-use yozora_test_util::{MarkupTester, TokenizerTester};
+use yozora_test_util::{BaseTesterContract, MarkupTester, TokenizerTester};
 
 #[test]
 fn testers_scan_run_and_write_answers() {
@@ -36,8 +38,7 @@ fn testers_scan_run_and_write_answers() {
         .scan(["**/*.json"], None, |_| true)
         .expect("scan tokenizer fixtures");
     tokenizer_tester.run_test().expect("run tokenizer tests");
-    tokenizer_tester
-        .run_answer()
+    block_on(BaseTesterContract::run_answer(&mut tokenizer_tester))
         .expect("write tokenizer answers");
 
     let mut markup_tester = MarkupTester::new(
@@ -48,10 +49,24 @@ fn testers_scan_run_and_write_answers() {
     markup_tester
         .scan(["**/*.json"], None, |_| true)
         .expect("scan markup fixtures");
-    markup_tester.run_test().expect("run markup tests");
+    BaseTesterContract::run_test(&markup_tester).expect("run markup tests");
 
     let rewritten = fs::read_to_string(&filepath).expect("read rewritten fixture");
     assert!(rewritten.ends_with('\n'));
     assert!(rewritten.contains("parseAnswer"));
     fs::remove_dir_all(root).expect("remove fixture root");
+}
+
+fn block_on<F>(future: F) -> F::Output
+where
+    F: Future,
+{
+    let mut context = Context::from_waker(Waker::noop());
+    let mut future = Box::pin(future);
+    loop {
+        match future.as_mut().poll(&mut context) {
+            Poll::Ready(output) => return output,
+            Poll::Pending => std::thread::yield_now(),
+        }
+    }
 }

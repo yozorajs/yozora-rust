@@ -3,25 +3,40 @@ use std::sync::Arc;
 
 use crate::Escaper;
 
-pub const LINE_REGEX: &str = r"\r\n|\n|\r";
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LineRegex;
+
+pub const LINE_REGEX: LineRegex = LineRegex;
+
+impl LineRegex {
+    pub const PATTERN: &'static str = r"\r\n|\n|\r";
+
+    pub fn is_match(self, value: &str) -> bool {
+        value.contains(['\r', '\n'])
+    }
+
+    pub fn split(self, value: &str) -> Vec<&str> {
+        let mut lines = Vec::new();
+        let mut start = 0usize;
+        let bytes = value.as_bytes();
+        let mut index = 0usize;
+        while index < bytes.len() {
+            if bytes[index] == b'\r' || bytes[index] == b'\n' {
+                lines.push(&value[start..index]);
+                if bytes[index] == b'\r' && bytes.get(index + 1) == Some(&b'\n') {
+                    index += 1;
+                }
+                start = index + 1;
+            }
+            index += 1;
+        }
+        lines.push(&value[start..]);
+        lines
+    }
+}
 
 pub fn split_lines(value: &str) -> Vec<&str> {
-    let mut lines = Vec::new();
-    let mut start = 0usize;
-    let bytes = value.as_bytes();
-    let mut index = 0usize;
-    while index < bytes.len() {
-        if bytes[index] == b'\r' || bytes[index] == b'\n' {
-            lines.push(&value[start..index]);
-            if bytes[index] == b'\r' && bytes.get(index + 1) == Some(&b'\n') {
-                index += 1;
-            }
-            start = index + 1;
-        }
-        index += 1;
-    }
-    lines.push(&value[start..]);
-    lines
+    LINE_REGEX.split(value)
 }
 
 pub fn create_character_escaper(characters: &[char]) -> Escaper {
@@ -87,11 +102,13 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{find_max_continuous_symbol, split_lines};
+    use super::{find_max_continuous_symbol, split_lines, LINE_REGEX};
 
     #[test]
     fn line_regex_semantics_treat_crlf_as_one_separator() {
         assert_eq!(split_lines("a\r\nb\rc\n"), ["a", "b", "c", ""]);
+        assert!(LINE_REGEX.is_match("a\nb"));
+        assert_eq!(super::LineRegex::PATTERN, r"\r\n|\n|\r");
     }
 
     #[test]

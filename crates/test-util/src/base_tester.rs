@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 use std::fs;
+use std::future::Future;
 use std::path::{Component, Path, PathBuf};
+use std::pin::Pin;
 
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
@@ -8,6 +10,12 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::{TestFailure, YozoraUseCase, YozoraUseCaseGroup};
+
+pub trait BaseTesterContract {
+    fn run_answer(&mut self) -> Pin<Box<dyn Future<Output = Result<(), String>> + '_>>;
+
+    fn run_test(&self) -> Result<(), Vec<TestFailure>>;
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(bound(deserialize = "T: DeserializeOwned"))]
@@ -42,11 +50,17 @@ impl<T> BaseTester<T> {
         self
     }
 
-    pub fn careful_process<R, F>(&self, filepath: &Path, process: F) -> Result<R, String>
+    pub fn careful_process<R, E, F>(&self, filepath: &Path, process: F) -> Result<R, E>
     where
-        F: FnOnce() -> Result<R, String>,
+        F: FnOnce() -> Result<R, E>,
     {
-        process().map_err(|error| format!("[handle failed] {}: {error}", filepath.display()))
+        match process() {
+            Ok(result) => Ok(result),
+            Err(error) => {
+                eprintln!("[handle failed] {}", filepath.display());
+                Err(error)
+            }
+        }
     }
 
     pub fn stringify<S>(&self, data: &S) -> Result<String, String>
@@ -72,7 +86,7 @@ where
         self.case_groups.clone()
     }
 
-    pub fn run_test<F>(&self, mut test_case: F) -> Result<(), Vec<TestFailure>>
+    pub(crate) fn run_test_with<F>(&self, mut test_case: F) -> Result<(), Vec<TestFailure>>
     where
         F: FnMut(&YozoraUseCase<T>, &Path) -> Vec<TestFailure>,
     {
@@ -92,7 +106,7 @@ impl<T> BaseTester<T>
 where
     T: Clone + Serialize,
 {
-    pub fn run_answer<F>(&mut self, mut answer_case: F) -> Result<(), String>
+    pub(crate) fn run_answer_with<F>(&mut self, mut answer_case: F) -> Result<(), String>
     where
         F: FnMut(&mut YozoraUseCase<T>, &Path) -> Result<(), String>,
     {

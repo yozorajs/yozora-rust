@@ -6,7 +6,9 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+serde_json.workspace = true
 yozora-ast = { path = "../ast" }
+yozora-character = { path = "../character" }
 
 [lib]
 path = "src/lib.rs"

@@ -6,6 +6,7 @@ pub struct NodePoint {
     pub column: usize,
     pub offset: usize,
     pub code_point: CodePoint,
+    pub source_width: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1,4 +1,8 @@
+use std::collections::BTreeMap;
+use std::sync::LazyLock;
+
 use crate::constant::ascii::AsciiCodePoint;
+use crate::constant::entity::ENTITY_REFERENCES;
 use crate::constant::unicode::UnicodeCodePoint;
 use crate::types::{CodePoint, NodePoint};
 use crate::util::charset::ascii::is_ascii_digit_character;
@@ -9,27 +13,56 @@ pub struct EntityReference {
     pub value: String,
 }
 
-fn resolve_named_entity(name: &str) -> Option<&'static str> {
-    match name {
-        "AMP;" | "amp;" => Some("&"),
-        "LT;" | "lt;" => Some("<"),
-        "GT;" | "gt;" => Some(">"),
-        "QUOT;" | "quot;" => Some("\""),
-        "APOS;" | "apos;" => Some("'"),
-        "copy;" => Some("\u{00a9}"),
-        "AElig;" => Some("\u{00c6}"),
-        "Dcaron;" => Some("\u{010e}"),
-        "frac34;" => Some("\u{00be}"),
-        "HilbertSpace;" => Some("\u{210b}"),
-        "DifferentialD;" => Some("\u{2146}"),
-        "ClockwiseContourIntegral;" => Some("\u{2232}"),
-        "ngE;" => Some("\u{2267}\u{0338}"),
-        "ouml;" => Some("\u{00f6}"),
-        "Auml;" | "auml;" => Some("\u{00e4}"),
-        "nbsp;" => Some("\u{00a0}"),
-        _ => None,
+#[derive(Debug, Clone, Default)]
+pub struct EntityReferenceTrie {
+    entries: BTreeMap<String, String>,
+}
+
+impl EntityReferenceTrie {
+    pub fn search(
+        &self,
+        node_points: &[NodePoint],
+        start_index: usize,
+        end_index: usize,
+    ) -> Option<EntityReference> {
+        let mut key = String::new();
+        for (index, point) in node_points
+            .iter()
+            .enumerate()
+            .take(end_index)
+            .skip(start_index)
+        {
+            key.push(char::from_u32(point.code_point as u32)?);
+            if point.code_point != AsciiCodePoint::SEMICOLON as i32 {
+                continue;
+            }
+            return self.entries.get(&key).map(|value| EntityReference {
+                next_index: index + 1,
+                value: value.clone(),
+            });
+        }
+        None
+    }
+
+    pub fn insert(&mut self, keys: &[CodePoint], value: &str) {
+        let key = keys
+            .iter()
+            .filter_map(|code_point| char::from_u32(*code_point as u32))
+            .collect::<String>();
+        self.entries.insert(key, value.to_string());
     }
 }
+
+pub fn create_entity_reference_trie() -> EntityReferenceTrie {
+    let entries = ENTITY_REFERENCES
+        .iter()
+        .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+        .collect();
+    EntityReferenceTrie { entries }
+}
+
+pub static ENTITY_REFERENCE_TRIE: LazyLock<EntityReferenceTrie> =
+    LazyLock::new(create_entity_reference_trie);
 
 pub fn eat_entity_reference(
     node_points: &[NodePoint],
@@ -40,36 +73,15 @@ pub fn eat_entity_reference(
         return None;
     }
 
-    let first = node_points[start_index].code_point;
-
-    if first == AsciiCodePoint::NUMBER_SIGN as i32 {
-        return parse_numeric_entity(node_points, start_index, end_index);
+    if let Some(entity) = ENTITY_REFERENCE_TRIE.search(node_points, start_index, end_index) {
+        return Some(entity);
     }
 
-    let mut raw = String::new();
-    for (idx, point) in node_points
-        .iter()
-        .enumerate()
-        .take(end_index)
-        .skip(start_index)
-    {
-        let ch = char::from_u32(point.code_point as u32)?;
-        raw.push(ch);
-        if ch == ';' {
-            if let Some(decoded) = resolve_named_entity(&raw) {
-                return Some(EntityReference {
-                    next_index: idx + 1,
-                    value: decoded.to_string(),
-                });
-            }
-            return None;
-        }
-        if raw.len() > 64 {
-            return None;
-        }
+    if node_points[start_index].code_point != AsciiCodePoint::NUMBER_SIGN as i32 {
+        return None;
     }
 
-    None
+    parse_numeric_entity(node_points, start_index, end_index)
 }
 
 fn parse_numeric_entity(
@@ -77,77 +89,66 @@ fn parse_numeric_entity(
     start_index: usize,
     end_index: usize,
 ) -> Option<EntityReference> {
-    let mut i = start_index + 1;
-    let mut val: CodePoint = 0;
-    let mut radix = 10;
+    let mut index = start_index + 1;
+    let mut value: CodePoint = 0;
+    let radix = if index < end_index
+        && matches!(
+            node_points[index].code_point,
+            code_point if code_point == AsciiCodePoint::LOWERCASE_X as i32
+                || code_point == AsciiCodePoint::UPPERCASE_X as i32
+        ) {
+        index += 1;
+        16
+    } else {
+        10
+    };
+    let maximum_digits = if radix == 16 { 6 } else { 7 };
+    let mut digit_count = 0usize;
 
-    if i < end_index {
-        let x = node_points[i].code_point;
-        if x == AsciiCodePoint::LOWERCASE_X as i32 || x == AsciiCodePoint::UPPERCASE_X as i32 {
-            radix = 16;
-            i += 1;
-        }
-    }
-
-    let mut read_count = 0usize;
-    let max_digits = if radix == 16 { 6 } else { 7 };
-    while i < end_index {
-        let c = node_points[i].code_point;
-        if c == AsciiCodePoint::SEMICOLON as i32 {
-            if read_count == 0 {
-                return Some(EntityReference {
-                    next_index: i + 1,
-                    value: "\u{FFFD}".to_string(),
-                });
-            }
-
-            let normalized = if val == 0 || val > 0x10FFFF || (0xD800..=0xDFFF).contains(&val) {
-                UnicodeCodePoint::ReplacementCharacter as i32
-            } else {
-                val
-            };
-            let value = char::from_u32(normalized as u32)
-                .unwrap_or('\u{FFFD}')
-                .to_string();
-            return Some(EntityReference {
-                next_index: i + 1,
-                value,
-            });
-        }
-
+    while index < end_index && digit_count < maximum_digits {
+        let code_point = node_points[index].code_point;
         let digit = if radix == 16 {
-            match c {
-                x if x >= AsciiCodePoint::DIGIT0 as i32 && x <= AsciiCodePoint::DIGIT9 as i32 => {
-                    x - AsciiCodePoint::DIGIT0 as i32
-                }
-                x if x >= AsciiCodePoint::UPPERCASE_A as i32
-                    && x <= AsciiCodePoint::UPPERCASE_F as i32 =>
+            match code_point {
+                value if is_ascii_digit_character(value) => value - AsciiCodePoint::DIGIT0 as i32,
+                value
+                    if (AsciiCodePoint::UPPERCASE_A as i32
+                        ..=AsciiCodePoint::UPPERCASE_F as i32)
+                        .contains(&value) =>
                 {
-                    x - AsciiCodePoint::UPPERCASE_A as i32 + 10
+                    value - AsciiCodePoint::UPPERCASE_A as i32 + 10
                 }
-                x if x >= AsciiCodePoint::LOWERCASE_A as i32
-                    && x <= AsciiCodePoint::LOWERCASE_F as i32 =>
+                value
+                    if (AsciiCodePoint::LOWERCASE_A as i32
+                        ..=AsciiCodePoint::LOWERCASE_F as i32)
+                        .contains(&value) =>
                 {
-                    x - AsciiCodePoint::LOWERCASE_A as i32 + 10
+                    value - AsciiCodePoint::LOWERCASE_A as i32 + 10
                 }
-                _ => return None,
+                _ => break,
             }
-        } else if is_ascii_digit_character(c) {
-            c - AsciiCodePoint::DIGIT0 as i32
+        } else if is_ascii_digit_character(code_point) {
+            code_point - AsciiCodePoint::DIGIT0 as i32
         } else {
-            return None;
+            break;
         };
-
-        read_count += 1;
-        if read_count > max_digits {
-            return None;
-        }
-        val = val
-            .checked_mul(radix)
-            .and_then(|v| v.checked_add(digit))
-            .unwrap_or(UnicodeCodePoint::ReplacementCharacter as i32);
-        i += 1;
+        value = value * radix + digit;
+        digit_count += 1;
+        index += 1;
     }
 
-    None
+    if digit_count == 0
+        || index >= end_index
+        || node_points[index].code_point != AsciiCodePoint::SEMICOLON as i32
+    {
+        return None;
+    }
+    if value == 0 || value > 0x10ffff || (0xd800..=0xdfff).contains(&value) {
+        value = UnicodeCodePoint::ReplacementCharacter as i32;
+    }
+    Some(EntityReference {
+        next_index: index + 1,
+        value: char::from_u32(value as u32)
+            .unwrap_or('\u{fffd}')
+            .to_string(),
+    })
 }

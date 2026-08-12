@@ -28,13 +28,13 @@ impl IntoLiteralStrings for Vec<String> {
     }
 }
 
-impl<'a> IntoLiteralStrings for Vec<&'a str> {
+impl IntoLiteralStrings for Vec<&str> {
     fn into_literal_strings(self) -> Vec<String> {
         self.into_iter().map(ToString::to_string).collect()
     }
 }
 
-impl<'a> IntoLiteralStrings for &'a [&'a str] {
+impl IntoLiteralStrings for &[&str] {
     fn into_literal_strings(self) -> Vec<String> {
         self.iter().map(ToString::to_string).collect()
     }
@@ -48,7 +48,27 @@ pub fn create_node_point_generator<T: IntoLiteralStrings>(
     let mut line = 1usize;
     let mut chunks: Vec<Vec<NodePoint>> = Vec::new();
 
-    for content in literal_strings.into_literal_strings() {
+    let mut pending_cr = false;
+    let mut contents = Vec::new();
+    for chunk in literal_strings.into_literal_strings() {
+        let mut content = if pending_cr {
+            pending_cr = false;
+            format!("\r{chunk}")
+        } else {
+            chunk
+        };
+
+        if content.ends_with('\r') {
+            content.pop();
+            pending_cr = true;
+        }
+        contents.push(content);
+    }
+    if pending_cr {
+        contents.push("\r".to_string());
+    }
+
+    for content in contents {
         let code_points: Vec<CodePoint> = content.chars().map(|c| c as i32).collect();
         let mut points: Vec<NodePoint> = Vec::with_capacity(code_points.len());
 
@@ -63,6 +83,7 @@ pub fn create_node_point_generator<T: IntoLiteralStrings>(
                             column,
                             offset,
                             code_point: VirtualCodePoint::Space as i32,
+                            source_width: None,
                         });
                     }
                     offset += 1;
@@ -74,25 +95,27 @@ pub fn create_node_point_generator<T: IntoLiteralStrings>(
                         column,
                         offset,
                         code_point: VirtualCodePoint::LineEnd as i32,
+                        source_width: None,
                     });
                     offset += 1;
                     column = 1;
                     line += 1;
                 }
                 x if x == AsciiCodePoint::CR as i32 => {
+                    let is_crlf = i + 1 < code_points.len()
+                        && code_points[i + 1] == AsciiCodePoint::LF as i32;
                     points.push(NodePoint {
                         line,
                         column,
                         offset,
                         code_point: VirtualCodePoint::LineEnd as i32,
+                        source_width: is_crlf.then_some(2),
                     });
-                    offset += 1;
+                    offset += if is_crlf { 2 } else { 1 };
                     column = 1;
                     line += 1;
 
-                    if i + 1 < code_points.len() && code_points[i + 1] == AsciiCodePoint::LF as i32
-                    {
-                        offset += 1;
+                    if is_crlf {
                         i += 1;
                     }
                 }
@@ -102,19 +125,24 @@ pub fn create_node_point_generator<T: IntoLiteralStrings>(
                         column,
                         offset,
                         code_point: UnicodeCodePoint::ReplacementCharacter as i32,
+                        source_width: None,
                     });
                     offset += 1;
                     column += 1;
                 }
                 _ => {
+                    let width = char::from_u32(code_point as u32)
+                        .map(char::len_utf16)
+                        .unwrap_or(1);
                     points.push(NodePoint {
                         line,
                         column,
                         offset,
                         code_point,
+                        source_width: None,
                     });
-                    offset += 1;
-                    column += 1;
+                    offset += width;
+                    column += width;
                 }
             }
             i += 1;
@@ -166,7 +194,10 @@ pub fn calc_string_from_node_points(
         let c = node_points[i].code_point;
         if c == VirtualCodePoint::Space as i32 {
             let mut j = i + 1;
-            while j < end_index && node_points[j].code_point == VirtualCodePoint::Space as i32 {
+            while j < end_index
+                && node_points[j].code_point == VirtualCodePoint::Space as i32
+                && node_points[j].offset == node_points[i].offset
+            {
                 j += 1;
             }
 
@@ -231,7 +262,10 @@ pub fn calc_escaped_string_from_node_points(
 
         if c == VirtualCodePoint::Space as i32 {
             let mut j = i + 1;
-            while j < end_index && node_points[j].code_point == VirtualCodePoint::Space as i32 {
+            while j < end_index
+                && node_points[j].code_point == VirtualCodePoint::Space as i32
+                && node_points[j].offset == node_points[i].offset
+            {
                 j += 1;
             }
 
@@ -272,4 +306,32 @@ pub fn calc_escaped_string_from_node_points(
     }
 
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::create_node_point_generator;
+    use crate::VirtualCodePoint;
+
+    #[test]
+    fn tracks_utf16_width_for_astral_characters() {
+        let chunks = create_node_point_generator("a😀b");
+        let points = &chunks[0];
+
+        assert_eq!((points[1].column, points[1].offset), (2, 1));
+        assert_eq!((points[2].column, points[2].offset), (4, 3));
+    }
+
+    #[test]
+    fn preserves_crlf_width_across_chunks() {
+        let chunks = create_node_point_generator(vec!["a\r", "\nb"]);
+        let points = chunks.iter().flatten().copied().collect::<Vec<_>>();
+
+        assert_eq!(points[1].code_point, VirtualCodePoint::LineEnd as i32);
+        assert_eq!(points[1].source_width, Some(2));
+        assert_eq!(
+            (points[2].line, points[2].column, points[2].offset),
+            (2, 1, 3)
+        );
+    }
 }

@@ -1,7 +1,11 @@
 use crate::constant::ascii::AsciiCodePoint;
-use crate::constant::unicode_sets::{
-    UNICODE_PC, UNICODE_PD, UNICODE_PE, UNICODE_PF, UNICODE_PI, UNICODE_PO, UNICODE_PS,
-};
+use crate::constant::unicode::pc::UnicodePcCodePoint;
+use crate::constant::unicode::pd::UnicodePdCodePoint;
+use crate::constant::unicode::pe::UnicodePeCodePoint;
+use crate::constant::unicode::pf::UnicodePfCodePoint;
+use crate::constant::unicode::pi::UnicodePiCodePoint;
+use crate::constant::unicode::po::UnicodePoCodePoint;
+use crate::constant::unicode::ps::UnicodePsCodePoint;
 use crate::constant::virtual_code_point::VirtualCodePoint;
 use crate::types::CodePoint;
 use crate::util::charset::ascii::{
@@ -43,13 +47,13 @@ pub fn is_line_ending(code_point: CodePoint) -> bool {
 
 pub fn punctuation_characters() -> Vec<CodePoint> {
     let mut chars = ascii_punctuation_characters().to_vec();
-    chars.extend_from_slice(UNICODE_PC);
-    chars.extend_from_slice(UNICODE_PD);
-    chars.extend_from_slice(UNICODE_PE);
-    chars.extend_from_slice(UNICODE_PF);
-    chars.extend_from_slice(UNICODE_PI);
-    chars.extend_from_slice(UNICODE_PO);
-    chars.extend_from_slice(UNICODE_PS);
+    chars.extend_from_slice(UnicodePcCodePoint::VALUES);
+    chars.extend_from_slice(UnicodePdCodePoint::VALUES);
+    chars.extend_from_slice(UnicodePeCodePoint::VALUES);
+    chars.extend_from_slice(UnicodePfCodePoint::VALUES);
+    chars.extend_from_slice(UnicodePiCodePoint::VALUES);
+    chars.extend_from_slice(UnicodePoCodePoint::VALUES);
+    chars.extend_from_slice(UnicodePsCodePoint::VALUES);
     chars.sort_unstable();
     chars.dedup();
     chars
@@ -57,13 +61,13 @@ pub fn punctuation_characters() -> Vec<CodePoint> {
 
 pub fn is_punctuation_character(code_point: CodePoint) -> bool {
     ascii_punctuation_characters().contains(&code_point)
-        || UNICODE_PC.contains(&code_point)
-        || UNICODE_PD.contains(&code_point)
-        || UNICODE_PE.contains(&code_point)
-        || UNICODE_PF.contains(&code_point)
-        || UNICODE_PI.contains(&code_point)
-        || UNICODE_PO.contains(&code_point)
-        || UNICODE_PS.contains(&code_point)
+        || UnicodePcCodePoint::VALUES.contains(&code_point)
+        || UnicodePdCodePoint::VALUES.contains(&code_point)
+        || UnicodePeCodePoint::VALUES.contains(&code_point)
+        || UnicodePfCodePoint::VALUES.contains(&code_point)
+        || UnicodePiCodePoint::VALUES.contains(&code_point)
+        || UnicodePoCodePoint::VALUES.contains(&code_point)
+        || UnicodePsCodePoint::VALUES.contains(&code_point)
 }
 
 pub fn control_characters() -> &'static [CodePoint] {

@@ -6,10 +6,13 @@ members = [
   "crates/character",
   "crates/core-parser",
   "crates/core-tokenizer",
+  "crates/invariant",
+  "crates/markup-weaver",
   "crates/parser",
   "crates/parser-gfm",
   "crates/parser-gfm-ex",
   "crates/suitecases",
+  "crates/test-util",
   "crates/tokenizer-admonition",
   "crates/tokenizer-autolink",
   "crates/tokenizer-autolink-extension",
@@ -46,8 +49,8 @@ members = [
 [workspace.package]
 edition = "2021"
 license = "MIT"
-version = "0.1.0"
-authors = ["yozora-rust"]
+version = "2.4.0"
+authors = ["guanghechen"]
 repository = "https://github.com/yozorajs/yozora"
 
 [workspace.dependencies]

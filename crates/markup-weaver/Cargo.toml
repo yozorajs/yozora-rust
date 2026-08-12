@@ -1,0 +1,13 @@
+[package]
+name = "yozora-markup-weaver"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+yozora-ast = { path = "../ast" }
+
+[dev-dependencies]
+serde_json.workspace = true
+yozora-core-parser = { path = "../core-parser" }
+yozora-parser = { path = "../parser" }

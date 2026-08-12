@@ -33,7 +33,15 @@ impl NodeWeaver for LinkWeaver {
             };
         }
 
-        let url = if node.url.contains(['(', ')']) {
+        let is_encoded_autolink = node.title.is_none()
+            && node.children.len() == 1
+            && matches!(
+                &node.children[0],
+                Node::Text(text) if text.value.replace(']', "%5D") == node.url
+            );
+        let url = if is_encoded_autolink {
+            node.url.replace('(', "\\(").replace(')', "\\)")
+        } else if node.url.contains(['(', ')']) {
             format!("<{}>", node.url)
         } else {
             node.url.clone()

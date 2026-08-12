@@ -35,7 +35,13 @@ pub fn default_url_resolver(path_pieces: &[Option<&str>]) -> String {
     format!("{}{suffix}", normalize_url_path(&resolved_path))
 }
 
-pub fn resolve_urls_for_ast<F>(ast: &mut Root, matcher: NodeMatcher<'_>, mut resolve_url: F)
+pub fn resolve_urls_for_ast(ast: &mut Root) {
+    resolve_urls_for_ast_with(ast, default_resource_matcher(), |url| {
+        default_url_resolver(&[Some(url)])
+    });
+}
+
+pub fn resolve_urls_for_ast_with<F>(ast: &mut Root, matcher: NodeMatcher<'_>, mut resolve_url: F)
 where
     F: FnMut(&str) -> String,
 {
@@ -91,18 +97,11 @@ where
     visit(&mut ast.children, &matcher, &mut resolve_url);
 }
 
-pub fn resolve_all_urls_for_ast<F>(ast: &mut Root, resolve_url: F)
-where
-    F: FnMut(&str) -> String,
-{
-    resolve_urls_for_ast(
-        ast,
-        NodeMatcher::Predicate(&|node| {
-            matches!(node, Node::Definition(_) | Node::Image(_) | Node::Link(_))
-                || matches!(node, Node::Custom(node) if node.data.contains_key("url"))
-        }),
-        resolve_url,
-    );
+fn default_resource_matcher() -> NodeMatcher<'static> {
+    NodeMatcher::Predicate(&|node| {
+        matches!(node, Node::Definition(_) | Node::Image(_) | Node::Link(_))
+            || matches!(node, Node::Custom(node) if node.data.contains_key("url"))
+    })
 }
 
 fn normalize_url_path(path: &str) -> String {

@@ -6,7 +6,7 @@ use std::task::{Context, Poll, Waker};
 use yozora_ast::{Admonition, Footnote, Node, Paragraph, Point, Position, Root, Strong, Text};
 use yozora_ast_util::{
     calc_excerpt_ast, calc_heading_toc, collect_nodes, default_url_resolver, remove_positions,
-    replace_footnotes_in_references, search_node, shallow_clone_ast,
+    replace_footnotes_in_references, resolve_urls_for_ast, search_node, shallow_clone_ast,
     shallow_mutate_ast_in_postorder, shallow_mutate_ast_in_postorder_async,
     shallow_mutate_ast_in_preorder, traverse_ast, NodeMatcher, NodeReplacement,
     NodeReplacementFuture, ParentRef,
@@ -233,6 +233,27 @@ fn url_resolver_matches_directory_and_opaque_semantics() {
     for (pieces, expected) in cases {
         assert_eq!(default_url_resolver(pieces), *expected, "{pieces:?}");
     }
+}
+
+#[test]
+fn resolve_urls_uses_default_matcher_and_resolver() {
+    let mut root = Root {
+        node_type: "root".to_string(),
+        position: None,
+        children: vec![Node::Link(yozora_ast::Link {
+            position: None,
+            url: "docs/../guide".to_string(),
+            title: None,
+            children: Vec::new(),
+        })],
+    };
+
+    resolve_urls_for_ast(&mut root);
+
+    let Node::Link(link) = &root.children[0] else {
+        panic!("expected link");
+    };
+    assert_eq!(link.url, "guide");
 }
 
 #[test]

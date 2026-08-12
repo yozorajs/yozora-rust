@@ -7,7 +7,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::{YozoraUseCase, YozoraUseCaseGroup};
+use crate::{TestFailure, YozoraUseCase, YozoraUseCaseGroup};
 
 #[derive(Debug, Deserialize)]
 #[serde(bound(deserialize = "T: DeserializeOwned"))]
@@ -62,10 +62,6 @@ impl<T> BaseTester<T> {
     {
         serde_json::to_value(data).map_err(|error| error.to_string())
     }
-
-    pub(crate) fn case_groups_mut(&mut self) -> &mut [YozoraUseCaseGroup<T>] {
-        &mut self.case_groups
-    }
 }
 
 impl<T> BaseTester<T>
@@ -74,6 +70,37 @@ where
 {
     pub fn collect(&self) -> Vec<YozoraUseCaseGroup<T>> {
         self.case_groups.clone()
+    }
+
+    pub fn run_test<F>(&self, mut test_case: F) -> Result<(), Vec<TestFailure>>
+    where
+        F: FnMut(&YozoraUseCase<T>, &Path) -> Vec<TestFailure>,
+    {
+        let mut failures = Vec::new();
+        for group in &self.case_groups {
+            test_group(group, &mut test_case, &mut failures);
+        }
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(failures)
+        }
+    }
+}
+
+impl<T> BaseTester<T>
+where
+    T: Clone + Serialize,
+{
+    pub fn run_answer<F>(&mut self, mut answer_case: F) -> Result<(), String>
+    where
+        F: FnMut(&mut YozoraUseCase<T>, &Path) -> Result<(), String>,
+    {
+        let root = self.case_root_directory.clone();
+        for group in &mut self.case_groups {
+            answer_group(&root, group, &mut answer_case)?;
+        }
+        Ok(())
     }
 }
 
@@ -219,6 +246,64 @@ fn insert_group<T>(
         current_groups = &mut current_groups[index].sub_groups;
     }
     current_groups.push(group);
+}
+
+fn test_group<T, F>(
+    group: &YozoraUseCaseGroup<T>,
+    test_case: &mut F,
+    failures: &mut Vec<TestFailure>,
+) where
+    F: FnMut(&YozoraUseCase<T>, &Path) -> Vec<TestFailure>,
+{
+    for case in &group.cases {
+        failures.extend(test_case(case, &group.filepath));
+    }
+    for subgroup in &group.sub_groups {
+        test_group(subgroup, test_case, failures);
+    }
+}
+
+fn answer_group<T, F>(
+    parent_dir: &Path,
+    group: &mut YozoraUseCaseGroup<T>,
+    answer_case: &mut F,
+) -> Result<(), String>
+where
+    T: Serialize,
+    F: FnMut(&mut YozoraUseCase<T>, &Path) -> Result<(), String>,
+{
+    if group.dirpath == group.filepath {
+        for subgroup in &mut group.sub_groups {
+            answer_group(&group.dirpath, subgroup, answer_case)?;
+        }
+        return Ok(());
+    }
+
+    for case in &mut group.cases {
+        answer_case(case, &group.filepath)?;
+    }
+
+    let title = group.title.clone().unwrap_or_else(|| {
+        group
+            .dirpath
+            .strip_prefix(parent_dir)
+            .unwrap_or(&group.dirpath)
+            .to_string_lossy()
+            .to_string()
+    });
+    let content = serde_json::to_string_pretty(&AnswerDocument {
+        title,
+        cases: &group.cases,
+    })
+    .map_err(|error| error.to_string())?;
+    fs::write(&group.filepath, format!("{content}\n"))
+        .map_err(|error| format!("failed to write {}: {error}", group.filepath.display()))
+}
+
+#[derive(Serialize)]
+struct AnswerDocument<'a, T> {
+    title: String,
+    cases: &'a [YozoraUseCase<T>],
 }
 
 fn collect_filepaths(root: &Path) -> Result<Vec<PathBuf>, String> {

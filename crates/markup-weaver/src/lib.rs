@@ -9,5 +9,8 @@ pub use markup_weaver::MarkupWeaver;
 pub use types::{
     Ancestor, Escaper, MarkupWeaverContract, NodeMarkup, NodeMarkupWeaveContext, NodeWeaver,
 };
-pub use util::{create_character_escaper, find_max_continuous_symbol, minmax, split_lines};
+pub use util::{
+    create_character_escaper, find_max_continuous_symbol, minmax, split_lines,
+    ContinuousSymbolMatcher, LINE_REGEX,
+};
 pub use weaver::*;

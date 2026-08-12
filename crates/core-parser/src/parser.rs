@@ -5,84 +5,62 @@ use yozora_ast::Root;
 use yozora_character::create_node_point_generator;
 use yozora_core_tokenizer::encode_link_destination;
 use yozora_core_tokenizer::{AnyFallbackTokenizer, AnyTokenizer};
-use yozora_core_tokenizer::{
-    BlockTokenizer, InlineFallbackTokenizer, InlineTokenizer, TokenizerId,
-};
+use yozora_core_tokenizer::{BlockTokenizer, InlineFallbackTokenizer, InlineTokenizer};
 
 use crate::processor::{create_processor, Processor, ProcessorOptions};
 use crate::types::{DefaultParserProps, FormatUrlFn, ParseContents, ParseOptions, Parser};
 use crate::util::phrasing_line::create_phrasing_line_generator;
-use crate::util::tokenizer_uid::calc_tokenizer_uid;
 
 #[derive(Clone)]
 struct ResolvedParseOptions {
-    shouldReservePosition: bool,
-    presetDefinitions: Vec<yozora_ast::Association>,
-    presetFootnoteDefinitions: Vec<yozora_ast::Association>,
-    formatUrl: FormatUrlFn,
+    should_reserve_position: bool,
+    preset_definitions: Vec<yozora_ast::Association>,
+    preset_footnote_definitions: Vec<yozora_ast::Association>,
+    format_url: FormatUrlFn,
 }
-
-#[allow(non_snake_case)]
+#[derive(Default)]
 pub struct DefaultParser {
-    blockTokenizers: Vec<Box<dyn BlockTokenizer>>,
-    inlineTokenizers: Vec<Box<dyn InlineTokenizer>>,
-    blockTokenizerMap: HashMap<String, usize>,
-    inlineTokenizerMap: HashMap<String, usize>,
-    blockTokenizerUidMap: HashMap<String, TokenizerId>,
-    inlineTokenizerUidMap: HashMap<String, TokenizerId>,
-    blockFallbackTokenizer: Option<Box<dyn BlockTokenizer>>,
-    inlineFallbackTokenizer: Option<Box<dyn InlineFallbackTokenizer>>,
-    blockFallbackTokenizerUid: Option<TokenizerId>,
-    inlineFallbackTokenizerUid: Option<TokenizerId>,
-    defaultParseOptions: ParseOptions,
-}
-
-impl Default for DefaultParser {
-    fn default() -> Self {
-        Self {
-            blockTokenizers: Vec::new(),
-            inlineTokenizers: Vec::new(),
-            blockTokenizerMap: HashMap::new(),
-            inlineTokenizerMap: HashMap::new(),
-            blockTokenizerUidMap: HashMap::new(),
-            inlineTokenizerUidMap: HashMap::new(),
-            blockFallbackTokenizer: None,
-            inlineFallbackTokenizer: None,
-            blockFallbackTokenizerUid: None,
-            inlineFallbackTokenizerUid: None,
-            defaultParseOptions: ParseOptions::default(),
-        }
-    }
+    block_tokenizers: Vec<Box<dyn BlockTokenizer>>,
+    inline_tokenizers: Vec<Box<dyn InlineTokenizer>>,
+    block_tokenizer_map: HashMap<String, usize>,
+    inline_tokenizer_map: HashMap<String, usize>,
+    block_fallback_tokenizer: Option<Box<dyn BlockTokenizer>>,
+    inline_fallback_tokenizer: Option<Box<dyn InlineFallbackTokenizer>>,
+    default_parse_options: ParseOptions,
 }
 
 impl DefaultParser {
     pub fn new(props: DefaultParserProps) -> Self {
         let mut parser = Self::default();
-        parser.setDefaultParseOptions(props.defaultParseOptions);
+        parser.set_default_parse_options(props.default_parse_options);
 
-        if let Some(tokenizer) = props.blockFallbackTokenizer {
-            parser.useFallbackTokenizer(AnyFallbackTokenizer::Block(tokenizer));
+        if let Some(tokenizer) = props.block_fallback_tokenizer {
+            parser.use_fallback_tokenizer(AnyFallbackTokenizer::Block(tokenizer));
         }
-        if let Some(tokenizer) = props.inlineFallbackTokenizer {
-            parser.useFallbackTokenizer(AnyFallbackTokenizer::Inline(tokenizer));
+        if let Some(tokenizer) = props.inline_fallback_tokenizer {
+            parser.use_fallback_tokenizer(AnyFallbackTokenizer::Inline(tokenizer));
         }
 
         parser
     }
 
-    pub fn useTokenizer(
+    pub fn use_tokenizer(
         &mut self,
         tokenizer: AnyTokenizer,
-        registerBeforeTokenizer: Option<&str>,
+        register_before_tokenizer: Option<&str>,
     ) -> &mut Self {
         match tokenizer {
             AnyTokenizer::Block(tokenizer) => {
-                if let Err(err) = self.registerBlockTokenizer(tokenizer, registerBeforeTokenizer) {
+                if let Err(err) =
+                    self.register_block_tokenizer(tokenizer, register_before_tokenizer)
+                {
                     panic!("{err}");
                 }
             }
             AnyTokenizer::Inline(tokenizer) => {
-                if let Err(err) = self.registerInlineTokenizer(tokenizer, registerBeforeTokenizer) {
+                if let Err(err) =
+                    self.register_inline_tokenizer(tokenizer, register_before_tokenizer)
+                {
                     panic!("{err}");
                 }
             }
@@ -90,330 +68,235 @@ impl DefaultParser {
         self
     }
 
-    pub fn replaceTokenizer(
+    pub fn replace_tokenizer(
         &mut self,
         tokenizer: AnyTokenizer,
-        registerBeforeTokenizer: Option<&str>,
+        register_before_tokenizer: Option<&str>,
     ) -> &mut Self {
-        let name = tokenizer.name().to_string();
-        self.unmountTokenizer(&name);
-        self.useTokenizer(tokenizer, registerBeforeTokenizer)
+        match tokenizer {
+            AnyTokenizer::Block(tokenizer) => {
+                let name = tokenizer.name().to_string();
+                if let Some(index) = self.block_tokenizer_map.get(&name).copied() {
+                    if register_before_tokenizer.is_none()
+                        && self.block_tokenizers[index].priority() == tokenizer.priority()
+                    {
+                        self.block_tokenizers[index] = tokenizer;
+                        return self;
+                    }
+                }
+                self.unmount_block_tokenizer(&name);
+                if let Err(err) =
+                    self.register_block_tokenizer(tokenizer, register_before_tokenizer)
+                {
+                    panic!("{err}");
+                }
+            }
+            AnyTokenizer::Inline(tokenizer) => {
+                let name = tokenizer.name().to_string();
+                if let Some(index) = self.inline_tokenizer_map.get(&name).copied() {
+                    if register_before_tokenizer.is_none()
+                        && self.inline_tokenizers[index].priority() == tokenizer.priority()
+                    {
+                        self.inline_tokenizers[index] = tokenizer;
+                        return self;
+                    }
+                }
+                self.unmount_inline_tokenizer(&name);
+                if let Err(err) =
+                    self.register_inline_tokenizer(tokenizer, register_before_tokenizer)
+                {
+                    panic!("{err}");
+                }
+            }
+        }
+        self
     }
 
-    pub fn unmountTokenizer(&mut self, tokenizerName: &str) -> &mut Self {
-        self.unmountInlineTokenizer(tokenizerName);
-        self.unmountBlockTokenizer(tokenizerName);
+    pub fn unmount_tokenizer(&mut self, tokenizer_name: &str) -> &mut Self {
+        self.unmount_inline_tokenizer(tokenizer_name);
+        self.unmount_block_tokenizer(tokenizer_name);
 
         if self
-            .blockFallbackTokenizer
+            .block_fallback_tokenizer
             .as_ref()
-            .is_some_and(|tokenizer| tokenizer.name() == tokenizerName)
+            .is_some_and(|tokenizer| tokenizer.name() == tokenizer_name)
         {
-            self.blockFallbackTokenizer = None;
-            self.blockFallbackTokenizerUid = None;
+            self.block_fallback_tokenizer = None;
         }
 
         if self
-            .inlineFallbackTokenizer
+            .inline_fallback_tokenizer
             .as_ref()
-            .is_some_and(|tokenizer| tokenizer.name() == tokenizerName)
+            .is_some_and(|tokenizer| tokenizer.name() == tokenizer_name)
         {
-            self.inlineFallbackTokenizer = None;
-            self.inlineFallbackTokenizerUid = None;
+            self.inline_fallback_tokenizer = None;
         }
 
         self
     }
 
-    pub fn useFallbackTokenizer(&mut self, tokenizer: AnyFallbackTokenizer) -> &mut Self {
+    pub fn use_fallback_tokenizer(&mut self, tokenizer: AnyFallbackTokenizer) -> &mut Self {
         match tokenizer {
             AnyFallbackTokenizer::Block(tokenizer) => {
-                if let Some(existing) = self.blockFallbackTokenizer.as_ref() {
-                    let name = existing.name().to_string();
-                    self.unmountTokenizer(&name);
+                let name = tokenizer.name();
+                if self.block_tokenizer_map.contains_key(name) {
+                    panic!("[useFallbackTokenizer] Name({name}) has been registered.");
                 }
 
-                let name = tokenizer.name().to_string();
-                let uid = calc_tokenizer_uid(&name);
-                if let Err(err) =
-                    ensure_uid_no_collision(&self.blockTokenizerUidMap, &name, uid, "block")
-                {
-                    panic!("{err}");
-                }
-                self.blockFallbackTokenizer = Some(tokenizer);
-                self.blockFallbackTokenizerUid = Some(uid);
+                self.block_fallback_tokenizer = Some(tokenizer);
             }
             AnyFallbackTokenizer::Inline(tokenizer) => {
-                if let Some(existing) = self.inlineFallbackTokenizer.as_ref() {
-                    let name = existing.name().to_string();
-                    self.unmountTokenizer(&name);
+                let name = tokenizer.name();
+                if self.inline_tokenizer_map.contains_key(name) {
+                    panic!("[useFallbackTokenizer] Name({name}) has been registered.");
                 }
 
-                let name = tokenizer.name().to_string();
-                let uid = calc_tokenizer_uid(&name);
-                if let Err(err) =
-                    ensure_uid_no_collision(&self.inlineTokenizerUidMap, &name, uid, "inline")
-                {
-                    panic!("{err}");
-                }
-                self.inlineFallbackTokenizer = Some(tokenizer);
-                self.inlineFallbackTokenizerUid = Some(uid);
+                self.inline_fallback_tokenizer = Some(tokenizer);
             }
         }
         self
     }
 
-    pub fn setDefaultParseOptions(&mut self, options: Option<ParseOptions>) {
-        self.defaultParseOptions = options.unwrap_or_default();
+    pub fn set_default_parse_options(&mut self, options: Option<ParseOptions>) {
+        self.default_parse_options = options.unwrap_or_default();
     }
 
     pub fn parse<'a, C>(&self, contents: C, options: Option<ParseOptions>) -> Root
     where
         C: Into<ParseContents<'a>>,
     {
-        let parse_options = self.resolveParseOptions(options.unwrap_or_default());
+        let parse_options = self.resolve_parse_options(options.unwrap_or_default());
         let chunks = normalize_contents_to_chunks(contents.into());
         let node_point_chunks = create_node_point_generator(chunks);
         let lines_iterator = create_phrasing_line_generator(node_point_chunks);
 
         let mut processor = create_processor(ProcessorOptions {
-            inline_tokenizers: &self.inlineTokenizers,
-            inline_tokenizer_map: &self.inlineTokenizerMap,
-            inline_tokenizer_uid_map: &self.inlineTokenizerUidMap,
-            block_tokenizers: &self.blockTokenizers,
-            block_tokenizer_map: &self.blockTokenizerMap,
-            block_tokenizer_uid_map: &self.blockTokenizerUidMap,
-            block_fallback_tokenizer: self.blockFallbackTokenizer.as_deref(),
-            block_fallback_tokenizer_uid: self.blockFallbackTokenizerUid,
-            inline_fallback_tokenizer: self.inlineFallbackTokenizer.as_deref(),
-            inline_fallback_tokenizer_uid: self.inlineFallbackTokenizerUid,
-            should_reserve_position: parse_options.shouldReservePosition,
-            preset_definitions: &parse_options.presetDefinitions,
-            preset_footnote_definitions: &parse_options.presetFootnoteDefinitions,
-            format_url: parse_options.formatUrl,
+            inline_tokenizers: &self.inline_tokenizers,
+            inline_tokenizer_map: &self.inline_tokenizer_map,
+            block_tokenizers: &self.block_tokenizers,
+            block_tokenizer_map: &self.block_tokenizer_map,
+            block_fallback_tokenizer: self.block_fallback_tokenizer.as_deref(),
+            inline_fallback_tokenizer: self.inline_fallback_tokenizer.as_deref(),
+            should_reserve_position: parse_options.should_reserve_position,
+            preset_definitions: &parse_options.preset_definitions,
+            preset_footnote_definitions: &parse_options.preset_footnote_definitions,
+            format_url: parse_options.format_url,
         });
 
         processor.process(lines_iterator)
     }
 
-    fn resolveParseOptions(&self, options: ParseOptions) -> ResolvedParseOptions {
+    fn resolve_parse_options(&self, options: ParseOptions) -> ResolvedParseOptions {
         ResolvedParseOptions {
-            shouldReservePosition: options
-                .shouldReservePosition
-                .or(self.defaultParseOptions.shouldReservePosition)
+            should_reserve_position: options
+                .should_reserve_position
+                .or(self.default_parse_options.should_reserve_position)
                 .unwrap_or(false),
-            presetDefinitions: options
-                .presetDefinitions
-                .or_else(|| self.defaultParseOptions.presetDefinitions.clone())
+            preset_definitions: options
+                .preset_definitions
+                .or_else(|| self.default_parse_options.preset_definitions.clone())
                 .unwrap_or_default(),
-            presetFootnoteDefinitions: options
-                .presetFootnoteDefinitions
-                .or_else(|| self.defaultParseOptions.presetFootnoteDefinitions.clone())
+            preset_footnote_definitions: options
+                .preset_footnote_definitions
+                .or_else(|| {
+                    self.default_parse_options
+                        .preset_footnote_definitions
+                        .clone()
+                })
                 .unwrap_or_default(),
-            formatUrl: options
-                .formatUrl
-                .or_else(|| self.defaultParseOptions.formatUrl.clone())
+            format_url: options
+                .format_url
+                .or_else(|| self.default_parse_options.format_url.clone())
                 .unwrap_or_else(|| Arc::new(|url: &str| encode_link_destination(url))),
         }
     }
 
-    fn registerBlockTokenizer(
+    fn register_block_tokenizer(
         &mut self,
         tokenizer: Box<dyn BlockTokenizer>,
-        registerBeforeTokenizer: Option<&str>,
+        register_before_tokenizer: Option<&str>,
     ) -> Result<(), String> {
         let name = tokenizer.name().to_string();
-        if self.blockTokenizerMap.contains_key(&name) {
+        if self.block_tokenizer_map.contains_key(&name) {
             return Err(format!("[useTokenizer] Name({name}) has been registered."));
         }
 
-        let uid = calc_tokenizer_uid(&name);
-        ensure_uid_no_collision(&self.blockTokenizerUidMap, &name, uid, "block")?;
-        ensure_uid_no_collision_with_fallback(
-            self.blockFallbackTokenizer
-                .as_deref()
-                .map(|tokenizer| tokenizer.name()),
-            self.blockFallbackTokenizerUid,
-            &name,
-            uid,
-            "block",
-        )?;
+        if self
+            .block_fallback_tokenizer
+            .as_ref()
+            .is_some_and(|fallback| fallback.name() == name)
+        {
+            return Err(format!("[useTokenizer] Name({name}) has been registered."));
+        }
 
         let insert_index = calc_insert_index_block(
-            &self.blockTokenizers,
+            &self.block_tokenizers,
             tokenizer.priority(),
-            registerBeforeTokenizer,
+            register_before_tokenizer,
         );
-        self.blockTokenizers.insert(insert_index, tokenizer);
-        self.rebuildBlockIndex();
+        self.block_tokenizers.insert(insert_index, tokenizer);
+        self.rebuild_block_index();
         Ok(())
     }
 
-    fn registerInlineTokenizer(
+    fn register_inline_tokenizer(
         &mut self,
         tokenizer: Box<dyn InlineTokenizer>,
-        registerBeforeTokenizer: Option<&str>,
+        register_before_tokenizer: Option<&str>,
     ) -> Result<(), String> {
         let name = tokenizer.name().to_string();
-        if self.inlineTokenizerMap.contains_key(&name) {
+        if self.inline_tokenizer_map.contains_key(&name) {
             return Err(format!("[useTokenizer] Name({name}) has been registered."));
         }
 
-        let uid = calc_tokenizer_uid(&name);
-        ensure_uid_no_collision(&self.inlineTokenizerUidMap, &name, uid, "inline")?;
-        ensure_uid_no_collision_with_fallback(
-            self.inlineFallbackTokenizer
-                .as_deref()
-                .map(|tokenizer| tokenizer.name()),
-            self.inlineFallbackTokenizerUid,
-            &name,
-            uid,
-            "inline",
-        )?;
+        if self
+            .inline_fallback_tokenizer
+            .as_ref()
+            .is_some_and(|fallback| fallback.name() == name)
+        {
+            return Err(format!("[useTokenizer] Name({name}) has been registered."));
+        }
 
         let insert_index = calc_insert_index_inline(
-            &self.inlineTokenizers,
+            &self.inline_tokenizers,
             tokenizer.priority(),
-            registerBeforeTokenizer,
+            register_before_tokenizer,
         );
-        self.inlineTokenizers.insert(insert_index, tokenizer);
-        self.rebuildInlineIndex();
+        self.inline_tokenizers.insert(insert_index, tokenizer);
+        self.rebuild_inline_index();
         Ok(())
     }
 
-    fn unmountBlockTokenizer(&mut self, tokenizer_name: &str) {
-        if let Some(index) = self.blockTokenizerMap.remove(tokenizer_name) {
-            self.blockTokenizers.remove(index);
-            self.rebuildBlockIndex();
+    fn unmount_block_tokenizer(&mut self, tokenizer_name: &str) {
+        if let Some(index) = self.block_tokenizer_map.remove(tokenizer_name) {
+            self.block_tokenizers.remove(index);
+            self.rebuild_block_index();
         }
     }
 
-    fn unmountInlineTokenizer(&mut self, tokenizer_name: &str) {
-        if let Some(index) = self.inlineTokenizerMap.remove(tokenizer_name) {
-            self.inlineTokenizers.remove(index);
-            self.rebuildInlineIndex();
+    fn unmount_inline_tokenizer(&mut self, tokenizer_name: &str) {
+        if let Some(index) = self.inline_tokenizer_map.remove(tokenizer_name) {
+            self.inline_tokenizers.remove(index);
+            self.rebuild_inline_index();
         }
     }
 
-    fn rebuildBlockIndex(&mut self) {
-        self.blockTokenizerMap.clear();
-        self.blockTokenizerUidMap.clear();
-        let mut reverse_uid_map: HashMap<TokenizerId, String> = HashMap::new();
+    fn rebuild_block_index(&mut self) {
+        self.block_tokenizer_map.clear();
 
-        for (idx, tokenizer) in self.blockTokenizers.iter().enumerate() {
+        for (idx, tokenizer) in self.block_tokenizers.iter().enumerate() {
             let name = tokenizer.name().to_string();
-            let uid = calc_tokenizer_uid(&name);
-
-            if let Some(existing_name) = reverse_uid_map.insert(uid, name.clone()) {
-                panic!(
-                    "[useTokenizer] block tokenizer uid collision: name({}) conflicts with existing name({}), uid={}",
-                    name,
-                    existing_name,
-                    uid
-                );
-            }
-
-            self.blockTokenizerMap.insert(name.clone(), idx);
-            self.blockTokenizerUidMap.insert(name, uid);
+            self.block_tokenizer_map.insert(name, idx);
         }
-
-        validate_fallback_uid_collision(
-            self.blockTokenizerUidMap.iter(),
-            self.blockFallbackTokenizer
-                .as_deref()
-                .map(|tokenizer| tokenizer.name()),
-            self.blockFallbackTokenizerUid,
-            "block",
-        );
     }
 
-    fn rebuildInlineIndex(&mut self) {
-        self.inlineTokenizerMap.clear();
-        self.inlineTokenizerUidMap.clear();
-        let mut reverse_uid_map: HashMap<TokenizerId, String> = HashMap::new();
+    fn rebuild_inline_index(&mut self) {
+        self.inline_tokenizer_map.clear();
 
-        for (idx, tokenizer) in self.inlineTokenizers.iter().enumerate() {
+        for (idx, tokenizer) in self.inline_tokenizers.iter().enumerate() {
             let name = tokenizer.name().to_string();
-            let uid = calc_tokenizer_uid(&name);
-
-            if let Some(existing_name) = reverse_uid_map.insert(uid, name.clone()) {
-                panic!(
-                    "[useTokenizer] inline tokenizer uid collision: name({}) conflicts with existing name({}), uid={}",
-                    name,
-                    existing_name,
-                    uid
-                );
-            }
-
-            self.inlineTokenizerMap.insert(name.clone(), idx);
-            self.inlineTokenizerUidMap.insert(name, uid);
+            self.inline_tokenizer_map.insert(name, idx);
         }
-
-        validate_fallback_uid_collision(
-            self.inlineTokenizerUidMap.iter(),
-            self.inlineFallbackTokenizer
-                .as_deref()
-                .map(|tokenizer| tokenizer.name()),
-            self.inlineFallbackTokenizerUid,
-            "inline",
-        );
-    }
-}
-
-fn ensure_uid_no_collision(
-    uid_map: &HashMap<String, TokenizerId>,
-    name: &str,
-    uid: TokenizerId,
-    kind: &str,
-) -> Result<(), String> {
-    if let Some((existing_name, _)) = uid_map.iter().find(|(existing_name, existing_uid)| {
-        **existing_uid == uid && existing_name.as_str() != name
-    }) {
-        return Err(format!(
-            "[useTokenizer] {kind} tokenizer uid collision: name({name}) conflicts with existing name({existing_name}), uid={uid}"
-        ));
-    }
-
-    Ok(())
-}
-
-fn ensure_uid_no_collision_with_fallback(
-    fallback_name: Option<&str>,
-    fallback_uid: Option<TokenizerId>,
-    name: &str,
-    uid: TokenizerId,
-    kind: &str,
-) -> Result<(), String> {
-    if fallback_uid == Some(uid) && fallback_name.is_some_and(|existing_name| existing_name != name)
-    {
-        return Err(format!(
-            "[useTokenizer] {kind} tokenizer uid collision: name({name}) conflicts with fallback name({}), uid={uid}",
-            fallback_name.unwrap_or("<unknown>")
-        ));
-    }
-
-    Ok(())
-}
-
-fn validate_fallback_uid_collision<'a>(
-    mut uid_map_iter: impl Iterator<Item = (&'a String, &'a TokenizerId)>,
-    fallback_name: Option<&str>,
-    fallback_uid: Option<TokenizerId>,
-    kind: &str,
-) {
-    let Some(fallback_uid) = fallback_uid else {
-        return;
-    };
-    let Some(fallback_name) = fallback_name else {
-        return;
-    };
-
-    if let Some((existing_name, _)) =
-        uid_map_iter.find(|(name, uid)| **uid == fallback_uid && name.as_str() != fallback_name)
-    {
-        panic!(
-            "[useTokenizer] {kind} tokenizer uid collision: fallback name({fallback_name}) conflicts with existing name({existing_name}), uid={fallback_uid}"
-        );
     }
 }
 
@@ -461,32 +344,32 @@ fn calc_insert_index_inline(
 }
 
 impl Parser for DefaultParser {
-    fn useTokenizer(
+    fn use_tokenizer(
         &mut self,
         tokenizer: AnyTokenizer,
-        registerBeforeTokenizer: Option<&str>,
+        register_before_tokenizer: Option<&str>,
     ) -> &mut Self {
-        DefaultParser::useTokenizer(self, tokenizer, registerBeforeTokenizer)
+        DefaultParser::use_tokenizer(self, tokenizer, register_before_tokenizer)
     }
 
-    fn replaceTokenizer(
+    fn replace_tokenizer(
         &mut self,
         tokenizer: AnyTokenizer,
-        registerBeforeTokenizer: Option<&str>,
+        register_before_tokenizer: Option<&str>,
     ) -> &mut Self {
-        DefaultParser::replaceTokenizer(self, tokenizer, registerBeforeTokenizer)
+        DefaultParser::replace_tokenizer(self, tokenizer, register_before_tokenizer)
     }
 
-    fn unmountTokenizer(&mut self, tokenizerName: &str) -> &mut Self {
-        DefaultParser::unmountTokenizer(self, tokenizerName)
+    fn unmount_tokenizer(&mut self, tokenizer_name: &str) -> &mut Self {
+        DefaultParser::unmount_tokenizer(self, tokenizer_name)
     }
 
-    fn useFallbackTokenizer(&mut self, tokenizer: AnyFallbackTokenizer) -> &mut Self {
-        DefaultParser::useFallbackTokenizer(self, tokenizer)
+    fn use_fallback_tokenizer(&mut self, tokenizer: AnyFallbackTokenizer) -> &mut Self {
+        DefaultParser::use_fallback_tokenizer(self, tokenizer)
     }
 
-    fn setDefaultParseOptions(&mut self, options: Option<ParseOptions>) {
-        DefaultParser::setDefaultParseOptions(self, options)
+    fn set_default_parse_options(&mut self, options: Option<ParseOptions>) {
+        DefaultParser::set_default_parse_options(self, options)
     }
 
     fn parse<'a, C>(&self, contents: C, options: Option<ParseOptions>) -> Root
@@ -499,8 +382,6 @@ impl Parser for DefaultParser {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use yozora_ast::Node;
     use yozora_core_tokenizer::{
         AnyFallbackTokenizer, AnyTokenizer, BlockToken, BlockTokenizer, FindDelimiterGenerator,
@@ -510,10 +391,7 @@ mod tests {
         ParseInlinePhaseApi, ProcessDelimiterPairResult, TokenDelimiter, Tokenizer, TokenizerType,
     };
 
-    use super::{
-        calc_tokenizer_uid, ensure_uid_no_collision, ensure_uid_no_collision_with_fallback,
-        DefaultParser,
-    };
+    use super::DefaultParser;
 
     struct EmptyFindDelimiter;
 
@@ -550,11 +428,11 @@ mod tests {
     struct NoopMatchInlineHook;
 
     impl<'hook> MatchInlineHook<'hook> for NoopMatchInlineHook {
-        fn findDelimiter(&self) -> Box<dyn FindDelimiterGenerator + 'hook> {
+        fn find_delimiter(&self) -> Box<dyn FindDelimiterGenerator + 'hook> {
             Box::new(EmptyFindDelimiter)
         }
 
-        fn isDelimiterPair(
+        fn is_delimiter_pair(
             &self,
             _opener_delimiter: &TokenDelimiter,
             _closer_delimiter: &TokenDelimiter,
@@ -566,7 +444,7 @@ mod tests {
             }
         }
 
-        fn processDelimiterPair(
+        fn process_delimiter_pair(
             &self,
             _opener_delimiter: &TokenDelimiter,
             _closer_delimiter: &TokenDelimiter,
@@ -574,12 +452,12 @@ mod tests {
         ) -> ProcessDelimiterPairResult {
             ProcessDelimiterPairResult {
                 tokens: Vec::new(),
-                remainOpenerDelimiter: None,
-                remainCloserDelimiter: None,
+                remain_opener_delimiter: None,
+                remain_closer_delimiter: None,
             }
         }
 
-        fn processSingleDelimiter(&self, _delimiter: &TokenDelimiter) -> Vec<InlineToken> {
+        fn process_single_delimiter(&self, _delimiter: &TokenDelimiter) -> Vec<InlineToken> {
             Vec::new()
         }
     }
@@ -674,125 +552,96 @@ mod tests {
     }
 
     impl InlineFallbackTokenizer for DummyInlineTokenizer {
-        fn findAndHandleDelimiter(
+        fn find_and_handle_delimiter(
             &self,
             start_index: usize,
             end_index: usize,
             _api: &dyn MatchInlineFallbackPhaseApi,
         ) -> InlineToken {
-            InlineToken {
-                tokenizer: self.name.clone().into(),
-                tokenizer_id: calc_tokenizer_uid(&self.name),
-                node_type: "text",
-                start_index,
-                end_index,
-                data: std::sync::Arc::new(()),
-            }
+            InlineToken::new(self.name.clone(), "text", (start_index, end_index))
         }
     }
 
     #[test]
-    fn tokenizer_uid_should_be_stable_across_registration_order() {
-        let mut parser_a = DefaultParser::default();
-        parser_a.useTokenizer(
-            AnyTokenizer::Block(Box::new(DummyBlockTokenizer::new("@x/block-a", 10))),
-            None,
-        );
-        parser_a.useTokenizer(
-            AnyTokenizer::Block(Box::new(DummyBlockTokenizer::new("@x/block-b", 10))),
-            None,
-        );
-        parser_a.useTokenizer(
-            AnyTokenizer::Inline(Box::new(DummyInlineTokenizer::new("@x/inline-a", 10))),
-            None,
-        );
-        parser_a.useTokenizer(
-            AnyTokenizer::Inline(Box::new(DummyInlineTokenizer::new("@x/inline-b", 10))),
-            None,
-        );
-
-        let mut parser_b = DefaultParser::default();
-        parser_b.useTokenizer(
-            AnyTokenizer::Block(Box::new(DummyBlockTokenizer::new("@x/block-b", 10))),
-            None,
-        );
-        parser_b.useTokenizer(
-            AnyTokenizer::Block(Box::new(DummyBlockTokenizer::new("@x/block-a", 10))),
-            None,
-        );
-        parser_b.useTokenizer(
-            AnyTokenizer::Inline(Box::new(DummyInlineTokenizer::new("@x/inline-b", 10))),
-            None,
-        );
-        parser_b.useTokenizer(
-            AnyTokenizer::Inline(Box::new(DummyInlineTokenizer::new("@x/inline-a", 10))),
-            None,
-        );
-
-        assert_eq!(
-            parser_a.blockTokenizerUidMap.get("@x/block-a"),
-            parser_b.blockTokenizerUidMap.get("@x/block-a"),
-        );
-        assert_eq!(
-            parser_a.blockTokenizerUidMap.get("@x/block-b"),
-            parser_b.blockTokenizerUidMap.get("@x/block-b"),
-        );
-        assert_eq!(
-            parser_a.inlineTokenizerUidMap.get("@x/inline-a"),
-            parser_b.inlineTokenizerUidMap.get("@x/inline-a"),
-        );
-        assert_eq!(
-            parser_a.inlineTokenizerUidMap.get("@x/inline-b"),
-            parser_b.inlineTokenizerUidMap.get("@x/inline-b"),
-        );
-
-        assert_eq!(
-            parser_a.blockTokenizerUidMap.get("@x/block-a").copied(),
-            Some(calc_tokenizer_uid("@x/block-a")),
-        );
-    }
-
-    #[test]
-    fn fallback_tokenizer_should_get_stable_uid() {
+    fn fallback_tokenizers_can_share_a_name_across_types() {
         let mut parser = DefaultParser::default();
 
-        parser.useFallbackTokenizer(AnyFallbackTokenizer::Block(Box::new(
-            DummyBlockTokenizer::new("@x/fallback-block", -1),
+        parser.use_fallback_tokenizer(AnyFallbackTokenizer::Block(Box::new(
+            DummyBlockTokenizer::new("@x/fallback", -1),
         )));
-        parser.useFallbackTokenizer(AnyFallbackTokenizer::Inline(Box::new(
-            DummyInlineTokenizer::new("@x/fallback-inline", -1),
+        parser.use_fallback_tokenizer(AnyFallbackTokenizer::Inline(Box::new(
+            DummyInlineTokenizer::new("@x/fallback", -1),
         )));
 
         assert_eq!(
-            parser.blockFallbackTokenizerUid,
-            Some(calc_tokenizer_uid("@x/fallback-block")),
+            parser
+                .block_fallback_tokenizer
+                .as_ref()
+                .map(|tokenizer| tokenizer.name()),
+            Some("@x/fallback")
         );
         assert_eq!(
-            parser.inlineFallbackTokenizerUid,
-            Some(calc_tokenizer_uid("@x/fallback-inline")),
+            parser
+                .inline_fallback_tokenizer
+                .as_ref()
+                .map(|tokenizer| tokenizer.name()),
+            Some("@x/fallback")
         );
     }
 
     #[test]
-    fn uid_collision_helpers_should_fail_fast() {
-        let mut uid_map = HashMap::new();
-        uid_map.insert("@x/a".to_string(), 42);
-
-        assert!(ensure_uid_no_collision(&uid_map, "@x/b", 42, "block").is_err());
-        assert!(ensure_uid_no_collision_with_fallback(
-            Some("@x/fallback"),
-            Some(7),
-            "@x/b",
-            7,
-            "inline"
-        )
-        .is_err());
+    #[should_panic(expected = "[useFallbackTokenizer] Name(@x/block) has been registered.")]
+    fn fallback_name_collision_should_fail() {
+        let mut parser = DefaultParser::default();
+        parser.use_tokenizer(
+            AnyTokenizer::Block(Box::new(DummyBlockTokenizer::new("@x/block", 10))),
+            None,
+        );
+        parser.use_fallback_tokenizer(AnyFallbackTokenizer::Block(Box::new(
+            DummyBlockTokenizer::new("@x/block", -1),
+        )));
     }
 
     #[test]
-    fn uid_hash_should_be_deterministic_for_unicode_name() {
-        let left = calc_tokenizer_uid("@x/解析器-🧪-α");
-        let right = calc_tokenizer_uid("@x/解析器-🧪-α");
-        assert_eq!(left, right);
+    fn same_priority_replacement_preserves_order() {
+        let mut parser = DefaultParser::default();
+        parser
+            .use_tokenizer(
+                AnyTokenizer::Inline(Box::new(DummyInlineTokenizer::new("first", 10))),
+                None,
+            )
+            .use_tokenizer(
+                AnyTokenizer::Inline(Box::new(DummyInlineTokenizer::new("second", 10))),
+                None,
+            )
+            .replace_tokenizer(
+                AnyTokenizer::Inline(Box::new(DummyInlineTokenizer::new("first", 10))),
+                None,
+            );
+
+        let names = parser
+            .inline_tokenizers
+            .iter()
+            .map(|tokenizer| tokenizer.name())
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["first", "second"]);
+    }
+
+    #[test]
+    fn replacing_fallback_keeps_other_type() {
+        let mut parser = DefaultParser::default();
+        parser
+            .use_fallback_tokenizer(AnyFallbackTokenizer::Block(Box::new(
+                DummyBlockTokenizer::new("shared", -1),
+            )))
+            .use_fallback_tokenizer(AnyFallbackTokenizer::Inline(Box::new(
+                DummyInlineTokenizer::new("shared", -1),
+            )))
+            .use_fallback_tokenizer(AnyFallbackTokenizer::Block(Box::new(
+                DummyBlockTokenizer::new("shared", -1),
+            )));
+
+        assert!(parser.block_fallback_tokenizer.is_some());
+        assert!(parser.inline_fallback_tokenizer.is_some());
     }
 }

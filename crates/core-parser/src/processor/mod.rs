@@ -9,18 +9,16 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::rc::Rc;
 
-use yozora_ast::{Node, Point, Position, Root, ROOT_TYPE};
+use yozora_ast::{Node, Position, Root, ROOT_TYPE};
 use yozora_character::NodePoint;
 use yozora_core_tokenizer::NodeInterval;
 use yozora_core_tokenizer::{
-    BlockToken, InlineToken, MatchBlockPhaseApi, MatchInlineFallbackPhaseApi, MatchInlinePhaseApi,
-    ParseBlockPhaseApi, ParseInlinePhaseApi, PhrasingContentLine, TokenizerId,
-    UNKNOWN_TOKENIZER_ID,
+    calc_end_point, calc_start_point, BlockToken, InlineToken, MatchBlockPhaseApi,
+    MatchInlineFallbackPhaseApi, MatchInlinePhaseApi, ParseBlockPhaseApi, ParseInlinePhaseApi,
+    PhrasingContentLine,
 };
 
-use crate::processor::block::{
-    create_block_content_processor_with_uid_mapping, MatchBlockProcessorHook,
-};
+use crate::processor::block::{create_block_content_processor, MatchBlockProcessorHook};
 use crate::processor::inline::{match_inline_tokens, MatchInlineProcessorHook};
 
 pub fn create_processor<'a>(options: ProcessorOptions<'a>) -> impl Processor + 'a {
@@ -47,9 +45,7 @@ struct IdentifierState {
 struct MatchBlockApiShared<'a> {
     block_tokenizers: &'a [Box<dyn yozora_core_tokenizer::BlockTokenizer>],
     block_tokenizer_map: &'a HashMap<String, usize>,
-    block_tokenizer_uid_map: &'a HashMap<String, TokenizerId>,
     block_fallback_tokenizer: Option<&'a dyn yozora_core_tokenizer::BlockTokenizer>,
-    block_fallback_tokenizer_uid: Option<TokenizerId>,
     identifiers: Rc<RefCell<IdentifierState>>,
 }
 
@@ -59,17 +55,17 @@ struct MatchBlockApiAdapter<'a> {
 }
 
 impl MatchBlockPhaseApi for MatchBlockApiAdapter<'_> {
-    fn extractPhrasingLines(&self, token: &BlockToken) -> Option<Vec<PhrasingContentLine>> {
+    fn extract_phrasing_lines(&self, token: &BlockToken) -> Option<Vec<PhrasingContentLine>> {
         find_block_tokenizer_by_name(
             self.shared.block_tokenizers,
             self.shared.block_tokenizer_map,
             self.shared.block_fallback_tokenizer,
             token.tokenizer.as_ref(),
         )
-        .and_then(|tokenizer| tokenizer.extractPhrasingContentLines(token))
+        .and_then(|tokenizer| tokenizer.extract_phrasing_content_lines(token))
     }
 
-    fn rollbackPhrasingLines(
+    fn rollback_phrasing_lines(
         &self,
         lines: &[PhrasingContentLine],
         original_token: Option<&BlockToken>,
@@ -81,38 +77,26 @@ impl MatchBlockPhaseApi for MatchBlockApiAdapter<'_> {
                 self.shared.block_fallback_tokenizer,
                 original_token.tokenizer.as_ref(),
             ) {
-                if let Some(mut token) = tokenizer.buildBlockToken(lines, original_token) {
+                if let Some(mut token) = tokenizer.build_block_token(lines, original_token) {
                     token.tokenizer = std::sync::Arc::<str>::from(tokenizer.name());
-                    token.tokenizer_id = self
-                        .shared
-                        .block_tokenizer_uid_map
-                        .get(tokenizer.name())
-                        .copied()
-                        .or_else(|| {
-                            self.shared
-                                .block_fallback_tokenizer
-                                .filter(|fallback| fallback.name() == tokenizer.name())
-                                .and(self.shared.block_fallback_tokenizer_uid)
-                        })
-                        .unwrap_or(UNKNOWN_TOKENIZER_ID);
                     return vec![token];
                 }
             }
         }
 
         let group = vec![lines.to_vec()];
-        let root = match_block_tokens_with_shared(self.shared.clone(), group);
-        root.children
+        let mut root = match_block_tokens_with_shared(self.shared.clone(), group);
+        std::mem::take(&mut root.children).into_vec()
     }
 
-    fn registerDefinitionIdentifier(&self, identifier: &str) {
+    fn register_definition_identifier(&self, identifier: &str) {
         let mut state = self.shared.identifiers.borrow_mut();
         if state.is_register_available {
             state.definition_identifiers.insert(identifier.to_string());
         }
     }
 
-    fn registerFootnoteDefinitionIdentifier(&self, identifier: &str) {
+    fn register_footnote_definition_identifier(&self, identifier: &str) {
         let mut state = self.shared.identifiers.borrow_mut();
         if state.is_register_available {
             state
@@ -133,23 +117,23 @@ struct ParseBlockApiAdapter<'a, 'b> {
 }
 
 impl ParseBlockPhaseApi for ParseBlockApiAdapter<'_, '_> {
-    fn shouldReservePosition(&self) -> bool {
+    fn should_reserve_position(&self) -> bool {
         self.context.options.should_reserve_position
     }
 
-    fn formatUrl(&self, url: &str) -> String {
+    fn format_url(&self, url: &str) -> String {
         (self.context.options.format_url)(url)
     }
 
-    fn processInlines(&self, node_points: &[NodePoint]) -> Vec<Node> {
-        processInlines_with_context(self.context, node_points)
+    fn process_inlines(&self, node_points: &[NodePoint]) -> Vec<Node> {
+        process_inlines_with_context(self.context, node_points)
     }
 
-    fn parseBlockTokens(&self, tokens: Option<&[BlockToken]>) -> Vec<Node> {
+    fn parse_block_tokens(&self, tokens: Option<&[BlockToken]>) -> Vec<Node> {
         let Some(tokens) = tokens else {
             return Vec::new();
         };
-        parseBlockTokens_with_context(self.context, tokens)
+        parse_block_tokens_with_context(self.context, tokens)
     }
 }
 
@@ -159,37 +143,37 @@ struct ParseInlineApiAdapter<'a, 'b> {
 }
 
 impl ParseInlinePhaseApi for ParseInlineApiAdapter<'_, '_> {
-    fn shouldReservePosition(&self) -> bool {
+    fn should_reserve_position(&self) -> bool {
         self.context.options.should_reserve_position
     }
 
-    fn calcPosition(&self, interval: NodeInterval) -> Position {
-        calcPosition_from_node_points(self.node_points, interval)
+    fn calc_position(&self, interval: NodeInterval) -> Position {
+        calc_position_from_node_points(self.node_points, interval)
     }
 
-    fn formatUrl(&self, url: &str) -> String {
+    fn format_url(&self, url: &str) -> String {
         (self.context.options.format_url)(url)
     }
 
-    fn getNodePoints(&self) -> &[NodePoint] {
+    fn get_node_points(&self) -> &[NodePoint] {
         self.node_points
     }
 
-    fn hasDefinition(&self, identifier: &str) -> bool {
+    fn has_definition(&self, identifier: &str) -> bool {
         self.context.definition_identifiers.contains(identifier)
     }
 
-    fn hasFootnoteDefinition(&self, identifier: &str) -> bool {
+    fn has_footnote_definition(&self, identifier: &str) -> bool {
         self.context
             .footnote_definition_identifiers
             .contains(identifier)
     }
 
-    fn parseInlineTokens(&self, tokens: Option<&[InlineToken]>) -> Vec<Node> {
+    fn parse_inline_tokens(&self, tokens: Option<&[InlineToken]>) -> Vec<Node> {
         let Some(tokens) = tokens else {
             return Vec::new();
         };
-        parseInlineTokens_with_context(self.context, self.node_points, tokens)
+        parse_inline_tokens_with_context(self.context, self.node_points, tokens)
     }
 }
 
@@ -201,98 +185,118 @@ struct MatchInlineApiAdapter<'a, 'b> {
     tokenizer_start_index: usize,
 }
 
+const DEFERRED_INLINE_TOKENIZER: &str = "@yozora/internal-deferred-inline";
+
+#[derive(Clone)]
+struct DeferredInlineRange {
+    start_index: usize,
+    end_index: usize,
+    tokenizer_start_index: usize,
+}
+
 impl MatchInlinePhaseApi for MatchInlineApiAdapter<'_, '_> {
-    fn hasDefinition(&self, identifier: &str) -> bool {
+    fn has_definition(&self, identifier: &str) -> bool {
         self.context.definition_identifiers.contains(identifier)
     }
 
-    fn hasFootnoteDefinition(&self, identifier: &str) -> bool {
+    fn has_footnote_definition(&self, identifier: &str) -> bool {
         self.context
             .footnote_definition_identifiers
             .contains(identifier)
     }
 
-    fn getNodePoints(&self) -> &[NodePoint] {
+    fn get_node_points(&self) -> &[NodePoint] {
         self.node_points
     }
 
-    fn getBlockStartIndex(&self) -> usize {
+    fn get_block_start_index(&self) -> usize {
         self.block_start_index
     }
 
-    fn getBlockEndIndex(&self) -> usize {
+    fn get_block_end_index(&self) -> usize {
         self.block_end_index
     }
 
-    fn resolveFallbackTokens(
+    fn resolve_fallback_tokens(
         &self,
         tokens: &[InlineToken],
         token_start_index: usize,
         token_end_index: usize,
     ) -> Vec<InlineToken> {
-        resolveFallbackTokens_with_api(
+        resolve_fallback_tokens_with_api(
             self.context.options.inline_fallback_tokenizer,
-            self.context.options.inline_fallback_tokenizer_uid,
             self,
             tokens,
             token_start_index,
             token_end_index,
         )
     }
-    fn resolveInternalTokens(
+    fn resolve_internal_tokens(
         &self,
         higher_priority_tokens: &[InlineToken],
         start_index: usize,
         end_index: usize,
     ) -> Vec<InlineToken> {
-        let tokens = match_inline_tokens_from_index(
-            self.context,
-            self.node_points,
-            higher_priority_tokens,
-            start_index,
-            end_index,
-            self.tokenizer_start_index,
-        );
-
-        resolveFallbackTokens_with_api(
-            self.context.options.inline_fallback_tokenizer,
-            self.context.options.inline_fallback_tokenizer_uid,
-            self,
-            &tokens,
-            start_index,
-            end_index,
+        let mut covered_until = start_index;
+        for token in higher_priority_tokens {
+            if token.end_index <= start_index || token.start_index >= end_index {
+                continue;
+            }
+            if token.start_index > covered_until {
+                break;
+            }
+            covered_until = covered_until.max(token.end_index);
+            if covered_until >= end_index {
+                return higher_priority_tokens.to_vec();
+            }
+        }
+        vec![InlineToken::new(
+            DEFERRED_INLINE_TOKENIZER,
+            "deferredInline",
+            (start_index, end_index),
         )
+        .with_children(higher_priority_tokens.to_vec())
+        .with_data(DeferredInlineRange {
+            start_index,
+            end_index,
+            tokenizer_start_index: self.tokenizer_start_index,
+        })]
     }
 }
 
 impl MatchInlineFallbackPhaseApi for MatchInlineApiAdapter<'_, '_> {
-    fn hasDefinition(&self, identifier: &str) -> bool {
-        MatchInlinePhaseApi::hasDefinition(self, identifier)
+    fn has_definition(&self, identifier: &str) -> bool {
+        MatchInlinePhaseApi::has_definition(self, identifier)
     }
 
-    fn hasFootnoteDefinition(&self, identifier: &str) -> bool {
-        MatchInlinePhaseApi::hasFootnoteDefinition(self, identifier)
+    fn has_footnote_definition(&self, identifier: &str) -> bool {
+        MatchInlinePhaseApi::has_footnote_definition(self, identifier)
     }
 
-    fn getNodePoints(&self) -> &[NodePoint] {
-        MatchInlinePhaseApi::getNodePoints(self)
+    fn get_node_points(&self) -> &[NodePoint] {
+        MatchInlinePhaseApi::get_node_points(self)
     }
 
-    fn getBlockStartIndex(&self) -> usize {
-        MatchInlinePhaseApi::getBlockStartIndex(self)
+    fn get_block_start_index(&self) -> usize {
+        MatchInlinePhaseApi::get_block_start_index(self)
     }
 
-    fn getBlockEndIndex(&self) -> usize {
-        MatchInlinePhaseApi::getBlockEndIndex(self)
+    fn get_block_end_index(&self) -> usize {
+        MatchInlinePhaseApi::get_block_end_index(self)
     }
 
-    fn resolveFallbackTokens(
+    fn resolve_fallback_tokens(
         &self,
         tokens: &[InlineToken],
         token_start_index: usize,
         token_end_index: usize,
     ) -> Vec<InlineToken> {
-        MatchInlinePhaseApi::resolveFallbackTokens(self, tokens, token_start_index, token_end_index)
+        MatchInlinePhaseApi::resolve_fallback_tokens(
+            self,
+            tokens,
+            token_start_index,
+            token_end_index,
+        )
     }
 }
 
@@ -308,15 +312,13 @@ impl ParserProcessor<'_> {
         let shared = Rc::new(MatchBlockApiShared {
             block_tokenizers: self.options.block_tokenizers,
             block_tokenizer_map: self.options.block_tokenizer_map,
-            block_tokenizer_uid_map: self.options.block_tokenizer_uid_map,
             block_fallback_tokenizer: self.options.block_fallback_tokenizer,
-            block_fallback_tokenizer_uid: self.options.block_fallback_tokenizer_uid,
             identifiers,
         });
         match_block_tokens_with_shared(shared, lines)
     }
 
-    fn parseBlockTokens(&self, tokens: Option<&[BlockToken]>) -> Vec<Node> {
+    fn parse_block_tokens(&self, tokens: Option<&[BlockToken]>) -> Vec<Node> {
         let context = ParseContext {
             options: &self.options,
             definition_identifiers: &self.definition_identifiers,
@@ -325,7 +327,7 @@ impl ParserProcessor<'_> {
         let Some(tokens) = tokens else {
             return Vec::new();
         };
-        parseBlockTokens_with_context(&context, tokens)
+        parse_block_tokens_with_context(&context, tokens)
     }
 
     fn match_inline_tokens(
@@ -349,7 +351,7 @@ impl ParserProcessor<'_> {
         )
     }
 
-    fn parseInlineTokens(
+    fn parse_inline_tokens(
         &self,
         node_points: &[NodePoint],
         tokens: Option<&[InlineToken]>,
@@ -362,7 +364,7 @@ impl ParserProcessor<'_> {
         let Some(tokens) = tokens else {
             return Vec::new();
         };
-        parseInlineTokens_with_context(&context, node_points, tokens)
+        parse_inline_tokens_with_context(&context, node_points, tokens)
     }
 }
 
@@ -403,7 +405,7 @@ impl Processor for ParserProcessor<'_> {
             None
         };
 
-        let children = self.parseBlockTokens(Some(&block_token_tree.children));
+        let children = self.parse_block_tokens(Some(&block_token_tree.children));
 
         Root {
             node_type: ROOT_TYPE.to_string(),
@@ -443,25 +445,13 @@ fn match_block_tokens_with_shared(
     };
 
     let mut hooks = Vec::with_capacity(shared.block_tokenizers.len());
-    let mut hook_uid_mapping = Vec::with_capacity(shared.block_tokenizers.len());
     for tokenizer in shared.block_tokenizers {
         let hook = tokenizer.r#match(&api);
-        let tokenizer_uid = shared
-            .block_tokenizer_uid_map
-            .get(tokenizer.name())
-            .copied()
-            .unwrap_or_else(|| {
-                panic!(
-                    "[matchBlock] tokenizer uid missing for tokenizer='{}'",
-                    tokenizer.name()
-                )
-            });
         hooks.push(MatchBlockProcessorHook::new(
             tokenizer.name(),
             tokenizer.priority(),
             hook,
         ));
-        hook_uid_mapping.push(tokenizer_uid);
     }
 
     let fallback_hook = shared.block_fallback_tokenizer.map(|tokenizer| {
@@ -469,14 +459,7 @@ fn match_block_tokens_with_shared(
         MatchBlockProcessorHook::new(tokenizer.name(), tokenizer.priority(), hook)
     });
 
-    let fallback_uid_mapping = shared.block_fallback_tokenizer_uid;
-
-    let mut processor = create_block_content_processor_with_uid_mapping(
-        hooks,
-        fallback_hook,
-        hook_uid_mapping,
-        fallback_uid_mapping,
-    );
+    let mut processor = create_block_content_processor(hooks, fallback_hook);
     for group in lines {
         for line in &group {
             processor.consume(line);
@@ -485,7 +468,7 @@ fn match_block_tokens_with_shared(
     processor.done()
 }
 
-fn parseBlockTokens_with_context(
+fn parse_block_tokens_with_context(
     context: &ParseContext<'_, '_>,
     tokens: &[BlockToken],
 ) -> Vec<Node> {
@@ -496,32 +479,7 @@ fn parseBlockTokens_with_context(
     let api = ParseBlockApiAdapter { context };
     let mut parse_block_hooks: Vec<Box<dyn yozora_core_tokenizer::ParseBlockHook + '_>> =
         Vec::with_capacity(context.options.block_tokenizers.len());
-    let mut parse_block_hook_index_by_uid: HashMap<TokenizerId, usize> =
-        HashMap::with_capacity(context.options.block_tokenizers.len());
     for tokenizer in context.options.block_tokenizers {
-        let tokenizer_uid = context
-            .options
-            .block_tokenizer_uid_map
-            .get(tokenizer.name())
-            .copied()
-            .unwrap_or_else(|| {
-                panic!(
-                    "[parseBlock] tokenizer uid missing for tokenizer='{}'",
-                    tokenizer.name()
-                )
-            });
-
-        if let Some(existing_hook_index) =
-            parse_block_hook_index_by_uid.insert(tokenizer_uid, parse_block_hooks.len())
-        {
-            panic!(
-                "[parseBlock] duplicate tokenizer uid={} between hook indexes {} and {}",
-                tokenizer_uid,
-                existing_hook_index,
-                parse_block_hooks.len(),
-            );
-        }
-
         parse_block_hooks.push(tokenizer.parse(&api));
     }
 
@@ -529,57 +487,119 @@ fn parseBlockTokens_with_context(
         .options
         .block_fallback_tokenizer
         .map(|tokenizer| (tokenizer.name(), tokenizer.parse(&api)));
-    let fallback_block_tokenizer_id = context.options.block_fallback_tokenizer_uid;
 
-    let mut results = Vec::new();
-    let mut i0 = 0usize;
-    while i0 < tokens.len() {
-        let tokenizer_id = tokens[i0].tokenizer_id;
-        let tokenizer_name = &tokens[i0].tokenizer;
-        if tokenizer_id == UNKNOWN_TOKENIZER_ID {
-            panic!(
-                "[parseBlock] token has UNKNOWN tokenizer_id, tokenizer='{}'",
-                tokenizer_name
-            );
-        }
-
-        let mut i1 = i0 + 1;
-        while i1 < tokens.len() && tokens[i1].tokenizer_id == tokenizer_id {
-            i1 += 1;
-        }
-
-        let hook: &dyn yozora_core_tokenizer::ParseBlockHook = if let Some(hook_index) =
-            parse_block_hook_index_by_uid.get(&tokenizer_id)
-        {
-            parse_block_hooks[*hook_index].as_ref()
-        } else if fallback_block_tokenizer_id.is_some_and(|id| tokenizer_id == id) {
-            fallback_block_hook
-                .as_ref()
-                .map(|(_, hook)| hook.as_ref())
-                .unwrap_or_else(|| {
-                    panic!(
-                        "[parseBlock] fallback hook missing for tokenizer_id={}, tokenizer='{}'",
-                        tokenizer_id, tokenizer_name,
-                    )
-                })
-        } else {
-            panic!(
-                "[parseBlock] invalid tokenizer_id={}, tokenizer='{}', normal_hook_len={} fallback_uid={:?}",
-                tokenizer_id,
-                tokenizer_name,
-                parse_block_hooks.len(),
-                fallback_block_tokenizer_id,
-            )
-        };
-        results.extend(hook.parse(&tokens[i0..i1]));
-
-        i0 = i1;
-    }
-
-    results
+    schedule_block_tokens(
+        context,
+        tokens,
+        &parse_block_hooks,
+        fallback_block_hook.as_ref(),
+    )
 }
 
-fn processInlines_with_context(
+struct ParseBlockFrame {
+    tokens: Vec<BlockToken>,
+    next_token_index: usize,
+    parsed_nodes: Vec<Node>,
+    task: Option<Box<dyn yozora_core_tokenizer::ParseBlockTask>>,
+    resume_nodes: Option<Vec<Node>>,
+}
+
+impl ParseBlockFrame {
+    fn new(tokens: Vec<BlockToken>) -> Self {
+        Self {
+            tokens,
+            next_token_index: 0,
+            parsed_nodes: Vec::new(),
+            task: None,
+            resume_nodes: None,
+        }
+    }
+}
+
+fn schedule_block_tokens(
+    context: &ParseContext<'_, '_>,
+    tokens: &[BlockToken],
+    parse_block_hooks: &[Box<dyn yozora_core_tokenizer::ParseBlockHook + '_>],
+    fallback_block_hook: Option<&(&str, Box<dyn yozora_core_tokenizer::ParseBlockHook + '_>)>,
+) -> Vec<Node> {
+    enum Action {
+        Continue,
+        Push(Vec<BlockToken>),
+        Settle(Vec<Node>),
+    }
+
+    let mut frames = vec![ParseBlockFrame::new(tokens.to_vec())];
+    loop {
+        let action = {
+            let frame = frames
+                .last_mut()
+                .expect("block parse scheduler should contain a frame");
+            if let Some(task) = frame.task.as_mut() {
+                match task.resume(frame.resume_nodes.take()) {
+                    yozora_core_tokenizer::ParseBlockTaskStep::Request(tokens) => {
+                        if tokens.is_empty() {
+                            frame.resume_nodes = Some(Vec::new());
+                            Action::Continue
+                        } else {
+                            Action::Push(tokens)
+                        }
+                    }
+                    yozora_core_tokenizer::ParseBlockTaskStep::Done(nodes) => {
+                        frame.parsed_nodes.extend(nodes);
+                        frame.task = None;
+                        Action::Continue
+                    }
+                }
+            } else if frame.next_token_index >= frame.tokens.len() {
+                Action::Settle(std::mem::take(&mut frame.parsed_nodes))
+            } else {
+                let batch_start_index = frame.next_token_index;
+                let tokenizer_name = frame.tokens[batch_start_index].tokenizer.as_ref();
+                let mut batch_end_index = batch_start_index + 1;
+                while batch_end_index < frame.tokens.len()
+                    && frame.tokens[batch_end_index].tokenizer.as_ref() == tokenizer_name
+                {
+                    batch_end_index += 1;
+                }
+                frame.next_token_index = batch_end_index;
+
+                let hook: &dyn yozora_core_tokenizer::ParseBlockHook = if let Some(hook_index) =
+                    context.options.block_tokenizer_map.get(tokenizer_name)
+                {
+                    parse_block_hooks[*hook_index].as_ref()
+                } else if fallback_block_hook.is_some_and(|(name, _)| *name == tokenizer_name) {
+                    fallback_block_hook
+                        .map(|(_, hook)| hook.as_ref())
+                        .expect("fallback hook should exist")
+                } else {
+                    panic!("[parseBlock] tokenizer '{tokenizer_name}' not found")
+                };
+                let batch = &frame.tokens[batch_start_index..batch_end_index];
+                if let Some(task) = hook.parse_task(batch) {
+                    frame.task = Some(task);
+                } else {
+                    frame.parsed_nodes.extend(hook.parse(batch));
+                }
+                Action::Continue
+            }
+        };
+
+        match action {
+            Action::Continue => {}
+            Action::Push(tokens) => frames.push(ParseBlockFrame::new(tokens)),
+            Action::Settle(nodes) => {
+                frames.pop();
+                if let Some(parent) = frames.last_mut() {
+                    parent.resume_nodes = Some(nodes);
+                } else {
+                    return nodes;
+                }
+            }
+        }
+    }
+}
+
+fn process_inlines_with_context(
     context: &ParseContext<'_, '_>,
     node_points: &[NodePoint],
 ) -> Vec<Node> {
@@ -589,7 +609,7 @@ fn processInlines_with_context(
 
     let inline_tokens =
         match_inline_tokens_with_context(context, node_points, &[], 0, node_points.len());
-    parseInlineTokens_with_context(context, node_points, &inline_tokens)
+    parse_inline_tokens_with_context(context, node_points, &inline_tokens)
 }
 
 fn match_inline_tokens_with_context(
@@ -607,7 +627,7 @@ fn match_inline_tokens_with_context(
         tokenizer_start_index: 0,
     };
 
-    let tokens = match_inline_tokens_from_index(
+    let matched_tokens = match_inline_tokens_from_index(
         context,
         node_points,
         higher_priority_tokens,
@@ -616,14 +636,100 @@ fn match_inline_tokens_with_context(
         0,
     );
 
-    resolveFallbackTokens_with_api(
+    let tokens = resolve_fallback_tokens_with_api(
         context.options.inline_fallback_tokenizer,
-        context.options.inline_fallback_tokenizer_uid,
         &api,
-        &tokens,
+        &matched_tokens,
         start_index,
         end_index,
-    )
+    );
+    drop(matched_tokens);
+    resolve_deferred_inline_tokens(context, node_points, tokens)
+}
+
+fn resolve_deferred_inline_tokens(
+    context: &ParseContext<'_, '_>,
+    node_points: &[NodePoint],
+    tokens: Vec<InlineToken>,
+) -> Vec<InlineToken> {
+    struct Frame {
+        tokens: Vec<InlineToken>,
+        index: usize,
+        output: Vec<InlineToken>,
+        parent: Option<InlineToken>,
+    }
+
+    let mut stack = vec![Frame {
+        tokens,
+        index: 0,
+        output: Vec::new(),
+        parent: None,
+    }];
+    loop {
+        let frame = stack
+            .last_mut()
+            .expect("deferred inline stack should not be empty");
+        if frame.index < frame.tokens.len() {
+            let mut token = frame.tokens[frame.index].clone();
+            frame.index += 1;
+            if token.tokenizer.as_ref() == DEFERRED_INLINE_TOKENIZER {
+                let higher_priority_tokens =
+                    std::sync::Arc::unwrap_or_clone(std::mem::take(&mut token.children));
+                let deferred = token
+                    .data_as::<DeferredInlineRange>()
+                    .expect("deferred inline token should contain range")
+                    .clone();
+                let api = MatchInlineApiAdapter {
+                    context,
+                    node_points,
+                    block_start_index: deferred.start_index,
+                    block_end_index: deferred.end_index,
+                    tokenizer_start_index: deferred.tokenizer_start_index,
+                };
+                let matched = match_inline_tokens_from_index(
+                    context,
+                    node_points,
+                    &higher_priority_tokens,
+                    deferred.start_index,
+                    deferred.end_index,
+                    deferred.tokenizer_start_index,
+                );
+                let resolved = resolve_fallback_tokens_with_api(
+                    context.options.inline_fallback_tokenizer,
+                    &api,
+                    &matched,
+                    deferred.start_index,
+                    deferred.end_index,
+                );
+                frame.tokens.splice(frame.index..frame.index, resolved);
+                continue;
+            }
+            if token.children.is_empty() {
+                frame.output.push(token);
+            } else {
+                let children = std::mem::take(&mut token.children);
+                stack.push(Frame {
+                    tokens: std::sync::Arc::unwrap_or_clone(children),
+                    index: 0,
+                    output: Vec::new(),
+                    parent: Some(token),
+                });
+            }
+            continue;
+        }
+
+        let frame = stack.pop().expect("deferred inline frame should exist");
+        if let Some(mut parent) = frame.parent {
+            parent.children = std::sync::Arc::new(frame.output);
+            stack
+                .last_mut()
+                .expect("nested inline frame should have parent")
+                .output
+                .push(parent);
+        } else {
+            return frame.output;
+        }
+    }
 }
 
 fn match_inline_tokens_from_index(
@@ -668,20 +774,8 @@ fn match_inline_tokens_from_index(
     for ((group_start, group_end), api) in groups.into_iter().zip(apis.iter()) {
         for tokenizer in &tokenizers[group_start..group_end] {
             let hook = tokenizer.r#match(api);
-            let tokenizer_uid = context
-                .options
-                .inline_tokenizer_uid_map
-                .get(tokenizer.name())
-                .copied()
-                .unwrap_or_else(|| {
-                    panic!(
-                        "[matchInline] tokenizer uid missing for tokenizer='{}'",
-                        tokenizer.name()
-                    )
-                });
             hooks.push(MatchInlineProcessorHook::new(
                 tokenizer.name(),
-                tokenizer_uid,
                 tokenizer.priority(),
                 hook,
             ));
@@ -691,9 +785,8 @@ fn match_inline_tokens_from_index(
     match_inline_tokens(&mut hooks, higher_priority_tokens, start_index, end_index)
 }
 
-fn resolveFallbackTokens_with_api(
+fn resolve_fallback_tokens_with_api(
     fallback_tokenizer: Option<&dyn yozora_core_tokenizer::InlineFallbackTokenizer>,
-    fallback_tokenizer_id: Option<TokenizerId>,
     api: &dyn MatchInlineFallbackPhaseApi,
     tokens: &[InlineToken],
     token_start_index: usize,
@@ -709,9 +802,8 @@ fn resolveFallbackTokens_with_api(
     for token in tokens {
         if i < token.start_index {
             let mut fallback_token =
-                fallback_tokenizer.findAndHandleDelimiter(i, token.start_index, api);
+                fallback_tokenizer.find_and_handle_delimiter(i, token.start_index, api);
             fallback_token.tokenizer = std::sync::Arc::<str>::from(fallback_tokenizer.name());
-            fallback_token.tokenizer_id = fallback_tokenizer_id.unwrap_or(UNKNOWN_TOKENIZER_ID);
             results.push(fallback_token);
         }
 
@@ -720,16 +812,16 @@ fn resolveFallbackTokens_with_api(
     }
 
     if i < token_end_index {
-        let mut fallback_token = fallback_tokenizer.findAndHandleDelimiter(i, token_end_index, api);
+        let mut fallback_token =
+            fallback_tokenizer.find_and_handle_delimiter(i, token_end_index, api);
         fallback_token.tokenizer = std::sync::Arc::<str>::from(fallback_tokenizer.name());
-        fallback_token.tokenizer_id = fallback_tokenizer_id.unwrap_or(UNKNOWN_TOKENIZER_ID);
         results.push(fallback_token);
     }
 
     results
 }
 
-fn parseInlineTokens_with_context(
+fn parse_inline_tokens_with_context(
     context: &ParseContext<'_, '_>,
     node_points: &[NodePoint],
     tokens: &[InlineToken],
@@ -744,32 +836,7 @@ fn parseInlineTokens_with_context(
     };
     let mut parse_inline_hooks: Vec<Box<dyn yozora_core_tokenizer::ParseInlineHook + '_>> =
         Vec::with_capacity(context.options.inline_tokenizers.len());
-    let mut parse_inline_hook_index_by_uid: HashMap<TokenizerId, usize> =
-        HashMap::with_capacity(context.options.inline_tokenizers.len());
     for tokenizer in context.options.inline_tokenizers {
-        let tokenizer_uid = context
-            .options
-            .inline_tokenizer_uid_map
-            .get(tokenizer.name())
-            .copied()
-            .unwrap_or_else(|| {
-                panic!(
-                    "[parseInline] tokenizer uid missing for tokenizer='{}'",
-                    tokenizer.name()
-                )
-            });
-
-        if let Some(existing_hook_index) =
-            parse_inline_hook_index_by_uid.insert(tokenizer_uid, parse_inline_hooks.len())
-        {
-            panic!(
-                "[parseInline] duplicate tokenizer uid={} between hook indexes {} and {}",
-                tokenizer_uid,
-                existing_hook_index,
-                parse_inline_hooks.len(),
-            );
-        }
-
         parse_inline_hooks.push(tokenizer.parse(&api));
     }
 
@@ -777,48 +844,31 @@ fn parseInlineTokens_with_context(
         .options
         .inline_fallback_tokenizer
         .map(|tokenizer| (tokenizer.name(), tokenizer.parse(&api)));
-    let fallback_inline_tokenizer_id = context.options.inline_fallback_tokenizer_uid;
 
     let mut results = Vec::new();
     let mut i0 = 0usize;
     while i0 < tokens.len() {
-        let tokenizer_id = tokens[i0].tokenizer_id;
-        let tokenizer_name = &tokens[i0].tokenizer;
-        if tokenizer_id == UNKNOWN_TOKENIZER_ID {
-            panic!(
-                "[parseInline] token has UNKNOWN tokenizer_id, tokenizer='{}'",
-                tokenizer_name
-            );
-        }
+        let tokenizer_name = tokens[i0].tokenizer.as_ref();
 
         let mut i1 = i0 + 1;
-        while i1 < tokens.len() && tokens[i1].tokenizer_id == tokenizer_id {
+        while i1 < tokens.len() && tokens[i1].tokenizer.as_ref() == tokenizer_name {
             i1 += 1;
         }
 
-        let hook: &dyn yozora_core_tokenizer::ParseInlineHook = if let Some(hook_index) =
-            parse_inline_hook_index_by_uid.get(&tokenizer_id)
-        {
-            parse_inline_hooks[*hook_index].as_ref()
-        } else if fallback_inline_tokenizer_id.is_some_and(|id| tokenizer_id == id) {
-            fallback_inline_hook
+        let hook: &dyn yozora_core_tokenizer::ParseInlineHook =
+            if let Some(hook_index) = context.options.inline_tokenizer_map.get(tokenizer_name) {
+                parse_inline_hooks[*hook_index].as_ref()
+            } else if fallback_inline_hook
                 .as_ref()
-                .map(|(_, hook)| hook.as_ref())
-                .unwrap_or_else(|| {
-                    panic!(
-                        "[parseInline] fallback hook missing for tokenizer_id={}, tokenizer='{}'",
-                        tokenizer_id, tokenizer_name,
-                    )
-                })
-        } else {
-            panic!(
-                "[parseInline] invalid tokenizer_id={}, tokenizer='{}', normal_hook_len={} fallback_uid={:?}",
-                tokenizer_id,
-                tokenizer_name,
-                parse_inline_hooks.len(),
-                fallback_inline_tokenizer_id,
-            )
-        };
+                .is_some_and(|(name, _)| *name == tokenizer_name)
+            {
+                fallback_inline_hook
+                    .as_ref()
+                    .map(|(_, hook)| hook.as_ref())
+                    .expect("fallback hook should exist")
+            } else {
+                panic!("[parseInline] tokenizer '{tokenizer_name}' not found")
+            };
         results.extend(hook.parse(&tokens[i0..i1]));
 
         i0 = i1;
@@ -827,7 +877,7 @@ fn parseInlineTokens_with_context(
     results
 }
 
-fn calcPosition_from_node_points(node_points: &[NodePoint], interval: NodeInterval) -> Position {
+fn calc_position_from_node_points(node_points: &[NodePoint], interval: NodeInterval) -> Position {
     if interval.start_index >= interval.end_index {
         panic!(
             "[parseInline.calcPosition] invalid interval: start_index({}) >= end_index({})",
@@ -835,14 +885,14 @@ fn calcPosition_from_node_points(node_points: &[NodePoint], interval: NodeInterv
         );
     }
 
-    let start = node_points.get(interval.start_index).unwrap_or_else(|| {
+    node_points.get(interval.start_index).unwrap_or_else(|| {
         panic!(
             "[parseInline.calcPosition] start_index({}) out of range (len={})",
             interval.start_index,
             node_points.len()
         )
     });
-    let end = node_points
+    node_points
         .get(interval.end_index.saturating_sub(1))
         .unwrap_or_else(|| {
             panic!(
@@ -853,16 +903,8 @@ fn calcPosition_from_node_points(node_points: &[NodePoint], interval: NodeInterv
         });
 
     Position {
-        start: Point {
-            line: start.line,
-            column: start.column,
-            offset: Some(start.offset),
-        },
-        end: Point {
-            line: end.line,
-            column: end.column + 1,
-            offset: Some(end.offset + 1),
-        },
+        start: calc_start_point(node_points, interval.start_index),
+        end: calc_end_point(node_points, interval.end_index - 1),
         indent: None,
     }
 }
@@ -873,6 +915,6 @@ fn _sanity_check_inline_entry_points(
     node_points: &[NodePoint],
 ) -> (Vec<InlineToken>, Vec<Node>) {
     let tokens = processor.match_inline_tokens(&[], 0, node_points.len(), node_points);
-    let nodes = processor.parseInlineTokens(node_points, Some(&tokens));
+    let nodes = processor.parse_inline_tokens(node_points, Some(&tokens));
     (tokens, nodes)
 }

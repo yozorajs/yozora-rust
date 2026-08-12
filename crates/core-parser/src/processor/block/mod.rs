@@ -5,11 +5,9 @@ pub use types::{MatchBlockProcessorHook, SharedMatchBlockHook};
 use yozora_ast::{Point, Position, PARAGRAPH_TYPE, ROOT_TYPE};
 use yozora_character::{is_space_character, is_whitespace_character};
 use yozora_core_tokenizer::{
-    BlockToken, EatContinuationTextResult, EatLazyContinuationTextResult, OnCloseResult,
-    PhrasingContentLine, RemainingSibling, TokenizerId, UNKNOWN_TOKENIZER_ID,
+    calc_end_point, BlockToken, EatContinuationTextResult, EatLazyContinuationTextResult,
+    OnCloseResult, PhrasingContentLine, RemainingSibling,
 };
-
-use crate::util::tokenizer_uid::calc_tokenizer_uid;
 
 #[derive(Debug, Clone)]
 struct MatchBlockState {
@@ -22,7 +20,6 @@ struct MatchBlockState {
 pub struct BlockContentProcessor<'a> {
     hooks: Vec<MatchBlockProcessorHook<'a>>,
     hook_index_mapping: Vec<usize>,
-    hook_tokenizer_uid_mapping: Vec<TokenizerId>,
     normal_hook_len: usize,
     fallback_hook_index: Option<usize>,
     root: BlockToken,
@@ -35,38 +32,7 @@ pub fn create_block_content_processor<'a>(
     fallback_hook: Option<MatchBlockProcessorHook<'a>>,
 ) -> BlockContentProcessor<'a> {
     let hook_index_mapping = (0..hooks.len()).collect::<Vec<_>>();
-    let hook_uid_mapping = hooks
-        .iter()
-        .map(|hook| calc_tokenizer_uid(hook.name.as_ref()))
-        .collect::<Vec<_>>();
-    let fallback_uid_mapping = fallback_hook
-        .as_ref()
-        .map(|hook| calc_tokenizer_uid(hook.name.as_ref()));
-    create_block_content_processor_with_mapping(
-        hooks,
-        fallback_hook,
-        hook_index_mapping,
-        None,
-        hook_uid_mapping,
-        fallback_uid_mapping,
-    )
-}
-
-pub fn create_block_content_processor_with_uid_mapping<'a>(
-    hooks: Vec<MatchBlockProcessorHook<'a>>,
-    fallback_hook: Option<MatchBlockProcessorHook<'a>>,
-    hook_uid_mapping: Vec<TokenizerId>,
-    fallback_uid_mapping: Option<TokenizerId>,
-) -> BlockContentProcessor<'a> {
-    let hook_index_mapping = (0..hooks.len()).collect::<Vec<_>>();
-    create_block_content_processor_with_mapping(
-        hooks,
-        fallback_hook,
-        hook_index_mapping,
-        None,
-        hook_uid_mapping,
-        fallback_uid_mapping,
-    )
+    create_block_content_processor_with_mapping(hooks, fallback_hook, hook_index_mapping, None)
 }
 
 fn create_block_content_processor_with_mapping<'a>(
@@ -74,20 +40,15 @@ fn create_block_content_processor_with_mapping<'a>(
     fallback_hook: Option<MatchBlockProcessorHook<'a>>,
     hook_index_mapping: Vec<usize>,
     fallback_hook_mapping: Option<usize>,
-    hook_tokenizer_uid_mapping: Vec<TokenizerId>,
-    fallback_tokenizer_uid_mapping: Option<TokenizerId>,
 ) -> BlockContentProcessor<'a> {
     let normal_hook_len = hooks.len();
 
     let mut hooks = hooks;
     let mut hook_index_mapping = hook_index_mapping;
-    let mut hook_tokenizer_uid_mapping = hook_tokenizer_uid_mapping;
     let fallback_hook_index = fallback_hook.map(|hook| {
         let index = hooks.len();
         hooks.push(hook);
         hook_index_mapping.push(fallback_hook_mapping.unwrap_or(index));
-        hook_tokenizer_uid_mapping
-            .push(fallback_tokenizer_uid_mapping.unwrap_or(UNKNOWN_TOKENIZER_ID));
         index
     });
 
@@ -119,7 +80,6 @@ fn create_block_content_processor_with_mapping<'a>(
     BlockContentProcessor {
         hooks,
         hook_index_mapping,
-        hook_tokenizer_uid_mapping,
         normal_hook_len,
         fallback_hook_index,
         root,
@@ -144,7 +104,7 @@ impl<'a> BlockContentProcessor<'a> {
             debug_assert!(*i_ref <= next_index);
 
             if should_refresh_position && next_index > 0 {
-                let end_point = calc_end_point(line, next_index - 1);
+                let end_point = calc_end_point(line.node_points.as_ref(), next_index - 1);
                 this.refresh_position(end_point);
             }
             if *i_ref == next_index {
@@ -208,15 +168,15 @@ impl<'a> BlockContentProcessor<'a> {
 
                 let parent_path = self.state_stack[self.current_stack_index - 1].path.clone();
                 let current_path = current_state.path.clone();
-                let parent_snapshot = token_ref(&self.root, &parent_path).clone();
-
+                let hook = self.hooks[current_hook_idx].hook.clone();
+                let (child_index, mut token) =
+                    detach_child_for_parent_snapshot(&mut self.root, &parent_path, &current_path);
                 let result = {
-                    let token = token_mut(&mut self.root, &current_path);
-                    self.hooks[current_hook_idx]
-                        .hook
-                        .borrow_mut()
-                        .eat_continuation_text(&eating_info, token, &parent_snapshot)
+                    let parent_token = token_ref(&self.root, &parent_path);
+                    hook.borrow_mut()
+                        .eat_continuation_text(&eating_info, &mut token, parent_token)
                 };
+                restore_detached_child(&mut self.root, &parent_path, child_index, token);
 
                 let mut finished = false;
                 let mut rolled_back = false;
@@ -323,13 +283,10 @@ impl<'a> BlockContentProcessor<'a> {
                         first_non_whitespace_index,
                         count_of_precede_spaces,
                     );
-                    let parent_path = self.state_stack[self.current_stack_index].path.clone();
-                    let parent_snapshot = token_ref(&self.root, &parent_path).clone();
 
                     for hook_idx in 0..self.normal_hook_len {
                         if self.consume_new_opener(
                             hook_idx,
-                            &parent_snapshot,
                             &eating_info,
                             &mut i,
                             &mut first_non_whitespace_index,
@@ -354,7 +311,6 @@ impl<'a> BlockContentProcessor<'a> {
             let last_state = self.state_stack[last_index].clone();
             if let Some(last_hook_idx) = last_state.hook_index {
                 let parent_path = self.state_stack[last_index - 1].path.clone();
-                let parent_snapshot = token_ref(&self.root, &parent_path).clone();
                 let eating_info = self.eating_info(
                     line,
                     i,
@@ -362,13 +318,21 @@ impl<'a> BlockContentProcessor<'a> {
                     first_non_whitespace_index,
                     count_of_precede_spaces,
                 );
+                let hook = self.hooks[last_hook_idx].hook.clone();
+                let (child_index, mut token) = detach_child_for_parent_snapshot(
+                    &mut self.root,
+                    &parent_path,
+                    &last_state.path,
+                );
                 let result = {
-                    let token = token_mut(&mut self.root, &last_state.path);
-                    self.hooks[last_hook_idx]
-                        .hook
-                        .borrow_mut()
-                        .eat_lazy_continuation_text(&eating_info, token, &parent_snapshot)
+                    let parent_token = token_ref(&self.root, &parent_path);
+                    hook.borrow_mut().eat_lazy_continuation_text(
+                        &eating_info,
+                        &mut token,
+                        parent_token,
+                    )
                 };
+                restore_detached_child(&mut self.root, &parent_path, child_index, token);
 
                 if let EatLazyContinuationTextResult::Opening { next_index } = result {
                     self.current_stack_index = last_index;
@@ -399,11 +363,8 @@ impl<'a> BlockContentProcessor<'a> {
                     first_non_whitespace_index,
                     count_of_precede_spaces,
                 );
-                let parent_path = self.state_stack[self.current_stack_index].path.clone();
-                let parent_snapshot = token_ref(&self.root, &parent_path).clone();
                 let _ = self.consume_new_opener(
                     fallback_hook_idx,
-                    &parent_snapshot,
                     &eating_info,
                     &mut i,
                     &mut first_non_whitespace_index,
@@ -423,20 +384,8 @@ impl<'a> BlockContentProcessor<'a> {
         self.root
     }
 
-    fn into_snapshot(
-        self,
-    ) -> (
-        BlockToken,
-        Vec<MatchBlockState>,
-        Vec<usize>,
-        Vec<TokenizerId>,
-    ) {
-        (
-            self.root,
-            self.state_stack,
-            self.hook_index_mapping,
-            self.hook_tokenizer_uid_mapping,
-        )
+    fn into_snapshot(self) -> (BlockToken, Vec<MatchBlockState>, Vec<usize>) {
+        (self.root, self.state_stack, self.hook_index_mapping)
     }
 
     fn eating_info(
@@ -452,14 +401,19 @@ impl<'a> BlockContentProcessor<'a> {
             start_index,
             end_index,
             first_non_whitespace_index,
+            indent_width: yozora_core_tokenizer::calc_indent_width(
+                line.node_points.as_ref(),
+                start_index,
+                first_non_whitespace_index,
+            ),
             count_of_precede_spaces,
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn consume_new_opener<F>(
         &mut self,
         hook_idx: usize,
-        parent_snapshot: &BlockToken,
         line: &PhrasingContentLine,
         i: &mut usize,
         first_non_whitespace_index: &mut usize,
@@ -469,10 +423,14 @@ impl<'a> BlockContentProcessor<'a> {
     where
         F: Fn(&mut Self, &mut usize, &mut usize, &mut usize, usize, bool),
     {
-        let result = self.hooks[hook_idx]
-            .hook
-            .borrow_mut()
-            .eat_opener(line, parent_snapshot);
+        let parent_path = &self.state_stack[self.current_stack_index].path;
+        let result = {
+            let parent_token = token_ref(&self.root, parent_path);
+            self.hooks[hook_idx]
+                .hook
+                .borrow_mut()
+                .eat_opener(line, parent_token)
+        };
         let Some(result) = result else {
             return false;
         };
@@ -490,7 +448,6 @@ impl<'a> BlockContentProcessor<'a> {
 
         let mut next_token = result.token;
         next_token.tokenizer = self.hooks[hook_idx].name.clone();
-        next_token.tokenizer_id = self.hook_tokenizer_uid_mapping[hook_idx];
         self.push(hook_idx, next_token, result.saturated);
         true
     }
@@ -517,13 +474,14 @@ impl<'a> BlockContentProcessor<'a> {
         }
 
         let parent_state = self.state_stack[self.current_stack_index - 1].clone();
-        let sibling_snapshot = token_ref(&self.root, &sibling_state.path).clone();
-        let parent_snapshot = token_ref(&self.root, &parent_state.path).clone();
-
-        let result = self.hooks[hook_idx]
-            .hook
-            .borrow_mut()
-            .eat_and_interrupt_previous_sibling(line, &sibling_snapshot, &parent_snapshot);
+        let result = {
+            let sibling_token = token_ref(&self.root, &sibling_state.path);
+            let parent_token = token_ref(&self.root, &parent_state.path);
+            self.hooks[hook_idx]
+                .hook
+                .borrow_mut()
+                .eat_and_interrupt_previous_sibling(line, sibling_token, parent_token)
+        };
         let Some(result) = result else {
             return false;
         };
@@ -550,7 +508,6 @@ impl<'a> BlockContentProcessor<'a> {
 
         let mut token = result.token;
         token.tokenizer = self.hooks[hook_idx].name.clone();
-        token.tokenizer_id = self.hook_tokenizer_uid_mapping[hook_idx];
         self.push(hook_idx, token, result.saturated);
         true
     }
@@ -566,26 +523,22 @@ impl<'a> BlockContentProcessor<'a> {
 
         let mut candidate_hooks = Vec::with_capacity(self.normal_hook_len.saturating_sub(1));
         let mut candidate_mapping = Vec::with_capacity(self.normal_hook_len.saturating_sub(1));
-        let mut candidate_uid_mapping = Vec::with_capacity(self.normal_hook_len.saturating_sub(1));
         for hook_index in 0..self.normal_hook_len {
             if hook_index == excluded_hook_index {
                 continue;
             }
             candidate_hooks.push(self.hooks[hook_index].clone());
             candidate_mapping.push(self.hook_index_mapping[hook_index]);
-            candidate_uid_mapping.push(self.hook_tokenizer_uid_mapping[hook_index]);
         }
 
-        let (fallback_hook, fallback_hook_mapping, fallback_uid_mapping) = self
-            .fallback_hook_index
-            .map_or((None, None, None), |hook_index| {
+        let (fallback_hook, fallback_hook_mapping) =
+            self.fallback_hook_index.map_or((None, None), |hook_index| {
                 if hook_index == excluded_hook_index {
-                    (None, None, None)
+                    (None, None)
                 } else {
                     (
                         Some(self.hooks[hook_index].clone()),
                         Some(self.hook_index_mapping[hook_index]),
-                        Some(self.hook_tokenizer_uid_mapping[hook_index]),
                     )
                 }
             });
@@ -595,8 +548,6 @@ impl<'a> BlockContentProcessor<'a> {
             fallback_hook,
             candidate_mapping,
             fallback_hook_mapping,
-            candidate_uid_mapping,
-            fallback_uid_mapping,
         );
         for line in lines {
             processor.consume(line);
@@ -614,7 +565,7 @@ impl<'a> BlockContentProcessor<'a> {
             return false;
         };
 
-        let (mut internal_root, internal_state_stack, hook_index_mapping, _) =
+        let (mut internal_root, internal_state_stack, hook_index_mapping) =
             processor.into_snapshot();
 
         let parent_path = self.state_stack[parent_stack_index].path.clone();
@@ -625,7 +576,7 @@ impl<'a> BlockContentProcessor<'a> {
             start_offset
         };
 
-        if let Some(position) = internal_root.position {
+        if let Some(position) = &internal_root.position {
             self.refresh_position(position.end);
         }
 
@@ -653,9 +604,22 @@ impl<'a> BlockContentProcessor<'a> {
     }
 
     fn refresh_position(&mut self, end_point: Point) {
-        for index in (0..=self.current_stack_index).rev() {
-            let path = self.state_stack[index].path.clone();
-            let token = token_mut(&mut self.root, &path);
+        let mut token = &mut self.root;
+        if let Some(position) = token.position.as_mut() {
+            position.end = end_point;
+        }
+
+        for state in self
+            .state_stack
+            .iter()
+            .take(self.current_stack_index + 1)
+            .skip(1)
+        {
+            let child_index = *state
+                .path
+                .last()
+                .expect("non-root block state should contain a child path");
+            token = &mut token.children[child_index];
             if let Some(position) = token.position.as_mut() {
                 position.end = end_point;
             }
@@ -768,13 +732,36 @@ fn token_mut<'a>(root: &'a mut BlockToken, path: &[usize]) -> &'a mut BlockToken
     cursor
 }
 
-fn calc_end_point(line: &PhrasingContentLine, index: usize) -> Point {
-    let point = line.node_points[index];
-    Point {
-        line: point.line,
-        column: point.column + 1,
-        offset: Some(point.offset + 1),
-    }
+fn detach_child_for_parent_snapshot(
+    root: &mut BlockToken,
+    parent_path: &[usize],
+    child_path: &[usize],
+) -> (usize, BlockToken) {
+    assert_eq!(
+        child_path.len(),
+        parent_path.len() + 1,
+        "child path should be directly nested in parent path"
+    );
+    assert_eq!(
+        &child_path[..parent_path.len()],
+        parent_path,
+        "child path should start with parent path"
+    );
+
+    let child_index = child_path[parent_path.len()];
+    let parent = token_mut(root, parent_path);
+    let snapshot = parent.children[child_index].clone();
+    let token = std::mem::replace(&mut parent.children[child_index], snapshot);
+    (child_index, token)
+}
+
+fn restore_detached_child(
+    root: &mut BlockToken,
+    parent_path: &[usize],
+    child_index: usize,
+    token: BlockToken,
+) {
+    token_mut(root, parent_path).children[child_index] = token;
 }
 
 #[cfg(test)]
@@ -785,7 +772,7 @@ mod tests {
     use yozora_character::{create_node_point_generator, AsciiCodePoint};
     use yozora_core_tokenizer::{
         BlockToken, EatContinuationTextResult, EatOpenerResult, MatchBlockHook, OnCloseResult,
-        PhrasingContentLine, UNKNOWN_TOKENIZER_ID,
+        PhrasingContentLine,
     };
 
     use super::{create_block_content_processor, MatchBlockProcessorHook};
@@ -1144,10 +1131,15 @@ mod tests {
         }
 
         PhrasingContentLine {
-            node_points: points,
+            node_points: Arc::clone(&points),
             start_index: 0,
             end_index,
             first_non_whitespace_index,
+            indent_width: yozora_core_tokenizer::calc_indent_width(
+                points.as_ref(),
+                0,
+                first_non_whitespace_index,
+            ),
             count_of_precede_spaces,
         }
     }
@@ -1163,7 +1155,6 @@ mod tests {
 
         assert_eq!(root.children.len(), 1);
         assert_eq!(root.children[0].tokenizer.as_ref(), "echo");
-        assert_ne!(root.children[0].tokenizer_id, UNKNOWN_TOKENIZER_ID);
     }
 
     #[test]

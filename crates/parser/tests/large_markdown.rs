@@ -101,6 +101,7 @@ fn walk_nodes(nodes: &[Node], stats: &mut NodeStats) {
             Node::Html(_) => {}
             Node::ImageReference(_) => {}
             Node::ThematicBreak(_) => {}
+            Node::Custom(_) => {}
         }
     }
 }
@@ -159,7 +160,7 @@ fn parse_large_mixed_markdown_should_keep_root_position_when_enabled() {
     let root = parser.parse(
         input,
         Some(ParseOptions {
-            shouldReservePosition: Some(true),
+            should_reserve_position: Some(true),
             ..ParseOptions::default()
         }),
     );

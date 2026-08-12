@@ -8,6 +8,7 @@ struct TempLine {
     start_index: usize,
     end_index: usize,
     first_non_whitespace_index: usize,
+    indent_width: usize,
     count_of_precede_spaces: usize,
 }
 
@@ -42,6 +43,11 @@ pub fn create_phrasing_line_generator(
                     start_index,
                     end_index: all_node_points.len(),
                     first_non_whitespace_index,
+                    indent_width: yozora_core_tokenizer::calc_indent_width(
+                        &all_node_points,
+                        start_index,
+                        first_non_whitespace_index,
+                    ),
                     count_of_precede_spaces,
                 });
 
@@ -59,6 +65,11 @@ pub fn create_phrasing_line_generator(
             start_index,
             end_index: all_node_points.len(),
             first_non_whitespace_index,
+            indent_width: yozora_core_tokenizer::calc_indent_width(
+                &all_node_points,
+                start_index,
+                first_non_whitespace_index,
+            ),
             count_of_precede_spaces,
         }]);
     }
@@ -72,6 +83,7 @@ pub fn create_phrasing_line_generator(
                 start_index: line.start_index,
                 end_index: line.end_index,
                 first_non_whitespace_index: line.first_non_whitespace_index,
+                indent_width: line.indent_width,
                 count_of_precede_spaces: line.count_of_precede_spaces,
             })
             .collect()

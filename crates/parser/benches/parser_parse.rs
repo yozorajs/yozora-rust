@@ -28,7 +28,7 @@ fn benchmark_fixtures() -> &'static [BenchmarkFixture] {
 
 fn parse_options(should_reserve_position: bool) -> ParseOptions {
     ParseOptions {
-        shouldReservePosition: Some(should_reserve_position),
+        should_reserve_position: Some(should_reserve_position),
         ..ParseOptions::default()
     }
 }

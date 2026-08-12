@@ -6,14 +6,12 @@ use yozora_core_tokenizer::{
 };
 
 pub type FormatUrlFn = Arc<dyn Fn(&str) -> String + Send + Sync + 'static>;
-
-#[allow(non_snake_case)]
 #[derive(Clone, Default)]
 pub struct ParseOptions {
-    pub shouldReservePosition: Option<bool>,
-    pub presetDefinitions: Option<Vec<Association>>,
-    pub presetFootnoteDefinitions: Option<Vec<Association>>,
-    pub formatUrl: Option<FormatUrlFn>,
+    pub should_reserve_position: Option<bool>,
+    pub preset_definitions: Option<Vec<Association>>,
+    pub preset_footnote_definitions: Option<Vec<Association>>,
+    pub format_url: Option<FormatUrlFn>,
 }
 
 #[derive(Debug, Clone)]
@@ -65,33 +63,31 @@ impl<'a> From<Vec<&'a str>> for ParseContents<'a> {
         Self::OwnedChunks(value.into_iter().map(str::to_string).collect())
     }
 }
-
-#[allow(non_snake_case)]
 #[derive(Default)]
 pub struct DefaultParserProps {
-    pub blockFallbackTokenizer: Option<Box<dyn BlockTokenizer>>,
-    pub inlineFallbackTokenizer: Option<Box<dyn InlineFallbackTokenizer>>,
-    pub defaultParseOptions: Option<ParseOptions>,
+    pub block_fallback_tokenizer: Option<Box<dyn BlockTokenizer>>,
+    pub inline_fallback_tokenizer: Option<Box<dyn InlineFallbackTokenizer>>,
+    pub default_parse_options: Option<ParseOptions>,
 }
 
 pub trait Parser {
-    fn useTokenizer(
+    fn use_tokenizer(
         &mut self,
         tokenizer: AnyTokenizer,
-        registerBeforeTokenizer: Option<&str>,
+        register_before_tokenizer: Option<&str>,
     ) -> &mut Self;
 
-    fn replaceTokenizer(
+    fn replace_tokenizer(
         &mut self,
         tokenizer: AnyTokenizer,
-        registerBeforeTokenizer: Option<&str>,
+        register_before_tokenizer: Option<&str>,
     ) -> &mut Self;
 
-    fn unmountTokenizer(&mut self, tokenizerName: &str) -> &mut Self;
+    fn unmount_tokenizer(&mut self, tokenizer_name: &str) -> &mut Self;
 
-    fn useFallbackTokenizer(&mut self, tokenizer: AnyFallbackTokenizer) -> &mut Self;
+    fn use_fallback_tokenizer(&mut self, tokenizer: AnyFallbackTokenizer) -> &mut Self;
 
-    fn setDefaultParseOptions(&mut self, options: Option<ParseOptions>);
+    fn set_default_parse_options(&mut self, options: Option<ParseOptions>);
 
     fn parse<'a, C>(&self, contents: C, options: Option<ParseOptions>) -> Root
     where

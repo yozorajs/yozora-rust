@@ -22,7 +22,7 @@ fn find_nearest_delimiters(
     let mut nearest_start: Option<usize> = None;
 
     for &hook_index in hook_indices {
-        let delimiter = hooks[hook_index].findDelimiter((start_index, end_index));
+        let delimiter = hooks[hook_index].find_delimiter((start_index, end_index));
         let Some(delimiter) = delimiter else {
             continue;
         };
@@ -194,7 +194,7 @@ mod tests {
     }
 
     impl<'a> MatchInlineHook<'a> for DummyHook {
-        fn findDelimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
+        fn find_delimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
             let delimiters = self.delimiters.clone();
 
             struct DummyDelimiterGenerator {
@@ -227,7 +227,7 @@ mod tests {
             })
         }
 
-        fn isDelimiterPair(
+        fn is_delimiter_pair(
             &self,
             _opener_delimiter: &TokenDelimiter,
             _closer_delimiter: &TokenDelimiter,
@@ -243,7 +243,7 @@ mod tests {
             }
         }
 
-        fn processDelimiterPair(
+        fn process_delimiter_pair(
             &self,
             opener_delimiter: &TokenDelimiter,
             closer_delimiter: &TokenDelimiter,
@@ -255,12 +255,12 @@ mod tests {
                     "emphasis",
                     (opener_delimiter.start_index, closer_delimiter.end_index),
                 )],
-                remainOpenerDelimiter: None,
-                remainCloserDelimiter: None,
+                remain_opener_delimiter: None,
+                remain_closer_delimiter: None,
             }
         }
 
-        fn processSingleDelimiter(&self, delimiter: &TokenDelimiter) -> Vec<InlineToken> {
+        fn process_single_delimiter(&self, delimiter: &TokenDelimiter) -> Vec<InlineToken> {
             vec![InlineToken::new(
                 "",
                 "text",
@@ -287,7 +287,6 @@ mod tests {
     fn should_pair_delimiters_into_one_token() {
         let mut hooks = vec![MatchInlineProcessorHook::new(
             "em",
-            0,
             1,
             Box::new(DummyHook::new(
                 vec![
@@ -310,7 +309,6 @@ mod tests {
     fn should_keep_higher_priority_token_order() {
         let mut hooks = vec![MatchInlineProcessorHook::new(
             "full",
-            0,
             1,
             Box::new(DummyHook::new(
                 vec![delimiter(DelimiterType::Full, 3, 4)],
@@ -331,7 +329,6 @@ mod tests {
         let mut hooks = vec![
             MatchInlineProcessorHook::new(
                 "high",
-                0,
                 10,
                 Box::new(DummyHook::new(
                     vec![delimiter(DelimiterType::Full, 0, 1)],
@@ -340,7 +337,6 @@ mod tests {
             ),
             MatchInlineProcessorHook::new(
                 "low",
-                1,
                 1,
                 Box::new(DummyHook::new(
                     vec![delimiter(DelimiterType::Full, 2, 3)],

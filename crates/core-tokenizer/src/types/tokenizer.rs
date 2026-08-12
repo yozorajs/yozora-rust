@@ -40,6 +40,10 @@ pub trait BlockTokenizer: Tokenizer {
     }
 }
 
+pub trait BlockFallbackTokenizer: BlockTokenizer {}
+
+impl<T> BlockFallbackTokenizer for T where T: BlockTokenizer + ?Sized {}
+
 pub trait InlineTokenizer: Tokenizer {
     fn r#match<'a>(&'a self, api: &'a dyn MatchInlinePhaseApi)
         -> Box<dyn MatchInlineHook<'a> + 'a>;

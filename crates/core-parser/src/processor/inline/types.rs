@@ -1,11 +1,21 @@
 use std::sync::Arc;
 
 use yozora_core_tokenizer::{
-    FindDelimiterGenerator, InlineToken, IsDelimiterPairResult, MatchInlineHook,
-    ProcessDelimiterPairResult, TokenDelimiter,
+    FindDelimiterGenerator, InlineToken, IsDelimiterPairResult, MatchInlineFallbackPhaseApi,
+    MatchInlineHook, ProcessDelimiterPairResult, TokenDelimiter,
 };
 
+pub type ResolveFallbackTokens<'a> = dyn Fn(&[InlineToken], usize, usize) -> Vec<InlineToken> + 'a;
+
+pub struct ProcessorHookGroups<'a> {
+    pub(crate) tokenizers: &'a [Box<dyn yozora_core_tokenizer::InlineTokenizer>],
+    pub(crate) match_inline_api: &'a dyn MatchInlineFallbackPhaseApi,
+    pub(crate) resolve_fallback_tokens: &'a ResolveFallbackTokens<'a>,
+}
+
 pub struct PhrasingContentProcessor<'a> {
+    pub(crate) hook_groups: Option<ProcessorHookGroups<'a>>,
+    pub(crate) hook_group_index: usize,
     pub(crate) hooks: Vec<MatchInlineProcessorHook<'a>>,
 }
 
@@ -16,12 +26,22 @@ impl PhrasingContentProcessor<'_> {
         start_index: usize,
         end_index: usize,
     ) -> Vec<InlineToken> {
-        super::match_inline_tokens(
-            &mut self.hooks,
-            higher_priority_tokens,
-            start_index,
-            end_index,
-        )
+        if let Some(hook_groups) = &self.hook_groups {
+            super::process_tokenizer_groups(
+                hook_groups,
+                self.hook_group_index,
+                higher_priority_tokens,
+                start_index,
+                end_index,
+            )
+        } else {
+            super::match_inline_tokens(
+                &mut self.hooks,
+                higher_priority_tokens,
+                start_index,
+                end_index,
+            )
+        }
     }
 }
 

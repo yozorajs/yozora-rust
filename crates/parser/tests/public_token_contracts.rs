@@ -51,6 +51,7 @@ fn tokenizer_specific_token_fields_are_public() {
             let _ = (&token.label, &token.identifier);
         };
     let heading = |token: &yozora_tokenizer_heading::HeadingToken| {
+        let _: &yozora_ast::Position = &token.position;
         let _ = (token.depth, &token.line);
     };
     let html_block = |token: &yozora_tokenizer_html_block::HtmlBlockToken| {
@@ -187,4 +188,21 @@ fn tokenizer_public_readonly_fields_are_visible() {
 
     let footnote = yozora_tokenizer_footnote_definition::FootnoteDefinitionTokenizer::default();
     assert_eq!(footnote.indent, 4);
+}
+
+#[test]
+fn core_tokenizer_named_contracts_are_public() {
+    fn assert_block_fallback<T: yozora_core_tokenizer::BlockFallbackTokenizer>() {}
+
+    let _: Option<&yozora_core_tokenizer::MatchBlockHookCreator<'_>> = None;
+    let _: Option<&yozora_core_tokenizer::MatchInlineHookCreator<'_>> = None;
+    let _: Option<&yozora_core_tokenizer::ParseBlockHookCreator<'_>> = None;
+    let _: Option<&yozora_core_tokenizer::ParseInlineHookCreator<'_>> = None;
+    let _: yozora_core_tokenizer::BaseBlockTokenizerProps = Default::default();
+    let _: yozora_core_tokenizer::BaseInlineTokenizerProps = Default::default();
+    let _: yozora_core_tokenizer::ResultOfEatOpener = None;
+    let _: yozora_core_tokenizer::ResultOfEatAndInterruptPreviousSibling = None;
+    let _: yozora_core_tokenizer::ResultOfOnClose = None;
+    let _: yozora_core_tokenizer::ResultOfProcessSingleDelimiter = Vec::new();
+    assert_block_fallback::<yozora_tokenizer_paragraph::ParagraphTokenizer>();
 }

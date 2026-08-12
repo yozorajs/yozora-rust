@@ -10,20 +10,26 @@ pub use constant::{DelimiterType, TokenizerPriority, TokenizerType};
 pub use tokenizers::{gen_find_delimiter, BaseBlockTokenizer, BaseInlineTokenizer};
 pub use types::match_block::{
     EatAndInterruptPreviousSiblingResult, EatContinuationTextResult, EatLazyContinuationTextResult,
-    EatOpenerResult, MatchBlockHook, MatchBlockPhaseApi, OnCloseResult, RemainingSibling,
+    EatOpenerResult, MatchBlockHook, MatchBlockHookCreator, MatchBlockPhaseApi, OnCloseResult,
+    RemainingSibling, ResultOfEatAndInterruptPreviousSibling, ResultOfEatContinuationText,
+    ResultOfEatLazyContinuationText, ResultOfEatOpener, ResultOfOnClose,
 };
 pub use types::match_inline::{
     FindDelimiterGenerator, IsDelimiterPairResult, MatchInlineFallbackPhaseApi, MatchInlineHook,
-    MatchInlinePhaseApi, ProcessDelimiterPairResult,
+    MatchInlineHookCreator, MatchInlinePhaseApi, ProcessDelimiterPairResult,
+    ResultOfFindDelimiters, ResultOfIsDelimiterPair, ResultOfProcessDelimiterPair,
+    ResultOfProcessSingleDelimiter,
 };
-pub use types::parse_block::{ParseBlockHook, ParseBlockPhaseApi};
-pub use types::parse_inline::{ParseInlineHook, ParseInlinePhaseApi};
+pub use types::parse_block::{ParseBlockHook, ParseBlockHookCreator, ParseBlockPhaseApi};
+pub use types::parse_inline::{ParseInlineHook, ParseInlineHookCreator, ParseInlinePhaseApi};
 pub use types::phrasing_content::PhrasingContentLine;
 pub use types::token::{
-    BlockToken, BlockTokenChildren, InlineToken, TokenData, TokenDataTypeMismatch, TokenDelimiter,
-    TypedBlockToken, TypedInlineToken,
+    BlockToken, BlockTokenChildren, InlineToken, PartialBlockToken, PartialInlineToken, TokenData,
+    TokenDataTypeMismatch, TokenDelimiter, TypedBlockToken, TypedBlockTokenError, TypedInlineToken,
 };
-pub use types::tokenizer::{BlockTokenizer, InlineFallbackTokenizer, InlineTokenizer, Tokenizer};
+pub use types::tokenizer::{
+    BlockFallbackTokenizer, BlockTokenizer, InlineFallbackTokenizer, InlineTokenizer, Tokenizer,
+};
 pub use types::util::{NodeInterval, ResultOfOptionalEater, ResultOfRequiredEater};
 pub use util::phrasing_content::{
     calc_position_from_phrasing_content_lines, merge_and_strip_content_lines,
@@ -66,6 +72,9 @@ pub struct TokenizerOptions {
     pub name: Option<String>,
     pub priority: Option<i32>,
 }
+
+pub type BaseBlockTokenizerProps = TokenizerOptions;
+pub type BaseInlineTokenizerProps = TokenizerOptions;
 
 pub enum AnyTokenizer {
     Block(Box<dyn BlockTokenizer>),

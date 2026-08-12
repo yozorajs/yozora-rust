@@ -1,5 +1,4 @@
 use yozora_ast::Node;
-use yozora_core_tokenizer::types::parse_block::ParseBlockTask;
 use yozora_core_tokenizer::*;
 use yozora_tokenizer_fenced_block::FencedBlockTokenData;
 
@@ -87,10 +86,6 @@ struct AdmonitionParseHook<'a> {
 impl ParseBlockHook for AdmonitionParseHook<'_> {
     fn parse(&self, tokens: &[BlockToken]) -> Vec<Node> {
         parse::parse_admonition_tokens(tokens, self.api)
-    }
-
-    fn parse_task(&self, tokens: &[BlockToken]) -> Option<Box<dyn ParseBlockTask>> {
-        Some(parse::create_admonition_parse_task(tokens, self.api))
     }
 }
 

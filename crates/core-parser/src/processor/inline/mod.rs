@@ -1,12 +1,69 @@
 mod single_priority;
 mod types;
 
-pub use types::{MatchInlineProcessorHook, PhrasingContentProcessor};
+pub use types::{
+    MatchInlineProcessorHook, PhrasingContentProcessor, ProcessorHookGroups, ResolveFallbackTokens,
+};
 
 use single_priority::SinglePriorityDelimiterProcessor;
 use yozora_core_tokenizer::{
-    DelimiterType, InlineToken, InlineTokenizer, MatchInlinePhaseApi, TokenDelimiter,
+    DelimiterType, InlineToken, InlineTokenizer, MatchInlineFallbackPhaseApi, MatchInlinePhaseApi,
+    TokenDelimiter,
 };
+
+struct ProcessorGroupApi<'a> {
+    hook_groups: &'a ProcessorHookGroups<'a>,
+    next_group_index: usize,
+}
+
+impl MatchInlinePhaseApi for ProcessorGroupApi<'_> {
+    fn has_definition(&self, identifier: &str) -> bool {
+        self.hook_groups.match_inline_api.has_definition(identifier)
+    }
+
+    fn has_footnote_definition(&self, identifier: &str) -> bool {
+        self.hook_groups
+            .match_inline_api
+            .has_footnote_definition(identifier)
+    }
+
+    fn get_node_points(&self) -> &[yozora_character::NodePoint] {
+        self.hook_groups.match_inline_api.get_node_points()
+    }
+
+    fn get_block_start_index(&self) -> usize {
+        self.hook_groups.match_inline_api.get_block_start_index()
+    }
+
+    fn get_block_end_index(&self) -> usize {
+        self.hook_groups.match_inline_api.get_block_end_index()
+    }
+
+    fn resolve_fallback_tokens(
+        &self,
+        tokens: &[InlineToken],
+        token_start_index: usize,
+        token_end_index: usize,
+    ) -> Vec<InlineToken> {
+        (self.hook_groups.resolve_fallback_tokens)(tokens, token_start_index, token_end_index)
+    }
+
+    fn resolve_internal_tokens(
+        &self,
+        higher_priority_tokens: &[InlineToken],
+        start_index: usize,
+        end_index: usize,
+    ) -> Vec<InlineToken> {
+        let tokens = process_tokenizer_groups(
+            self.hook_groups,
+            self.next_group_index,
+            higher_priority_tokens,
+            start_index,
+            end_index,
+        );
+        (self.hook_groups.resolve_fallback_tokens)(&tokens, start_index, end_index)
+    }
+}
 #[derive(Clone)]
 struct NearestDelimiterItem {
     hook_index: usize,
@@ -130,7 +187,19 @@ pub fn create_processor_hook<'a>(
     )
 }
 
-pub fn create_processor_hook_groups<'a, A>(
+pub fn create_processor_hook_groups<'a>(
+    tokenizers: &'a [Box<dyn InlineTokenizer>],
+    match_inline_api: &'a dyn MatchInlineFallbackPhaseApi,
+    resolve_fallback_tokens: &'a ResolveFallbackTokens<'a>,
+) -> ProcessorHookGroups<'a> {
+    ProcessorHookGroups {
+        tokenizers,
+        match_inline_api,
+        resolve_fallback_tokens,
+    }
+}
+
+pub(crate) fn create_processor_hook_groups_with_apis<'a, A>(
     tokenizers: &'a [Box<dyn InlineTokenizer>],
     apis: &'a [A],
 ) -> Vec<Vec<MatchInlineProcessorHook<'a>>>
@@ -161,17 +230,80 @@ where
     groups
 }
 
-pub fn create_phrasing_content_processor<'a>(
+pub fn create_phrasing_content_processor(
+    hook_groups: ProcessorHookGroups<'_>,
+    hook_group_index: usize,
+) -> PhrasingContentProcessor<'_> {
+    PhrasingContentProcessor {
+        hook_groups: Some(hook_groups),
+        hook_group_index,
+        hooks: Vec::new(),
+    }
+}
+
+pub(crate) fn create_phrasing_content_processor_from_hooks<'a>(
     hook_groups: Vec<Vec<MatchInlineProcessorHook<'a>>>,
     hook_group_index: usize,
 ) -> PhrasingContentProcessor<'a> {
     PhrasingContentProcessor {
+        hook_groups: None,
+        hook_group_index,
         hooks: hook_groups
             .into_iter()
             .skip(hook_group_index)
             .flatten()
             .collect(),
     }
+}
+
+fn tokenizer_group_ranges(tokenizers: &[Box<dyn InlineTokenizer>]) -> Vec<(usize, usize)> {
+    let mut groups = Vec::new();
+    let mut index = 0usize;
+    while index < tokenizers.len() {
+        let start_index = index;
+        let priority = tokenizers[index].priority();
+        index += 1;
+        while index < tokenizers.len() && tokenizers[index].priority() == priority {
+            index += 1;
+        }
+        groups.push((start_index, index));
+    }
+    groups
+}
+
+pub(crate) fn process_tokenizer_groups(
+    hook_groups: &ProcessorHookGroups<'_>,
+    hook_group_index: usize,
+    higher_priority_tokens: &[InlineToken],
+    start_index: usize,
+    end_index: usize,
+) -> Vec<InlineToken> {
+    let ranges = tokenizer_group_ranges(hook_groups.tokenizers);
+    if hook_group_index >= ranges.len() {
+        return higher_priority_tokens.to_vec();
+    }
+
+    let apis = ranges
+        .iter()
+        .enumerate()
+        .map(|(index, _)| ProcessorGroupApi {
+            hook_groups,
+            next_group_index: index + 1,
+        })
+        .collect::<Vec<_>>();
+    let mut hooks = Vec::new();
+    for (group_index, (tokenizer_start, tokenizer_end)) in ranges.iter().copied().enumerate() {
+        if group_index < hook_group_index {
+            continue;
+        }
+        for tokenizer in &hook_groups.tokenizers[tokenizer_start..tokenizer_end] {
+            hooks.push(create_processor_hook(
+                tokenizer.as_ref(),
+                &apis[group_index],
+            ));
+        }
+    }
+    match_inline_tokens(&mut hooks, higher_priority_tokens, start_index, end_index)
 }
 
 pub fn match_inline_tokens(

@@ -1,5 +1,4 @@
 use yozora_ast::Node;
-use yozora_core_tokenizer::types::parse_block::ParseBlockTask;
 use yozora_core_tokenizer::*;
 
 use crate::{parse, r#match};
@@ -88,13 +87,6 @@ struct BlockquoteParseHook<'a> {
 impl ParseBlockHook for BlockquoteParseHook<'_> {
     fn parse(&self, tokens: &[BlockToken]) -> Vec<Node> {
         parse::parse_blockquote_tokens(tokens, self.api)
-    }
-
-    fn parse_task(&self, tokens: &[BlockToken]) -> Option<Box<dyn ParseBlockTask>> {
-        Some(parse::create_blockquote_parse_task(
-            tokens,
-            self.api.should_reserve_position(),
-        ))
     }
 }
 

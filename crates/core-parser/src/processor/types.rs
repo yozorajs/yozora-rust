@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use yozora_ast::Association;
 use yozora_core_tokenizer::{
     BlockTokenizer, InlineFallbackTokenizer, InlineTokenizer, MatchBlockPhaseApi,
-    MatchInlinePhaseApi, ParseBlockPhaseApi, ParseInlinePhaseApi,
+    MatchInlineFallbackPhaseApi, ParseBlockPhaseApi, ParseInlinePhaseApi,
 };
 
 use crate::types::FormatUrlFn;
@@ -24,7 +24,7 @@ pub struct ProcessorOptions<'a> {
 pub struct ProcessorApis<'a> {
     pub match_block_api: &'a dyn MatchBlockPhaseApi,
     pub parse_block_api: &'a dyn ParseBlockPhaseApi,
-    pub match_inline_api: &'a dyn MatchInlinePhaseApi,
+    pub match_inline_api: &'a dyn MatchInlineFallbackPhaseApi,
     pub parse_inline_api: &'a dyn ParseInlinePhaseApi,
 }
 

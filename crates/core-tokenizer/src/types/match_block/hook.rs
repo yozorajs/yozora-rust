@@ -1,5 +1,9 @@
+use crate::types::match_block::MatchBlockPhaseApi;
 use crate::types::phrasing_content::PhrasingContentLine;
 use crate::types::token::BlockToken;
+
+pub type MatchBlockHookCreator<'a> =
+    dyn Fn(&'a dyn MatchBlockPhaseApi) -> Box<dyn MatchBlockHook + 'a> + 'a;
 
 #[derive(Debug, Clone)]
 pub struct EatOpenerResult {
@@ -7,6 +11,8 @@ pub struct EatOpenerResult {
     pub next_index: usize,
     pub saturated: bool,
 }
+
+pub type ResultOfEatOpener = Option<EatOpenerResult>;
 
 #[derive(Debug, Clone)]
 pub enum RemainingSibling {
@@ -23,6 +29,8 @@ pub struct EatAndInterruptPreviousSiblingResult {
     pub remaining_sibling: RemainingSibling,
 }
 
+pub type ResultOfEatAndInterruptPreviousSibling = Option<EatAndInterruptPreviousSiblingResult>;
+
 #[derive(Debug, Clone)]
 pub enum EatContinuationTextResult {
     FailedAndRollback { lines: Vec<PhrasingContentLine> },
@@ -32,17 +40,23 @@ pub enum EatContinuationTextResult {
     Opening { next_index: usize },
 }
 
+pub type ResultOfEatContinuationText = EatContinuationTextResult;
+
 #[derive(Debug, Clone)]
 pub enum EatLazyContinuationTextResult {
     NotMatched,
     Opening { next_index: usize },
 }
 
+pub type ResultOfEatLazyContinuationText = EatLazyContinuationTextResult;
+
 #[derive(Debug, Clone)]
 pub enum OnCloseResult {
     FailedAndRollback { lines: Vec<PhrasingContentLine> },
     ClosingAndRollback { lines: Vec<PhrasingContentLine> },
 }
+
+pub type ResultOfOnClose = Option<OnCloseResult>;
 
 pub trait MatchBlockHook {
     fn is_containing_block(&self) -> bool;

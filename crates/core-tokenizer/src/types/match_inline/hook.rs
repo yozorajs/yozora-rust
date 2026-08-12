@@ -1,8 +1,14 @@
+use crate::types::match_inline::MatchInlinePhaseApi;
 use crate::types::token::{InlineToken, TokenDelimiter};
+
+pub type MatchInlineHookCreator<'a> =
+    dyn Fn(&'a dyn MatchInlinePhaseApi) -> Box<dyn MatchInlineHook<'a> + 'a> + 'a;
 
 pub trait FindDelimiterGenerator {
     fn next(&mut self, range_index: (usize, usize)) -> Option<TokenDelimiter>;
 }
+
+pub type ResultOfFindDelimiters<'a> = Box<dyn FindDelimiterGenerator + 'a>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IsDelimiterPairResult {
@@ -10,12 +16,16 @@ pub enum IsDelimiterPairResult {
     NotPaired { opener: bool, closer: bool },
 }
 
+pub type ResultOfIsDelimiterPair = IsDelimiterPairResult;
+
 #[derive(Debug, Clone)]
 pub struct ProcessDelimiterPairResult {
     pub tokens: Vec<InlineToken>,
     pub remain_opener_delimiter: Option<TokenDelimiter>,
     pub remain_closer_delimiter: Option<TokenDelimiter>,
 }
+pub type ResultOfProcessDelimiterPair = ProcessDelimiterPairResult;
+pub type ResultOfProcessSingleDelimiter = Vec<InlineToken>;
 pub trait MatchInlineHook<'hook> {
     fn find_delimiter(&self) -> Box<dyn FindDelimiterGenerator + 'hook>;
 

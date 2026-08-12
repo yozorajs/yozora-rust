@@ -23,6 +23,23 @@ impl Display for TokenDataTypeMismatch {
 impl std::error::Error for TokenDataTypeMismatch {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TypedBlockTokenError {
+    DataTypeMismatch(TokenDataTypeMismatch),
+    MissingPosition,
+}
+
+impl Display for TypedBlockTokenError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DataTypeMismatch(error) => Display::fmt(error, formatter),
+            Self::MissingPosition => formatter.write_str("block token position is missing"),
+        }
+    }
+}
+
+impl std::error::Error for TypedBlockTokenError {}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TokenDelimiter {
     pub delimiter_type: DelimiterType,
     pub start_index: usize,
@@ -40,6 +57,8 @@ pub struct InlineToken {
     pub children: Arc<Vec<InlineToken>>,
     pub data: TokenData,
 }
+
+pub type PartialInlineToken = InlineToken;
 
 impl InlineToken {
     pub fn new(
@@ -214,6 +233,8 @@ pub struct BlockToken {
     pub data: TokenData,
 }
 
+pub type PartialBlockToken = BlockToken;
+
 impl BlockToken {
     pub fn new(
         tokenizer: impl Into<Arc<str>>,
@@ -266,7 +287,7 @@ impl Drop for BlockToken {
 pub struct TypedBlockToken<T> {
     pub tokenizer: Arc<str>,
     pub node_type: NodeType,
-    pub position: Option<Position>,
+    pub position: Position,
     pub children: BlockTokenChildren,
     data: Arc<T>,
 }
@@ -289,18 +310,21 @@ impl<T> TryFrom<&BlockToken> for TypedBlockToken<T>
 where
     T: Any + Send + Sync + 'static,
 {
-    type Error = TokenDataTypeMismatch;
+    type Error = TypedBlockTokenError;
 
     fn try_from(token: &BlockToken) -> Result<Self, Self::Error> {
-        let data = Arc::clone(&token.data)
-            .downcast::<T>()
-            .map_err(|_| TokenDataTypeMismatch {
+        let data = Arc::clone(&token.data).downcast::<T>().map_err(|_| {
+            TypedBlockTokenError::DataTypeMismatch(TokenDataTypeMismatch {
                 expected: std::any::type_name::<T>(),
-            })?;
+            })
+        })?;
         Ok(Self {
             tokenizer: Arc::clone(&token.tokenizer),
             node_type: token.node_type,
-            position: token.position.clone(),
+            position: token
+                .position
+                .clone()
+                .ok_or(TypedBlockTokenError::MissingPosition)?,
             children: token.children.clone(),
             data,
         })
@@ -309,7 +333,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{BlockToken, InlineToken, TypedBlockToken, TypedInlineToken};
+    use yozora_ast::{Point, Position};
+
+    use super::{BlockToken, InlineToken, TypedBlockToken, TypedBlockTokenError, TypedInlineToken};
 
     #[derive(Debug)]
     struct TestData {
@@ -319,7 +345,21 @@ mod tests {
     #[test]
     fn typed_tokens_expose_specific_data() {
         let inline = InlineToken::new("inline", "text", (1, 2)).with_data(TestData { value: 3 });
-        let block = BlockToken::new("block", "paragraph", None).with_data(TestData { value: 4 });
+        let point = Point {
+            line: 1,
+            column: 1,
+            offset: Some(0),
+        };
+        let block = BlockToken::new(
+            "block",
+            "paragraph",
+            Some(Position {
+                start: point,
+                end: point,
+                indent: None,
+            }),
+        )
+        .with_data(TestData { value: 4 });
 
         let typed_inline = TypedInlineToken::<TestData>::try_from(&inline).unwrap();
         let typed_block = TypedBlockToken::<TestData>::try_from(&block).unwrap();
@@ -327,6 +367,12 @@ mod tests {
         assert_eq!(typed_inline.start_index, 1);
         assert_eq!(typed_inline.value, 3);
         assert_eq!(typed_block.value, 4);
+
+        let missing = BlockToken::new("block", "paragraph", None).with_data(TestData { value: 5 });
+        assert_eq!(
+            TypedBlockToken::<TestData>::try_from(&missing).unwrap_err(),
+            TypedBlockTokenError::MissingPosition
+        );
     }
 
     #[test]

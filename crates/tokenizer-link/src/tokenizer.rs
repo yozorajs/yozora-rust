@@ -52,8 +52,6 @@ impl Tokenizer for LinkTokenizer {
 
 struct LinkMatchHook<'a> {
     api: &'a dyn MatchInlinePhaseApi,
-    source: String,
-    char_starts: Vec<usize>,
     block_start_index: usize,
     block_end_index: usize,
     delimiters: Rc<RefCell<Vec<r#match::DelimiterEntry>>>,
@@ -63,14 +61,8 @@ impl<'a> LinkMatchHook<'a> {
     fn new(api: &'a dyn MatchInlinePhaseApi) -> Self {
         let block_start_index = api.get_block_start_index();
         let block_end_index = api.get_block_end_index();
-        let source =
-            r#match::build_source(api.get_node_points(), block_start_index, block_end_index);
-        let char_starts = r#match::build_char_starts(&source);
-
         Self {
             api,
-            source,
-            char_starts,
             block_start_index,
             block_end_index,
             delimiters: Rc::new(RefCell::new(Vec::new())),
@@ -95,8 +87,6 @@ impl<'a> MatchInlineHook<'a> for LinkMatchHook<'a> {
     fn find_delimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
         self.delimiters.borrow_mut().clear();
 
-        let source = self.source.clone();
-        let char_starts = self.char_starts.clone();
         let api = self.api;
         let block_start_index = self.block_start_index;
         let block_end_index = self.block_end_index;
@@ -104,8 +94,6 @@ impl<'a> MatchInlineHook<'a> for LinkMatchHook<'a> {
 
         Box::new(gen_find_delimiter(move |start_index, end_index| {
             let entry = r#match::find_link_delimiter_entry(
-                &source,
-                &char_starts,
                 api.get_node_points(),
                 block_start_index,
                 block_end_index,
@@ -180,8 +168,7 @@ impl<'a> MatchInlineHook<'a> for LinkMatchHook<'a> {
             self.api.get_node_points(),
             opener_delimiter,
             closer_delimiter,
-            data.url,
-            data.title,
+            data,
             children_tokens,
         );
 

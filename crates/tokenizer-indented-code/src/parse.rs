@@ -5,7 +5,7 @@ use yozora_core_tokenizer::{
 };
 
 #[derive(Debug, Clone)]
-pub(crate) struct IndentedCodeTokenData {
+pub struct IndentedCodeTokenData {
     pub lines: Vec<PhrasingContentLine>,
 }
 

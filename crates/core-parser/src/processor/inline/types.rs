@@ -5,6 +5,26 @@ use yozora_core_tokenizer::{
     ProcessDelimiterPairResult, TokenDelimiter,
 };
 
+pub struct PhrasingContentProcessor<'a> {
+    pub(crate) hooks: Vec<MatchInlineProcessorHook<'a>>,
+}
+
+impl PhrasingContentProcessor<'_> {
+    pub fn process(
+        &mut self,
+        higher_priority_tokens: &[InlineToken],
+        start_index: usize,
+        end_index: usize,
+    ) -> Vec<InlineToken> {
+        super::match_inline_tokens(
+            &mut self.hooks,
+            higher_priority_tokens,
+            start_index,
+            end_index,
+        )
+    }
+}
+
 pub struct MatchInlineProcessorHook<'a> {
     pub name: Arc<str>,
     pub priority: i32,

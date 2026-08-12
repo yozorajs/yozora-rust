@@ -2,7 +2,7 @@ use yozora_ast::{Node, Table, TableCell, TableRow};
 use yozora_character::{AsciiCodePoint, NodePoint};
 use yozora_core_tokenizer::{merge_and_strip_content_lines, BlockToken, ParseBlockPhaseApi};
 
-use crate::r#match::TokenData;
+use crate::r#match::TableTokenData;
 
 pub(crate) fn parse_table_tokens(
     tokens: &[BlockToken],
@@ -11,7 +11,7 @@ pub(crate) fn parse_table_tokens(
     let mut nodes = Vec::with_capacity(tokens.len());
 
     for token in tokens {
-        let Some(data) = token.data_as::<TokenData>() else {
+        let Some(data) = token.data_as::<TableTokenData>() else {
             continue;
         };
 
@@ -30,7 +30,7 @@ pub(crate) fn parse_table_tokens(
 
                         Node::TableCell(TableCell {
                             position: if parse_api.should_reserve_position() {
-                                cell.position.clone()
+                                Some(cell.position.clone())
                             } else {
                                 None
                             },
@@ -41,7 +41,7 @@ pub(crate) fn parse_table_tokens(
 
                 Node::TableRow(TableRow {
                     position: if parse_api.should_reserve_position() {
-                        row.position.clone()
+                        Some(row.position.clone())
                     } else {
                         None
                     },

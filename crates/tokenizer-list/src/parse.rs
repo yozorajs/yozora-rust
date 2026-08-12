@@ -1,7 +1,8 @@
 use yozora_ast::{List, ListItem, Node, Paragraph, Point, Position, TaskStatus};
-use yozora_core_tokenizer::{BlockToken, ParseBlockPhaseApi, ParseBlockTask, ParseBlockTaskStep};
+use yozora_core_tokenizer::types::parse_block::{ParseBlockTask, ParseBlockTaskStep};
+use yozora_core_tokenizer::{BlockToken, ParseBlockPhaseApi};
 
-use crate::r#match::TokenData;
+use crate::r#match::ListTokenData;
 
 pub(crate) fn parse_list_tokens(
     tokens: &[BlockToken],
@@ -11,7 +12,7 @@ pub(crate) fn parse_list_tokens(
     let mut list_item_tokens: Vec<&BlockToken> = Vec::new();
 
     for token in tokens {
-        let Some(data) = token.data_as::<TokenData>() else {
+        let Some(data) = token.data_as::<ListTokenData>() else {
             continue;
         };
 
@@ -20,7 +21,7 @@ pub(crate) fn parse_list_tokens(
             continue;
         }
 
-        let Some(first_data) = list_item_tokens[0].data_as::<TokenData>() else {
+        let Some(first_data) = list_item_tokens[0].data_as::<ListTokenData>() else {
             list_item_tokens.clear();
             list_item_tokens.push(token);
             continue;
@@ -50,12 +51,12 @@ pub(crate) fn parse_list_tokens(
 
 fn resolve_list(tokens: &[&BlockToken], parse_api: &dyn ParseBlockPhaseApi) -> Option<Node> {
     let first_token = *tokens.first()?;
-    let first_data = first_token.data_as::<TokenData>()?;
+    let first_data = first_token.data_as::<ListTokenData>()?;
     let spread = calc_spread(tokens);
 
     let mut children = Vec::with_capacity(tokens.len());
     for token in tokens {
-        let data = token.data_as::<TokenData>()?;
+        let data = token.data_as::<ListTokenData>()?;
         let item_nodes = parse_api.parse_block_tokens(Some(&token.children));
         let item_children = if spread {
             item_nodes
@@ -248,12 +249,12 @@ pub(crate) fn create_list_parse_task(
     let mut pending = Vec::new();
     let mut list_item_tokens: Vec<&BlockToken> = Vec::new();
     for token in tokens {
-        let Some(data) = token.data_as::<TokenData>() else {
+        let Some(data) = token.data_as::<ListTokenData>() else {
             continue;
         };
         let is_same_list = list_item_tokens
             .first()
-            .and_then(|first| first.data_as::<TokenData>())
+            .and_then(|first| first.data_as::<ListTokenData>())
             .is_some_and(|first| {
                 first.ordered == data.ordered
                     && first.order_type == data.order_type
@@ -287,12 +288,12 @@ fn build_pending_list(
     should_reserve_position: bool,
 ) -> Option<PendingList> {
     let first_token = *tokens.first()?;
-    let first_data = first_token.data_as::<TokenData>()?;
+    let first_data = first_token.data_as::<ListTokenData>()?;
     let spread = calc_spread(tokens);
     let items = tokens
         .iter()
         .filter_map(|token| {
-            let data = token.data_as::<TokenData>()?;
+            let data = token.data_as::<ListTokenData>()?;
             Some(PendingListItem {
                 position: if should_reserve_position {
                     token.position.clone()

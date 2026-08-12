@@ -1,10 +1,12 @@
 mod single_priority;
 mod types;
 
-pub use types::MatchInlineProcessorHook;
+pub use types::{MatchInlineProcessorHook, PhrasingContentProcessor};
 
 use single_priority::SinglePriorityDelimiterProcessor;
-use yozora_core_tokenizer::{DelimiterType, InlineToken, TokenDelimiter};
+use yozora_core_tokenizer::{
+    DelimiterType, InlineToken, InlineTokenizer, MatchInlinePhaseApi, TokenDelimiter,
+};
 #[derive(Clone)]
 struct NearestDelimiterItem {
     hook_index: usize,
@@ -115,6 +117,61 @@ fn group_hooks_by_priority(hooks: &[MatchInlineProcessorHook<'_>]) -> Vec<Vec<us
     }
 
     groups
+}
+
+pub fn create_processor_hook<'a>(
+    tokenizer: &'a dyn InlineTokenizer,
+    api: &'a dyn MatchInlinePhaseApi,
+) -> MatchInlineProcessorHook<'a> {
+    MatchInlineProcessorHook::new(
+        tokenizer.name(),
+        tokenizer.priority(),
+        tokenizer.r#match(api),
+    )
+}
+
+pub fn create_processor_hook_groups<'a, A>(
+    tokenizers: &'a [Box<dyn InlineTokenizer>],
+    apis: &'a [A],
+) -> Vec<Vec<MatchInlineProcessorHook<'a>>>
+where
+    A: MatchInlinePhaseApi + 'a,
+{
+    let mut groups = Vec::new();
+    let mut tokenizer_index = 0usize;
+    let mut group_index = 0usize;
+    while tokenizer_index < tokenizers.len() {
+        let api = apis
+            .get(group_index)
+            .expect("each inline tokenizer priority group requires an api");
+        let priority = tokenizers[tokenizer_index].priority();
+        let mut group = Vec::new();
+        while tokenizer_index < tokenizers.len()
+            && tokenizers[tokenizer_index].priority() == priority
+        {
+            group.push(create_processor_hook(
+                tokenizers[tokenizer_index].as_ref(),
+                api,
+            ));
+            tokenizer_index += 1;
+        }
+        groups.push(group);
+        group_index += 1;
+    }
+    groups
+}
+
+pub fn create_phrasing_content_processor<'a>(
+    hook_groups: Vec<Vec<MatchInlineProcessorHook<'a>>>,
+    hook_group_index: usize,
+) -> PhrasingContentProcessor<'a> {
+    PhrasingContentProcessor {
+        hooks: hook_groups
+            .into_iter()
+            .skip(hook_group_index)
+            .flatten()
+            .collect(),
+    }
 }
 
 pub fn match_inline_tokens(

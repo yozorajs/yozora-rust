@@ -5,7 +5,7 @@ use yozora_core_tokenizer::{
 };
 
 #[derive(Debug, Clone)]
-pub(crate) struct ParagraphTokenData {
+pub struct ParagraphTokenData {
     pub lines: Vec<PhrasingContentLine>,
 }
 

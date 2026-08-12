@@ -1,10 +1,22 @@
+use std::sync::Arc;
+
 use yozora_ast::{FootnoteDefinition, Node, Position};
-use yozora_core_tokenizer::{BlockToken, ParseBlockPhaseApi, ParseBlockTask, ParseBlockTaskStep};
+use yozora_character::NodePoint;
+use yozora_core_tokenizer::types::parse_block::{ParseBlockTask, ParseBlockTaskStep};
+use yozora_core_tokenizer::{BlockToken, ParseBlockPhaseApi};
 
 #[derive(Debug, Clone)]
-pub(crate) struct FootnoteDefinitionTokenData {
-    pub label: String,
-    pub identifier: String,
+pub struct FootnoteDefinitionLabel {
+    pub node_points: Arc<Vec<NodePoint>>,
+    pub start_index: usize,
+    pub end_index: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct FootnoteDefinitionTokenData {
+    pub label: FootnoteDefinitionLabel,
+    pub _label: Option<String>,
+    pub _identifier: Option<String>,
 }
 
 pub(crate) fn parse_footnote_definition_tokens(
@@ -25,8 +37,8 @@ pub(crate) fn parse_footnote_definition_tokens(
             } else {
                 None
             },
-            identifier: data.identifier.clone(),
-            label: data.label.clone(),
+            identifier: data._identifier.clone().unwrap_or_default(),
+            label: data._label.clone().unwrap_or_default(),
             children,
         }));
     }
@@ -88,8 +100,8 @@ pub(crate) fn create_footnote_definition_parse_task(
                 } else {
                     None
                 },
-                identifier: data.identifier.clone(),
-                label: data.label.clone(),
+                identifier: data._identifier.clone().unwrap_or_default(),
+                label: data._label.clone().unwrap_or_default(),
                 children: token.children.to_vec(),
             })
         })

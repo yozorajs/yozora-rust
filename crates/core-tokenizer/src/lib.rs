@@ -16,12 +16,13 @@ pub use types::match_inline::{
     FindDelimiterGenerator, IsDelimiterPairResult, MatchInlineFallbackPhaseApi, MatchInlineHook,
     MatchInlinePhaseApi, ProcessDelimiterPairResult,
 };
-pub use types::parse_block::{
-    ParseBlockHook, ParseBlockPhaseApi, ParseBlockTask, ParseBlockTaskStep,
-};
+pub use types::parse_block::{ParseBlockHook, ParseBlockPhaseApi};
 pub use types::parse_inline::{ParseInlineHook, ParseInlinePhaseApi};
 pub use types::phrasing_content::PhrasingContentLine;
-pub use types::token::{BlockToken, BlockTokenChildren, InlineToken, TokenData, TokenDelimiter};
+pub use types::token::{
+    BlockToken, BlockTokenChildren, InlineToken, TokenData, TokenDataTypeMismatch, TokenDelimiter,
+    TypedBlockToken, TypedInlineToken,
+};
 pub use types::tokenizer::{BlockTokenizer, InlineFallbackTokenizer, InlineTokenizer, Tokenizer};
 pub use types::util::{NodeInterval, ResultOfOptionalEater, ResultOfRequiredEater};
 pub use util::phrasing_content::{

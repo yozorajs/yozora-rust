@@ -2,7 +2,7 @@ use yozora_ast::{FootnoteReference, Node};
 use yozora_core_tokenizer::{InlineToken, NodeInterval, ParseInlinePhaseApi};
 
 #[derive(Debug, Clone)]
-pub(crate) struct FootnoteReferenceTokenData {
+pub struct FootnoteReferenceTokenData {
     pub identifier: String,
     pub label: String,
 }

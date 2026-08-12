@@ -1,4 +1,5 @@
 use yozora_ast::{Node, NodeType, PARAGRAPH_TYPE};
+use yozora_core_tokenizer::types::parse_block::ParseBlockTask;
 use yozora_core_tokenizer::*;
 
 use crate::{parse, r#match};
@@ -27,8 +28,8 @@ impl Default for ListTokenizerOptions {
 #[derive(Debug, Clone)]
 pub struct ListTokenizer {
     meta: TokenizerMeta,
-    enable_task_list_item: bool,
-    empty_item_could_not_interrupted_types: Vec<NodeType>,
+    pub enable_task_list_item: bool,
+    pub empty_item_could_not_interrupted_types: Vec<NodeType>,
 }
 
 impl Default for ListTokenizer {

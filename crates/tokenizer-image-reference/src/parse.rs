@@ -3,7 +3,7 @@ use yozora_core_tokenizer::{InlineToken, NodeInterval, ParseInlinePhaseApi};
 use yozora_tokenizer_image::calc_image_alt;
 
 #[derive(Debug, Clone)]
-pub(crate) struct ImageReferenceTokenData {
+pub struct ImageReferenceTokenData {
     pub identifier: String,
     pub label: String,
     pub reference_type: ReferenceType,

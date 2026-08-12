@@ -2,10 +2,12 @@ mod r#match;
 mod parse;
 mod tokenizer;
 
+pub use parse::{FootnoteDefinitionLabel, FootnoteDefinitionTokenData};
 pub use r#match::eat_footnote_label;
 pub use tokenizer::{FootnoteDefinitionTokenizer, FOOTNOTE_DEFINITION_TOKENIZER_NAME};
 
-pub type FootnoteDefinitionToken = yozora_core_tokenizer::BlockToken;
+pub type FootnoteDefinitionToken =
+    yozora_core_tokenizer::TypedBlockToken<FootnoteDefinitionTokenData>;
 pub type FootnoteDefinitionHookContext = FootnoteDefinitionTokenizer;
 pub type FootnoteDefinitionTokenizerProps = yozora_core_tokenizer::TokenizerOptions;
 

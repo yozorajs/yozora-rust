@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use yozora_ast::{Admonition, Node, Position};
 use yozora_character::{calc_escaped_string_from_node_points, is_unicode_whitespace_character};
+use yozora_core_tokenizer::types::parse_block::{ParseBlockTask, ParseBlockTaskStep};
 use yozora_core_tokenizer::{
-    merge_and_strip_content_lines, BlockToken, ParseBlockPhaseApi, ParseBlockTask,
-    ParseBlockTaskStep, PhrasingContentLine,
+    merge_and_strip_content_lines, BlockToken, ParseBlockPhaseApi, PhrasingContentLine,
 };
 use yozora_tokenizer_fenced_block::FencedBlockTokenData;
 

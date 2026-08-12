@@ -2,9 +2,10 @@ mod r#match;
 mod parse;
 mod tokenizer;
 
+pub use r#match::HeadingTokenData;
 pub use tokenizer::{HeadingTokenizer, HEADING_TOKENIZER_NAME};
 
-pub type HeadingToken = yozora_core_tokenizer::BlockToken;
+pub type HeadingToken = yozora_core_tokenizer::TypedBlockToken<HeadingTokenData>;
 pub type HeadingHookContext = HeadingTokenizer;
 pub type HeadingTokenizerProps = yozora_core_tokenizer::TokenizerOptions;
 

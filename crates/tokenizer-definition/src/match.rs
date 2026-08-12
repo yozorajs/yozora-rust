@@ -34,7 +34,7 @@ pub struct CollectResult<T> {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct TokenData {
+pub struct DefinitionTokenData {
     pub lines: Vec<PhrasingContentLine>,
     pub label: LinkLabelCollectingState,
     pub destination: Option<LinkDestinationCollectingState>,
@@ -42,6 +42,8 @@ pub(crate) struct TokenData {
     pub line_no_of_label: usize,
     pub line_no_of_destination: isize,
     pub line_no_of_title: isize,
+    pub _label: Option<String>,
+    pub _identifier: Option<String>,
 }
 
 pub(crate) fn eat_opener(line: &PhrasingContentLine) -> Option<EatOpenerResult> {
@@ -64,7 +66,7 @@ pub(crate) fn eat_opener(line: &PhrasingContentLine) -> Option<EatOpenerResult> 
     }
 
     let line_no = node_points[start_index].line;
-    let mut data = TokenData {
+    let mut data = DefinitionTokenData {
         lines: vec![line.clone()],
         label: label_result.state,
         destination: None,
@@ -72,6 +74,8 @@ pub(crate) fn eat_opener(line: &PhrasingContentLine) -> Option<EatOpenerResult> 
         line_no_of_label: line_no,
         line_no_of_destination: -1,
         line_no_of_title: -1,
+        _label: None,
+        _identifier: None,
     };
 
     if !data.label.saturated {
@@ -156,7 +160,7 @@ pub(crate) fn eat_continuation_text(
     line: &PhrasingContentLine,
     token: &mut BlockToken,
 ) -> EatContinuationTextResult {
-    let Some(mut data) = token.data_as::<TokenData>().cloned() else {
+    let Some(mut data) = token.data_as::<DefinitionTokenData>().cloned() else {
         return EatContinuationTextResult::NotMatched;
     };
 
@@ -297,10 +301,10 @@ pub(crate) fn eat_continuation_text(
 }
 
 pub(crate) fn on_close(
-    token: &BlockToken,
+    token: &mut BlockToken,
     match_api: &dyn MatchBlockPhaseApi,
 ) -> Option<OnCloseResult> {
-    let data = token.data_as::<TokenData>()?;
+    let mut data = token.data_as::<DefinitionTokenData>()?.clone();
 
     if !data.label.saturated {
         return Some(OnCloseResult::FailedAndRollback {
@@ -327,7 +331,7 @@ pub(crate) fn on_close(
             });
         }
 
-        let rollback_start_line = calc_title_start_line_index(data);
+        let rollback_start_line = calc_title_start_line_index(&data);
         let rollback_lines = if rollback_start_line < data.lines.len() {
             data.lines[rollback_start_line..].to_vec()
         } else {
@@ -338,8 +342,11 @@ pub(crate) fn on_close(
         });
     }
 
-    let (_, identifier) = resolve_label_and_identifier(&data.label.node_points)?;
+    let (label, identifier) = resolve_label_and_identifier(&data.label.node_points)?;
     match_api.register_definition_identifier(&identifier);
+    data._label = Some(label);
+    data._identifier = Some(identifier);
+    token.data = std::sync::Arc::new(data);
     result
 }
 
@@ -717,7 +724,7 @@ pub(crate) fn resolve_label_and_identifier(label_points: &[NodePoint]) -> Option
     Some((label, identifier))
 }
 
-fn calc_title_start_line_index(data: &TokenData) -> usize {
+fn calc_title_start_line_index(data: &DefinitionTokenData) -> usize {
     if data.line_no_of_title < data.line_no_of_label as isize {
         return 0;
     }
@@ -725,7 +732,10 @@ fn calc_title_start_line_index(data: &TokenData) -> usize {
     data.line_no_of_title as usize - data.line_no_of_label
 }
 
-pub(crate) fn calc_effective_position(token: &BlockToken, data: &TokenData) -> Option<Position> {
+pub(crate) fn calc_effective_position(
+    token: &BlockToken,
+    data: &DefinitionTokenData,
+) -> Option<Position> {
     let mut position = token.position.clone()?;
 
     if data.title.as_ref().is_some_and(|title| !title.saturated)

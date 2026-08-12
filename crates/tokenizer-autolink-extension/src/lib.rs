@@ -2,13 +2,15 @@ mod r#match;
 mod parse;
 mod tokenizer;
 
+pub use parse::{AutolinkExtensionContentType, AutolinkExtensionTokenData};
 pub use r#match::{
     eat_domain_segment, eat_extend_email_address, eat_extended_url, eat_optional_domain_follows,
     eat_valid_domain, eat_www_domain, DomainSegmentEatResult,
 };
 pub use tokenizer::{AutolinkExtensionTokenizer, AUTOLINK_EXTENSION_TOKENIZER_NAME};
 
-pub type AutolinkExtensionToken = yozora_core_tokenizer::InlineToken;
+pub type AutolinkExtensionToken =
+    yozora_core_tokenizer::TypedInlineToken<AutolinkExtensionTokenData>;
 pub type AutolinkExtensionHookContext = AutolinkExtensionTokenizer;
 pub type AutolinkExtensionTokenizerProps = yozora_core_tokenizer::TokenizerOptions;
 

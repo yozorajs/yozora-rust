@@ -2,9 +2,10 @@ mod r#match;
 mod parse;
 mod tokenizer;
 
+pub use r#match::ThematicBreakTokenData;
 pub use tokenizer::{ThematicBreakTokenizer, THEMATIC_BREAK_TOKENIZER_NAME};
 
-pub type ThematicBreakToken = yozora_core_tokenizer::BlockToken;
+pub type ThematicBreakToken = yozora_core_tokenizer::TypedBlockToken<ThematicBreakTokenData>;
 pub type ThematicBreakHookContext = ThematicBreakTokenizer;
 pub type ThematicBreakTokenizerProps = yozora_core_tokenizer::TokenizerOptions;
 

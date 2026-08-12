@@ -3,7 +3,7 @@ use yozora_character::{calc_string_from_node_points, is_space_like};
 use yozora_core_tokenizer::{InlineToken, NodeInterval, ParseInlinePhaseApi};
 
 #[derive(Debug, Clone)]
-pub(crate) struct InlineMathTokenData {
+pub struct InlineMathTokenData {
     pub thickness: usize,
 }
 

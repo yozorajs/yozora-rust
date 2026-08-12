@@ -2,11 +2,11 @@ use yozora_ast::{LinkReference, Node, ReferenceType, Text};
 use yozora_core_tokenizer::{InlineToken, NodeInterval, ParseInlinePhaseApi};
 
 #[derive(Debug, Clone)]
-pub(crate) struct LinkReferenceTokenData {
+pub struct LinkReferenceTokenData {
     pub identifier: String,
     pub label: String,
     pub reference_type: ReferenceType,
-    pub child_text: String,
+    pub(crate) child_text: String,
 }
 
 pub(crate) fn parse_link_reference_tokens(

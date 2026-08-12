@@ -3,10 +3,11 @@ mod parse;
 mod tokenizer;
 mod util;
 
+pub use r#match::HtmlInlineTokenData;
 pub use tokenizer::{HtmlInlineTokenizer, HTML_INLINE_TOKENIZER_NAME};
 pub use util::*;
 
-pub type HtmlInlineToken = yozora_core_tokenizer::InlineToken;
+pub type HtmlInlineToken = yozora_core_tokenizer::TypedInlineToken<HtmlInlineTokenData>;
 pub type HtmlInlineHookContext = HtmlInlineTokenizer;
 pub type HtmlInlineTokenizerProps = yozora_core_tokenizer::TokenizerOptions;
 

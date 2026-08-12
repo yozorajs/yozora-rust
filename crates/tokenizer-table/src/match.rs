@@ -1,21 +1,31 @@
-use yozora_ast::{AlignType, Position, TableColumn, TABLE_TYPE};
+use std::sync::Arc;
+
+use yozora_ast::{
+    AlignType, NodeType, Position, TableColumn, TABLE_CELL_TYPE, TABLE_ROW_TYPE, TABLE_TYPE,
+};
 use yozora_character::{is_whitespace_character, AsciiCodePoint};
 use yozora_core_tokenizer::*;
 
 #[derive(Debug, Clone)]
-pub(crate) struct TableCellTokenData {
-    pub position: Option<Position>,
+pub struct TableCellTokenData {
+    pub tokenizer: Option<Arc<str>>,
+    pub node_type: NodeType,
+    pub children: Option<BlockTokenChildren>,
+    pub position: Position,
     pub lines: Vec<PhrasingContentLine>,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct TableRowTokenData {
-    pub position: Option<Position>,
+pub struct TableRowTokenData {
+    pub tokenizer: Option<Arc<str>>,
+    pub node_type: NodeType,
+    pub children: Option<BlockTokenChildren>,
+    pub position: Position,
     pub cells: Vec<TableCellTokenData>,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct TokenData {
+pub struct TableTokenData {
     pub columns: Vec<TableColumn>,
     pub rows: Vec<TableRowTokenData>,
 }
@@ -47,7 +57,7 @@ pub(crate) fn eat_and_interrupt_previous_sibling(
     let row = calc_table_row(previous_line, &columns)?;
     let position = calc_spanning_position(previous_line, line);
 
-    let token = BlockToken::new("", TABLE_TYPE, position).with_data(TokenData {
+    let token = BlockToken::new("", TABLE_TYPE, position).with_data(TableTokenData {
         columns,
         rows: vec![row],
     });
@@ -78,7 +88,7 @@ pub(crate) fn eat_lazy_continuation_text(
         return EatLazyContinuationTextResult::NotMatched;
     }
 
-    let Some(data) = token.data_as::<TokenData>().cloned() else {
+    let Some(data) = token.data_as::<TableTokenData>().cloned() else {
         return EatLazyContinuationTextResult::NotMatched;
     };
 
@@ -89,7 +99,7 @@ pub(crate) fn eat_lazy_continuation_text(
     let mut rows = data.rows;
     rows.push(row);
 
-    token.data = std::sync::Arc::new(TokenData {
+    token.data = std::sync::Arc::new(TableTokenData {
         columns: data.columns,
         rows,
     });
@@ -287,11 +297,14 @@ fn calc_table_row(
         };
 
         cells.push(TableCellTokenData {
-            position: Some(Position {
+            tokenizer: None,
+            node_type: TABLE_CELL_TYPE,
+            children: None,
+            position: Position {
                 start: start_point,
                 end: end_point,
                 indent: None,
-            }),
+            },
             lines,
         });
 
@@ -308,21 +321,27 @@ fn calc_table_row(
     let row_end = calc_end_point(node_points, end_index - 1);
     while cells.len() < columns.len() {
         cells.push(TableCellTokenData {
-            position: Some(Position {
+            tokenizer: None,
+            node_type: TABLE_CELL_TYPE,
+            children: None,
+            position: Position {
                 start: row_end,
                 end: row_end,
                 indent: None,
-            }),
+            },
             lines: Vec::new(),
         });
     }
 
     Some(TableRowTokenData {
-        position: Some(Position {
+        tokenizer: None,
+        node_type: TABLE_ROW_TYPE,
+        children: None,
+        position: Position {
             start: row_start,
             end: row_end,
             indent: None,
-        }),
+        },
         cells,
     })
 }

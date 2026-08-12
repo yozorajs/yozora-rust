@@ -2,9 +2,10 @@ mod r#match;
 mod parse;
 mod tokenizer;
 
+pub use parse::EcmaImportTokenData;
 pub use tokenizer::{EcmaImportTokenizer, ECMA_IMPORT_TOKENIZER_NAME};
 
-pub type EcmaImportToken = yozora_core_tokenizer::BlockToken;
+pub type EcmaImportToken = yozora_core_tokenizer::TypedBlockToken<EcmaImportTokenData>;
 pub type EcmaImportHookContext = EcmaImportTokenizer;
 pub type EcmaImportProps = yozora_core_tokenizer::TokenizerOptions;
 pub type EcmaImportTokenizerProps = yozora_core_tokenizer::TokenizerOptions;

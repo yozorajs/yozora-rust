@@ -5,18 +5,14 @@ use yozora_core_tokenizer::{
 };
 
 use crate::parse::ImageReferenceTokenData;
+use yozora_tokenizer_link_reference::LinkReferenceDelimiterBracket;
 
-#[derive(Debug, Clone)]
-pub(crate) struct ImageReferenceDelimiterBracket {
-    pub end_index: usize,
-    pub label: Option<String>,
-    pub identifier: Option<String>,
-}
+pub(crate) type ImageReferenceDelimiterBracket = LinkReferenceDelimiterBracket;
 
 #[derive(Debug, Clone)]
 pub(crate) struct DelimiterEntry {
     pub delimiter: TokenDelimiter,
-    pub brackets: Vec<ImageReferenceDelimiterBracket>,
+    pub brackets: Vec<LinkReferenceDelimiterBracket>,
 }
 
 pub(crate) fn find_image_reference_delimiter_entry(
@@ -68,7 +64,8 @@ pub(crate) fn find_image_reference_delimiter_entry(
             let next_index = next_index as usize;
             delimiter.delimiter = create_delimiter(DelimiterType::Closer, i, next_index);
 
-            let mut bracket = ImageReferenceDelimiterBracket {
+            let mut bracket = LinkReferenceDelimiterBracket {
+                start_index: i + 1,
                 end_index: next_index,
                 label: None,
                 identifier: None,

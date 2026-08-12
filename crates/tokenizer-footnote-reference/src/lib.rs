@@ -2,9 +2,11 @@ mod r#match;
 mod parse;
 mod tokenizer;
 
+pub use parse::FootnoteReferenceTokenData;
 pub use tokenizer::{FootnoteReferenceTokenizer, FOOTNOTE_REFERENCE_TOKENIZER_NAME};
 
-pub type FootnoteReferenceToken = yozora_core_tokenizer::InlineToken;
+pub type FootnoteReferenceToken =
+    yozora_core_tokenizer::TypedInlineToken<FootnoteReferenceTokenData>;
 pub type FootnoteReferenceHookContext = FootnoteReferenceTokenizer;
 pub type FootnoteReferenceTokenizerProps = yozora_core_tokenizer::TokenizerOptions;
 

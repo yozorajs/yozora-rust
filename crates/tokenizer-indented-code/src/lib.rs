@@ -2,9 +2,10 @@ mod r#match;
 mod parse;
 mod tokenizer;
 
+pub use parse::IndentedCodeTokenData;
 pub use tokenizer::{IndentedCodeTokenizer, INDENTED_CODE_TOKENIZER_NAME};
 
-pub type IndentedCodeToken = yozora_core_tokenizer::BlockToken;
+pub type IndentedCodeToken = yozora_core_tokenizer::TypedBlockToken<IndentedCodeTokenData>;
 pub type IndentedCodeHookContext = IndentedCodeTokenizer;
 pub type IndentedCodeTokenizerProps = yozora_core_tokenizer::TokenizerOptions;
 

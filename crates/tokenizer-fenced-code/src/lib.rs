@@ -4,7 +4,8 @@ mod tokenizer;
 
 pub use tokenizer::{FencedCodeTokenizer, FENCED_CODE_TOKENIZER_NAME};
 
-pub type FencedCodeToken = yozora_core_tokenizer::BlockToken;
+pub type FencedCodeToken =
+    yozora_core_tokenizer::TypedBlockToken<yozora_tokenizer_fenced_block::FencedBlockTokenData>;
 pub type FencedCodeHookContext = FencedCodeTokenizer;
 pub type FencedCodeTokenizerProps = yozora_core_tokenizer::TokenizerOptions;
 

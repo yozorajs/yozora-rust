@@ -4,7 +4,8 @@ mod tokenizer;
 
 pub use tokenizer::{MathTokenizer, MATH_TOKENIZER_NAME};
 
-pub type MathToken = yozora_core_tokenizer::BlockToken;
+pub type MathToken =
+    yozora_core_tokenizer::TypedBlockToken<yozora_tokenizer_fenced_block::FencedBlockTokenData>;
 pub type MathHookContext = MathTokenizer;
 pub type MathTokenizerProps = yozora_core_tokenizer::TokenizerOptions;
 

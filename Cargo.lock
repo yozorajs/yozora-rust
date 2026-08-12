@@ -705,7 +705,6 @@ dependencies = [
  "yozora-core-parser",
  "yozora-markup-weaver",
  "yozora-parser",
- "yozora-suitecases",
 ]
 
 [[package]]
@@ -883,6 +882,7 @@ dependencies = [
  "yozora-character",
  "yozora-core-tokenizer",
  "yozora-tokenizer-image",
+ "yozora-tokenizer-link-reference",
 ]
 
 [[package]]

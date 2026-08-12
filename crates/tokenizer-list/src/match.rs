@@ -6,7 +6,8 @@ use yozora_character::{
 use yozora_core_tokenizer::*;
 
 #[derive(Debug, Clone)]
-pub(crate) struct TokenData {
+pub struct ListTokenData {
+    pub _is_empty: bool,
     pub ordered: bool,
     pub marker: u32,
     pub order_type: Option<String>,
@@ -18,6 +19,7 @@ pub(crate) struct TokenData {
 
 #[derive(Debug, Clone)]
 struct ParsedOpener {
+    is_empty: bool,
     ordered: bool,
     marker: u32,
     order_type: Option<String>,
@@ -45,7 +47,8 @@ pub(crate) fn eat_opener(
         LIST_TYPE,
         calc_segment_position(line, line.start_index, opener.next_index),
     )
-    .with_data(TokenData {
+    .with_data(ListTokenData {
+        _is_empty: opener.is_empty,
         ordered: opener.ordered,
         marker: opener.marker,
         order_type: opener.order_type,
@@ -69,7 +72,7 @@ pub(crate) fn eat_and_interrupt_previous_sibling(
     enable_task_list_item: bool,
 ) -> Option<EatAndInterruptPreviousSiblingResult> {
     let opener = eat_opener(line, enable_task_list_item)?;
-    let data = opener.token.data_as::<TokenData>()?;
+    let data = opener.token.data_as::<ListTokenData>()?;
 
     if empty_item_could_not_interrupted_types.contains(&prev_sibling_token.node_type) {
         if data.indent == line.end_index.saturating_sub(line.start_index) {
@@ -93,7 +96,7 @@ pub(crate) fn eat_continuation_text(
     line: &PhrasingContentLine,
     token: &mut BlockToken,
 ) -> EatContinuationTextResult {
-    let Some(mut data) = token.data_as::<TokenData>().cloned() else {
+    let Some(mut data) = token.data_as::<ListTokenData>().cloned() else {
         return EatContinuationTextResult::NotMatched;
     };
 
@@ -248,6 +251,7 @@ fn parse_list_opener(
     }
 
     let indent = i - start_index + count_of_spaces;
+    let is_empty = is_blank_range(node_points, next_index, end_index);
 
     let mut status = None;
     if enable_task_list_item {
@@ -257,6 +261,7 @@ fn parse_list_opener(
     }
 
     Some(ParsedOpener {
+        is_empty,
         ordered,
         marker,
         order_type: if ordered {
@@ -345,4 +350,38 @@ fn update_token_end_position(token: &mut BlockToken, line: &PhrasingContentLine)
     }
 
     position.end = calc_end_point(line.node_points.as_ref(), line.end_index - 1);
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use yozora_character::create_node_point_generator;
+    use yozora_core_tokenizer::PhrasingContentLine;
+
+    use super::{eat_opener, ListTokenData};
+
+    #[test]
+    fn task_marker_does_not_make_list_item_empty() {
+        let node_points = create_node_point_generator("- [ ]\n")
+            .pop()
+            .expect("expected node points");
+        let end_index = node_points.len();
+        let line = PhrasingContentLine {
+            node_points: Arc::new(node_points),
+            start_index: 0,
+            end_index,
+            first_non_whitespace_index: 0,
+            indent_width: 0,
+            count_of_precede_spaces: 0,
+        };
+
+        let token = eat_opener(&line, true)
+            .expect("expected task list token")
+            .token;
+        let data = token
+            .data_as::<ListTokenData>()
+            .expect("expected list token data");
+        assert!(!data._is_empty);
+    }
 }

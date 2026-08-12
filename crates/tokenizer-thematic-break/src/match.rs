@@ -5,6 +5,12 @@ use yozora_core_tokenizer::{
     EatOpenerResult, PhrasingContentLine, RemainingSibling,
 };
 
+#[derive(Debug, Clone)]
+pub struct ThematicBreakTokenData {
+    pub marker: i32,
+    pub continuous: bool,
+}
+
 pub(crate) fn eat_opener(line: &PhrasingContentLine) -> Option<EatOpenerResult> {
     if line.count_of_precede_spaces >= 4 {
         return None;
@@ -57,8 +63,12 @@ pub(crate) fn eat_opener(line: &PhrasingContentLine) -> Option<EatOpenerResult> 
         return None;
     }
 
-    let _ = (marker, continuous);
-    let token = BlockToken::new("", THEMATIC_BREAK_TYPE, calc_line_position(line));
+    let token = BlockToken::new("", THEMATIC_BREAK_TYPE, calc_line_position(line)).with_data(
+        ThematicBreakTokenData {
+            marker: marker?,
+            continuous,
+        },
+    );
 
     Some(EatOpenerResult {
         token,

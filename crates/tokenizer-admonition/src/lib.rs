@@ -4,7 +4,8 @@ mod tokenizer;
 
 pub use tokenizer::{AdmonitionTokenizer, ADMONITION_TOKENIZER_NAME};
 
-pub type AdmonitionToken = yozora_core_tokenizer::BlockToken;
+pub type AdmonitionToken =
+    yozora_core_tokenizer::TypedBlockToken<yozora_tokenizer_fenced_block::FencedBlockTokenData>;
 pub type AdmonitionHookContext = AdmonitionTokenizer;
 pub type AdmonitionTokenizerProps = yozora_core_tokenizer::TokenizerOptions;
 

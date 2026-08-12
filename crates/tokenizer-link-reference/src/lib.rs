@@ -2,10 +2,11 @@ mod r#match;
 mod parse;
 mod tokenizer;
 
+pub use parse::LinkReferenceTokenData;
 pub use r#match::LinkReferenceDelimiterBracket;
 pub use tokenizer::{LinkReferenceTokenizer, LINK_REFERENCE_TOKENIZER_NAME};
 
-pub type LinkReferenceToken = yozora_core_tokenizer::InlineToken;
+pub type LinkReferenceToken = yozora_core_tokenizer::TypedInlineToken<LinkReferenceTokenData>;
 pub type LinkReferenceHookContext = LinkReferenceTokenizer;
 pub type LinkReferenceTokenizerProps = yozora_core_tokenizer::TokenizerOptions;
 

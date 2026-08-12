@@ -3,10 +3,11 @@ mod parse;
 mod tokenizer;
 mod util;
 
+pub use parse::ImageTokenData;
 pub use tokenizer::{ImageTokenizer, IMAGE_TOKENIZER_NAME};
 pub use util::calc_image_alt;
 
-pub type ImageToken = yozora_core_tokenizer::InlineToken;
+pub type ImageToken = yozora_core_tokenizer::TypedInlineToken<ImageTokenData>;
 pub type ImageHookContext = ImageTokenizer;
 pub type ImageTokenizerProps = yozora_core_tokenizer::TokenizerOptions;
 

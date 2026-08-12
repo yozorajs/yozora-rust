@@ -5,7 +5,7 @@ use yozora_core_tokenizer::{InlineToken, NodeInterval, ParseInlinePhaseApi};
 use crate::util::calc_image_alt;
 
 #[derive(Debug, Clone)]
-pub(crate) struct ImageTokenData {
+pub struct ImageTokenData {
     pub destination_content: Option<NodeInterval>,
     pub title_content: Option<NodeInterval>,
 }

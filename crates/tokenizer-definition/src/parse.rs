@@ -2,7 +2,7 @@ use yozora_ast::{Definition, Node};
 use yozora_character::{calc_escaped_string_from_node_points, AsciiCodePoint};
 use yozora_core_tokenizer::{BlockToken, ParseBlockPhaseApi};
 
-use crate::r#match::{calc_effective_position, resolve_label_and_identifier, TokenData};
+use crate::r#match::{calc_effective_position, resolve_label_and_identifier, DefinitionTokenData};
 
 pub(crate) fn parse_definition_tokens(
     tokens: &[BlockToken],
@@ -11,7 +11,7 @@ pub(crate) fn parse_definition_tokens(
     let mut nodes = Vec::with_capacity(tokens.len());
 
     for token in tokens {
-        let Some(data) = token.data_as::<TokenData>() else {
+        let Some(data) = token.data_as::<DefinitionTokenData>() else {
             continue;
         };
 

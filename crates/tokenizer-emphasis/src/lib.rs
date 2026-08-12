@@ -2,9 +2,10 @@ mod r#match;
 mod parse;
 mod tokenizer;
 
+pub use parse::EmphasisTokenData;
 pub use tokenizer::{EmphasisTokenizer, EMPHASIS_TOKENIZER_NAME};
 
-pub type EmphasisToken = yozora_core_tokenizer::InlineToken;
+pub type EmphasisToken = yozora_core_tokenizer::TypedInlineToken<EmphasisTokenData>;
 pub type EmphasisHookContext = EmphasisTokenizer;
 pub type EmphasisTokenizerProps = yozora_core_tokenizer::TokenizerOptions;
 

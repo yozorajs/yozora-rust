@@ -12,9 +12,6 @@ pub use base_tester::BaseTester;
 pub use markup_tester::MarkupTester;
 pub use tokenizer_tester::TokenizerTester;
 pub use types::{BaseTesterProps, TestFailure, YozoraUseCase, YozoraUseCaseGroup};
-pub use yozora_suitecases::{
-    collect_fixture_files, compare_parse_answer, expand_fixture_cases, FixtureCase, FixtureDocument,
-};
 
 pub fn fixture_root_directory() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")

@@ -8,7 +8,7 @@ use yozora_core_tokenizer::{
     EatContinuationTextResult, EatOpenerResult, MatchBlockPhaseApi, PhrasingContentLine,
 };
 
-use crate::parse::FootnoteDefinitionTokenData;
+use crate::parse::{FootnoteDefinitionLabel, FootnoteDefinitionTokenData};
 
 pub(crate) fn eat_opener(
     line: &PhrasingContentLine,
@@ -46,7 +46,15 @@ pub(crate) fn eat_opener(
         FOOTNOTE_DEFINITION_TYPE,
         calc_line_position(line, colon_index),
     )
-    .with_data(FootnoteDefinitionTokenData { label, identifier });
+    .with_data(FootnoteDefinitionTokenData {
+        label: FootnoteDefinitionLabel {
+            node_points: line.node_points.clone(),
+            start_index: line.first_non_whitespace_index + 2,
+            end_index: colon_index - 1,
+        },
+        _label: Some(label),
+        _identifier: Some(identifier),
+    });
 
     Some(EatOpenerResult {
         token,
@@ -80,7 +88,9 @@ pub(crate) fn on_close(token: &BlockToken, api: &dyn MatchBlockPhaseApi) {
         return;
     };
 
-    api.register_footnote_definition_identifier(&data.identifier);
+    if let Some(identifier) = &data._identifier {
+        api.register_footnote_definition_identifier(identifier);
+    }
 }
 
 pub fn eat_footnote_label(

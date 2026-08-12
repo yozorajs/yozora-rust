@@ -8,8 +8,9 @@ use yozora_core_tokenizer::{
 };
 
 #[derive(Debug, Clone)]
-pub(crate) struct HtmlBlockTokenData {
-    pub kind: HtmlBlockKind,
+pub struct HtmlBlockTokenData {
+    pub condition: u8,
+    kind: HtmlBlockKind,
     pub lines: Vec<PhrasingContentLine>,
 }
 
@@ -25,6 +26,18 @@ pub(crate) enum HtmlBlockKind {
 }
 
 impl HtmlBlockKind {
+    fn condition(&self) -> u8 {
+        match self {
+            Self::Type1(_) => 1,
+            Self::Type2 => 2,
+            Self::Type3 => 3,
+            Self::Type4 => 4,
+            Self::Type5 => 5,
+            Self::Type6 => 6,
+            Self::Type7 => 7,
+        }
+    }
+
     pub(crate) fn ends_on_blank_line(&self) -> bool {
         matches!(self, Self::Type6 | Self::Type7)
     }
@@ -47,6 +60,7 @@ pub(crate) fn eat_opener(line: &PhrasingContentLine) -> Option<EatOpenerResult> 
 
     let token =
         BlockToken::new("", HTML_TYPE, calc_line_position(line)).with_data(HtmlBlockTokenData {
+            condition: kind.condition(),
             kind: kind.clone(),
             lines: vec![line.clone()],
         });
@@ -95,6 +109,7 @@ pub(crate) fn eat_continuation_text(
     let should_close = !data.kind.ends_on_blank_line() && data.kind.is_closed_by_line(&source);
 
     token.data = Arc::new(HtmlBlockTokenData {
+        condition: data.condition,
         kind: data.kind,
         lines,
     });

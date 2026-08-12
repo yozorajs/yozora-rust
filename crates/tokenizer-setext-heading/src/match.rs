@@ -6,7 +6,7 @@ use yozora_core_tokenizer::{
 };
 
 #[derive(Debug, Clone)]
-pub(crate) struct SetextHeadingTokenData {
+pub struct SetextHeadingTokenData {
     pub marker: i32,
     pub lines: Vec<PhrasingContentLine>,
 }

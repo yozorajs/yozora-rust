@@ -6,7 +6,7 @@ use yozora_core_tokenizer::{
 };
 
 #[derive(Debug, Clone)]
-pub(crate) struct HeadingTokenData {
+pub struct HeadingTokenData {
     pub depth: u8,
     pub line: PhrasingContentLine,
 }

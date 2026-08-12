@@ -2,9 +2,10 @@ mod r#match;
 mod parse;
 mod tokenizer;
 
+pub use parse::ImageReferenceTokenData;
 pub use tokenizer::{ImageReferenceTokenizer, IMAGE_REFERENCE_TOKENIZER_NAME};
 
-pub type ImageReferenceToken = yozora_core_tokenizer::InlineToken;
+pub type ImageReferenceToken = yozora_core_tokenizer::TypedInlineToken<ImageReferenceTokenData>;
 pub type ImageReferenceHookContext = ImageReferenceTokenizer;
 pub type ImageReferenceTokenizerProps = yozora_core_tokenizer::TokenizerOptions;
 

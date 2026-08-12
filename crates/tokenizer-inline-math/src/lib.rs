@@ -2,12 +2,13 @@ mod r#match;
 mod parse;
 mod tokenizer;
 
+pub use parse::InlineMathTokenData;
 pub use tokenizer::{
     InlineMathTokenizer, InlineMathTokenizerOptions, INLINE_MATH_TOKENIZER_NAME,
     INLINE_MATH_TOKENIZER_NAME_WITH_BACKTICK, INLINE_MATH_WITH_BACKTICK_TOKENIZER_NAME,
 };
 
-pub type InlineMathToken = yozora_core_tokenizer::InlineToken;
+pub type InlineMathToken = yozora_core_tokenizer::TypedInlineToken<InlineMathTokenData>;
 pub type InlineMathHookContext = InlineMathTokenizer;
 pub type InlineMathTokenizerProps = InlineMathTokenizerOptions;
 

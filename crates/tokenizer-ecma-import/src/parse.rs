@@ -2,7 +2,7 @@ use yozora_ast::{EcmaImport, EcmaImportNamedImport, Node};
 use yozora_core_tokenizer::{BlockToken, ParseBlockPhaseApi};
 
 #[derive(Debug, Clone)]
-pub(crate) struct EcmaImportTokenData {
+pub struct EcmaImportTokenData {
     pub module_name: String,
     pub default_import: Option<String>,
     pub named_imports: Vec<EcmaImportNamedImport>,

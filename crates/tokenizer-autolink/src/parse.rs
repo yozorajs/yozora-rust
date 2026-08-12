@@ -9,7 +9,7 @@ pub enum AutolinkContentType {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct AutolinkTokenData {
+pub struct AutolinkTokenData {
     pub content_type: AutolinkContentType,
 }
 

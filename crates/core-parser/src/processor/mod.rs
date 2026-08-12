@@ -2,7 +2,7 @@ pub mod block;
 pub mod inline;
 pub mod types;
 
-pub use types::{Processor, ProcessorOptions};
+pub use types::{Processor, ProcessorApis, ProcessorOptions};
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -11,6 +11,7 @@ use std::rc::Rc;
 
 use yozora_ast::{Node, Position, Root, ROOT_TYPE};
 use yozora_character::NodePoint;
+use yozora_core_tokenizer::types::parse_block::{ParseBlockTask, ParseBlockTaskStep};
 use yozora_core_tokenizer::NodeInterval;
 use yozora_core_tokenizer::{
     calc_end_point, calc_start_point, BlockToken, InlineToken, MatchBlockPhaseApi,
@@ -19,7 +20,7 @@ use yozora_core_tokenizer::{
 };
 
 use crate::processor::block::{create_block_content_processor, MatchBlockProcessorHook};
-use crate::processor::inline::{match_inline_tokens, MatchInlineProcessorHook};
+use crate::processor::inline::{create_phrasing_content_processor, create_processor_hook_groups};
 
 pub fn create_processor<'a>(options: ProcessorOptions<'a>) -> impl Processor + 'a {
     ParserProcessor {
@@ -500,7 +501,7 @@ struct ParseBlockFrame {
     tokens: Vec<BlockToken>,
     next_token_index: usize,
     parsed_nodes: Vec<Node>,
-    task: Option<Box<dyn yozora_core_tokenizer::ParseBlockTask>>,
+    task: Option<Box<dyn ParseBlockTask>>,
     resume_nodes: Option<Vec<Node>>,
 }
 
@@ -536,7 +537,7 @@ fn schedule_block_tokens(
                 .expect("block parse scheduler should contain a frame");
             if let Some(task) = frame.task.as_mut() {
                 match task.resume(frame.resume_nodes.take()) {
-                    yozora_core_tokenizer::ParseBlockTaskStep::Request(tokens) => {
+                    ParseBlockTaskStep::Request(tokens) => {
                         if tokens.is_empty() {
                             frame.resume_nodes = Some(Vec::new());
                             Action::Continue
@@ -544,7 +545,7 @@ fn schedule_block_tokens(
                             Action::Push(tokens)
                         }
                     }
-                    yozora_core_tokenizer::ParseBlockTaskStep::Done(nodes) => {
+                    ParseBlockTaskStep::Done(nodes) => {
                         frame.parsed_nodes.extend(nodes);
                         frame.task = None;
                         Action::Continue
@@ -770,19 +771,9 @@ fn match_inline_tokens_from_index(
         });
     }
 
-    let mut hooks = Vec::with_capacity(tokenizers.len() - tokenizer_start_index);
-    for ((group_start, group_end), api) in groups.into_iter().zip(apis.iter()) {
-        for tokenizer in &tokenizers[group_start..group_end] {
-            let hook = tokenizer.r#match(api);
-            hooks.push(MatchInlineProcessorHook::new(
-                tokenizer.name(),
-                tokenizer.priority(),
-                hook,
-            ));
-        }
-    }
-
-    match_inline_tokens(&mut hooks, higher_priority_tokens, start_index, end_index)
+    let hook_groups = create_processor_hook_groups(&tokenizers[tokenizer_start_index..], &apis);
+    let mut processor = create_phrasing_content_processor(hook_groups, 0);
+    processor.process(higher_priority_tokens, start_index, end_index)
 }
 
 fn resolve_fallback_tokens_with_api(

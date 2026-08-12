@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 
 use yozora_ast::Association;
-use yozora_core_tokenizer::{BlockTokenizer, InlineFallbackTokenizer, InlineTokenizer};
+use yozora_core_tokenizer::{
+    BlockTokenizer, InlineFallbackTokenizer, InlineTokenizer, MatchBlockPhaseApi,
+    MatchInlinePhaseApi, ParseBlockPhaseApi, ParseInlinePhaseApi,
+};
 
 use crate::types::FormatUrlFn;
 
@@ -16,6 +19,13 @@ pub struct ProcessorOptions<'a> {
     pub preset_definitions: &'a [Association],
     pub preset_footnote_definitions: &'a [Association],
     pub format_url: FormatUrlFn,
+}
+
+pub struct ProcessorApis<'a> {
+    pub match_block_api: &'a dyn MatchBlockPhaseApi,
+    pub parse_block_api: &'a dyn ParseBlockPhaseApi,
+    pub match_inline_api: &'a dyn MatchInlinePhaseApi,
+    pub parse_inline_api: &'a dyn ParseInlinePhaseApi,
 }
 
 pub trait Processor {

@@ -1,4 +1,5 @@
 use yozora_ast::Node;
+use yozora_core_tokenizer::types::parse_block::ParseBlockTask;
 use yozora_core_tokenizer::*;
 
 use crate::{parse, r#match};
@@ -8,6 +9,7 @@ pub const FOOTNOTE_DEFINITION_TOKENIZER_NAME: &str = "@yozora/tokenizer-footnote
 #[derive(Debug, Clone)]
 pub struct FootnoteDefinitionTokenizer {
     meta: TokenizerMeta,
+    pub indent: usize,
 }
 
 impl Default for FootnoteDefinitionTokenizer {
@@ -28,6 +30,7 @@ impl FootnoteDefinitionTokenizer {
                     .priority
                     .unwrap_or(TokenizerPriority::CONTAINING_BLOCK),
             },
+            indent: 4,
         }
     }
 }
@@ -98,7 +101,10 @@ impl ParseBlockHook for FootnoteDefinitionParseHook<'_> {
 
 impl BlockTokenizer for FootnoteDefinitionTokenizer {
     fn r#match<'a>(&'a self, api: &'a dyn MatchBlockPhaseApi) -> Box<dyn MatchBlockHook + 'a> {
-        Box::new(FootnoteDefinitionMatchHook { api, indent: 4 })
+        Box::new(FootnoteDefinitionMatchHook {
+            api,
+            indent: self.indent,
+        })
     }
 
     fn parse<'a>(&'a self, api: &'a dyn ParseBlockPhaseApi) -> Box<dyn ParseBlockHook + 'a> {

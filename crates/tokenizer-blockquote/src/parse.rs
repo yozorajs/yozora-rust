@@ -1,5 +1,6 @@
 use yozora_ast::{Blockquote, Node, Position};
-use yozora_core_tokenizer::{BlockToken, ParseBlockPhaseApi, ParseBlockTask, ParseBlockTaskStep};
+use yozora_core_tokenizer::types::parse_block::{ParseBlockTask, ParseBlockTaskStep};
+use yozora_core_tokenizer::{BlockToken, ParseBlockPhaseApi};
 
 pub(crate) fn parse_blockquote_tokens(
     tokens: &[BlockToken],

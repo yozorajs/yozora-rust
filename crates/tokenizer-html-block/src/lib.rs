@@ -3,10 +3,11 @@ mod parse;
 mod tokenizer;
 mod util;
 
+pub use r#match::HtmlBlockTokenData;
 pub use tokenizer::{HtmlBlockTokenizer, HTML_BLOCK_TOKENIZER_NAME};
 pub use util::{eat_html_attribute, eat_html_tag_name, EatHtmlAttributeResult, RawHtmlAttribute};
 
-pub type HtmlBlockToken = yozora_core_tokenizer::BlockToken;
+pub type HtmlBlockToken = yozora_core_tokenizer::TypedBlockToken<HtmlBlockTokenData>;
 pub type HtmlBlockHookContext = HtmlBlockTokenizer;
 pub type HtmlBlockTokenizerProps = yozora_core_tokenizer::TokenizerOptions;
 

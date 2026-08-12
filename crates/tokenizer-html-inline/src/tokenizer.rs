@@ -60,14 +60,14 @@ impl<'a> MatchInlineHook<'a> for HtmlInlineMatchHook<'a> {
         let api = self.api;
 
         Box::new(gen_find_delimiter(|start_index, end_index| {
-            let entry =
-                r#match::find_delimiter_entry(api.get_node_points(), start_index, end_index)?;
-            Some(entry.delimiter)
+            let delimiter =
+                r#match::find_html_inline_delimiter(api.get_node_points(), start_index, end_index)?;
+            Some(delimiter.delimiter().clone())
         }))
     }
 
     fn process_single_delimiter(&self, delimiter: &TokenDelimiter) -> Vec<InlineToken> {
-        r#match::process_single_delimiter(delimiter)
+        r#match::process_single_delimiter(self.api.get_node_points(), delimiter)
     }
 }
 

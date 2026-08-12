@@ -3,14 +3,14 @@ use yozora_character::calc_string_from_node_points;
 use yozora_core_tokenizer::{InlineToken, NodeInterval, ParseInlinePhaseApi};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AutolinkExtensionContentType {
+pub enum AutolinkExtensionContentType {
     Uri,
     UriWww,
     Email,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct AutolinkExtensionTokenData {
+pub struct AutolinkExtensionTokenData {
     pub content_type: AutolinkExtensionContentType,
 }
 

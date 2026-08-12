@@ -2,11 +2,12 @@ mod r#match;
 mod parse;
 mod tokenizer;
 
+pub use r#match::{TableCellTokenData, TableRowTokenData, TableTokenData};
 pub use tokenizer::{TableTokenizer, TABLE_TOKENIZER_NAME};
 
-pub type TableToken = yozora_core_tokenizer::BlockToken;
-pub type TableRowToken = yozora_core_tokenizer::BlockToken;
-pub type TableCellToken = yozora_core_tokenizer::BlockToken;
+pub type TableToken = yozora_core_tokenizer::TypedBlockToken<TableTokenData>;
+pub type TableRowToken = TableRowTokenData;
+pub type TableCellToken = TableCellTokenData;
 pub type TableHookContext = TableTokenizer;
 pub type TableTokenizerProps = yozora_core_tokenizer::TokenizerOptions;
 

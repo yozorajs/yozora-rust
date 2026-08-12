@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::fmt::{Display, Formatter};
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
@@ -7,6 +8,19 @@ use yozora_ast::{NodeType, Position};
 use crate::constant::DelimiterType;
 
 pub type TokenData = Arc<dyn Any + Send + Sync + 'static>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TokenDataTypeMismatch {
+    pub expected: &'static str,
+}
+
+impl Display for TokenDataTypeMismatch {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "token data is not `{}`", self.expected)
+    }
+}
+
+impl std::error::Error for TokenDataTypeMismatch {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TokenDelimiter {
@@ -78,6 +92,53 @@ impl Drop for InlineToken {
                 stack.extend(children);
             }
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TypedInlineToken<T> {
+    pub tokenizer: Arc<str>,
+    pub node_type: NodeType,
+    pub start_index: usize,
+    pub end_index: usize,
+    pub children: Arc<Vec<InlineToken>>,
+    data: Arc<T>,
+}
+
+impl<T> TypedInlineToken<T> {
+    pub fn data(&self) -> &T {
+        &self.data
+    }
+}
+
+impl<T> Deref for TypedInlineToken<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.data
+    }
+}
+
+impl<T> TryFrom<&InlineToken> for TypedInlineToken<T>
+where
+    T: Any + Send + Sync + 'static,
+{
+    type Error = TokenDataTypeMismatch;
+
+    fn try_from(token: &InlineToken) -> Result<Self, Self::Error> {
+        let data = Arc::clone(&token.data)
+            .downcast::<T>()
+            .map_err(|_| TokenDataTypeMismatch {
+                expected: std::any::type_name::<T>(),
+            })?;
+        Ok(Self {
+            tokenizer: Arc::clone(&token.tokenizer),
+            node_type: token.node_type,
+            start_index: token.start_index,
+            end_index: token.end_index,
+            children: Arc::clone(&token.children),
+            data,
+        })
     }
 }
 
@@ -201,9 +262,72 @@ impl Drop for BlockToken {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct TypedBlockToken<T> {
+    pub tokenizer: Arc<str>,
+    pub node_type: NodeType,
+    pub position: Option<Position>,
+    pub children: BlockTokenChildren,
+    data: Arc<T>,
+}
+
+impl<T> TypedBlockToken<T> {
+    pub fn data(&self) -> &T {
+        &self.data
+    }
+}
+
+impl<T> Deref for TypedBlockToken<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.data
+    }
+}
+
+impl<T> TryFrom<&BlockToken> for TypedBlockToken<T>
+where
+    T: Any + Send + Sync + 'static,
+{
+    type Error = TokenDataTypeMismatch;
+
+    fn try_from(token: &BlockToken) -> Result<Self, Self::Error> {
+        let data = Arc::clone(&token.data)
+            .downcast::<T>()
+            .map_err(|_| TokenDataTypeMismatch {
+                expected: std::any::type_name::<T>(),
+            })?;
+        Ok(Self {
+            tokenizer: Arc::clone(&token.tokenizer),
+            node_type: token.node_type,
+            position: token.position.clone(),
+            children: token.children.clone(),
+            data,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::BlockToken;
+    use super::{BlockToken, InlineToken, TypedBlockToken, TypedInlineToken};
+
+    #[derive(Debug)]
+    struct TestData {
+        value: usize,
+    }
+
+    #[test]
+    fn typed_tokens_expose_specific_data() {
+        let inline = InlineToken::new("inline", "text", (1, 2)).with_data(TestData { value: 3 });
+        let block = BlockToken::new("block", "paragraph", None).with_data(TestData { value: 4 });
+
+        let typed_inline = TypedInlineToken::<TestData>::try_from(&inline).unwrap();
+        let typed_block = TypedBlockToken::<TestData>::try_from(&block).unwrap();
+
+        assert_eq!(typed_inline.start_index, 1);
+        assert_eq!(typed_inline.value, 3);
+        assert_eq!(typed_block.value, 4);
+    }
 
     #[test]
     fn block_token_clone_uses_copy_on_write_children() {

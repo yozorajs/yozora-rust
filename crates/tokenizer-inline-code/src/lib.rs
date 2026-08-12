@@ -2,9 +2,10 @@ mod r#match;
 mod parse;
 mod tokenizer;
 
+pub use parse::InlineCodeTokenData;
 pub use tokenizer::{InlineCodeTokenizer, INLINE_CODE_TOKENIZER_NAME};
 
-pub type InlineCodeToken = yozora_core_tokenizer::InlineToken;
+pub type InlineCodeToken = yozora_core_tokenizer::TypedInlineToken<InlineCodeTokenData>;
 pub type InlineCodeHookContext = InlineCodeTokenizer;
 pub type InlineCodeTokenizerProps = yozora_core_tokenizer::TokenizerOptions;
 

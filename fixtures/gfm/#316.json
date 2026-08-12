@@ -1,0 +1,79 @@
+{
+  "title": "GFM#316 https://github.github.com/gfm/#example-316",
+  "cases": [
+    {
+      "description": "Backslash escapes do not work in code blocks, code spans, autolinks, or raw HTML",
+      "input": "<http://example.com?find=\\*>",
+      "markupAnswer": "[http://example.com?find=\\\\*](http://example.com?find=%5C*)",
+      "htmlAnswer": "<p><a href=\"http://example.com?find=%5C*\">http://example.com?find=\\*</a></p>",
+      "parseAnswer": {
+        "type": "root",
+        "position": {
+          "start": {
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "end": {
+            "line": 1,
+            "column": 29,
+            "offset": 28
+          }
+        },
+        "children": [
+          {
+            "type": "paragraph",
+            "position": {
+              "start": {
+                "line": 1,
+                "column": 1,
+                "offset": 0
+              },
+              "end": {
+                "line": 1,
+                "column": 29,
+                "offset": 28
+              }
+            },
+            "children": [
+              {
+                "type": "link",
+                "position": {
+                  "start": {
+                    "line": 1,
+                    "column": 1,
+                    "offset": 0
+                  },
+                  "end": {
+                    "line": 1,
+                    "column": 29,
+                    "offset": 28
+                  }
+                },
+                "url": "http://example.com?find=%5C*",
+                "children": [
+                  {
+                    "type": "text",
+                    "position": {
+                      "start": {
+                        "line": 1,
+                        "column": 2,
+                        "offset": 1
+                      },
+                      "end": {
+                        "line": 1,
+                        "column": 28,
+                        "offset": 27
+                      }
+                    },
+                    "value": "http://example.com?find=\\*"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

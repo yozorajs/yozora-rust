@@ -15,7 +15,7 @@ pub struct ParserSuiteAdapter {
 impl ParserSuiteAdapter {
     pub fn new(profile: &str, assert_level: AssertLevel) -> Self {
         let parse_options = Some(ParseOptions {
-            shouldReservePosition: Some(matches!(assert_level, AssertLevel::L2)),
+            should_reserve_position: Some(matches!(assert_level, AssertLevel::L2)),
             ..ParseOptions::default()
         });
 
@@ -53,7 +53,7 @@ pub fn env_parser_profile() -> String {
 pub fn env_assert_level() -> AssertLevel {
     std::env::var("YOZORA_ASSERT_LEVEL")
         .ok()
-        .and_then(|value| AssertLevel::from_str(&value))
+        .and_then(|value| value.parse::<AssertLevel>().ok())
         .unwrap_or(AssertLevel::L2)
 }
 

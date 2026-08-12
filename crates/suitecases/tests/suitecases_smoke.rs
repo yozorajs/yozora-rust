@@ -27,7 +27,7 @@ fn suitecases_smoke_case() {
     let parser_profile = env_parser_profile();
     let assert_level = env_assert_level();
 
-    let fixture_rel = "gfm/heading/#032.json";
+    let fixture_rel = "gfm/#032.json";
     let fixtures_root = repo_root.join("fixtures");
     let fixture_path = fixtures_root.join(fixture_rel);
     let enabled = is_fixture_enabled_for_profile(&profile_map, &parser_profile, fixture_rel)

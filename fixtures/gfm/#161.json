@@ -1,0 +1,100 @@
+{
+  "title": "GFM#161 https://github.github.com/gfm/#example-161",
+  "cases": [
+    {
+      "description": "A link reference definition does not correspond to a structural element of a document. Instead, it defines a label which can be used in reference links and reference-style images elsewhere in the document. Link reference definitions can come either before or after the links that use them.",
+      "input": "[foo]: /url \"title\"\n\n[foo]",
+      "markupAnswer": "[foo]: /url \"title\"\n\n[foo][]",
+      "htmlAnswer": "<p><a href=\"/url\" title=\"title\">foo</a></p>",
+      "parseAnswer": {
+        "type": "root",
+        "position": {
+          "start": {
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "end": {
+            "line": 3,
+            "column": 6,
+            "offset": 26
+          }
+        },
+        "children": [
+          {
+            "type": "definition",
+            "position": {
+              "start": {
+                "line": 1,
+                "column": 1,
+                "offset": 0
+              },
+              "end": {
+                "line": 2,
+                "column": 1,
+                "offset": 20
+              }
+            },
+            "identifier": "foo",
+            "label": "foo",
+            "url": "/url",
+            "title": "title"
+          },
+          {
+            "type": "paragraph",
+            "position": {
+              "start": {
+                "line": 3,
+                "column": 1,
+                "offset": 21
+              },
+              "end": {
+                "line": 3,
+                "column": 6,
+                "offset": 26
+              }
+            },
+            "children": [
+              {
+                "type": "linkReference",
+                "position": {
+                  "start": {
+                    "line": 3,
+                    "column": 1,
+                    "offset": 21
+                  },
+                  "end": {
+                    "line": 3,
+                    "column": 6,
+                    "offset": 26
+                  }
+                },
+                "identifier": "foo",
+                "label": "foo",
+                "referenceType": "shortcut",
+                "children": [
+                  {
+                    "type": "text",
+                    "position": {
+                      "start": {
+                        "line": 3,
+                        "column": 2,
+                        "offset": 22
+                      },
+                      "end": {
+                        "line": 3,
+                        "column": 5,
+                        "offset": 25
+                      }
+                    },
+                    "value": "foo"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

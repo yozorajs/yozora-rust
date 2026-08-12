@@ -1,0 +1,94 @@
+{
+  "title": "GFM#182 https://github.github.com/gfm/#example-182",
+  "cases": [
+    {
+      "description": "A link reference definition cannot interrupt a paragraph.",
+      "input": "Foo\n[bar]: /baz\n\n[bar]",
+      "markupAnswer": "Foo\n[bar]: /baz\n\n[bar]",
+      "htmlAnswer": "<p>Foo\n[bar]: /baz</p>\n<p>[bar]</p>",
+      "parseAnswer": {
+        "type": "root",
+        "position": {
+          "start": {
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "end": {
+            "line": 4,
+            "column": 6,
+            "offset": 22
+          }
+        },
+        "children": [
+          {
+            "type": "paragraph",
+            "position": {
+              "start": {
+                "line": 1,
+                "column": 1,
+                "offset": 0
+              },
+              "end": {
+                "line": 3,
+                "column": 1,
+                "offset": 16
+              }
+            },
+            "children": [
+              {
+                "type": "text",
+                "position": {
+                  "start": {
+                    "line": 1,
+                    "column": 1,
+                    "offset": 0
+                  },
+                  "end": {
+                    "line": 2,
+                    "column": 12,
+                    "offset": 15
+                  }
+                },
+                "value": "Foo\n[bar]: /baz"
+              }
+            ]
+          },
+          {
+            "type": "paragraph",
+            "position": {
+              "start": {
+                "line": 4,
+                "column": 1,
+                "offset": 17
+              },
+              "end": {
+                "line": 4,
+                "column": 6,
+                "offset": 22
+              }
+            },
+            "children": [
+              {
+                "type": "text",
+                "position": {
+                  "start": {
+                    "line": 4,
+                    "column": 1,
+                    "offset": 17
+                  },
+                  "end": {
+                    "line": 4,
+                    "column": 6,
+                    "offset": 22
+                  }
+                },
+                "value": "[bar]"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

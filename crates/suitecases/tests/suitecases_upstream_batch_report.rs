@@ -41,9 +41,7 @@ fn fixture_batch_report() {
     };
     let report = run_fixture_batch(&adapter, &options).expect("run fixture batch");
 
-    if !report.unexpected.is_empty() {
-        eprintln!("{}", format_unexpected_report(&report, max_print));
-    }
+    eprintln!("{}", format_unexpected_report(&report, max_print));
 
     if fail_on_diff {
         assert!(

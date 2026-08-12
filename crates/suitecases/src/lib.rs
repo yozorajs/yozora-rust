@@ -45,14 +45,16 @@ pub enum AssertLevel {
     L3,
 }
 
-impl AssertLevel {
-    pub fn from_str(value: &str) -> Option<Self> {
+impl std::str::FromStr for AssertLevel {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
-            "L0" | "l0" => Some(Self::L0),
-            "L1" | "l1" => Some(Self::L1),
-            "L2" | "l2" => Some(Self::L2),
-            "L3" | "l3" => Some(Self::L3),
-            _ => None,
+            "L0" | "l0" => Ok(Self::L0),
+            "L1" | "l1" => Ok(Self::L1),
+            "L2" | "l2" => Ok(Self::L2),
+            "L3" | "l3" => Ok(Self::L3),
+            _ => Err(()),
         }
     }
 }
@@ -437,8 +439,9 @@ fn build_known_failure(values: &HashMap<String, String>) -> Result<KnownFailure,
     let case_id = required_field(values, "case_id")?;
     let parser_profile = required_field(values, "parser_profile")?;
     let level_str = required_field(values, "assert_level")?;
-    let assert_level = AssertLevel::from_str(&level_str)
-        .ok_or_else(|| format!("invalid assert_level `{level_str}` in known-failures.toml"))?;
+    let assert_level = level_str
+        .parse::<AssertLevel>()
+        .map_err(|_| format!("invalid assert_level `{level_str}` in known-failures.toml"))?;
 
     Ok(KnownFailure {
         case_id,

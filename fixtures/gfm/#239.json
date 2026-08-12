@@ -1,0 +1,94 @@
+{
+  "title": "GFM#239 https://github.github.com/gfm/#example-239",
+  "cases": [
+    {
+      "description": "Note that at least one space is needed between the list marker and any following content, so these are not list items",
+      "input": "-one\n\n2.two",
+      "markupAnswer": "-one\n\n2.two",
+      "htmlAnswer": "<p>-one</p>\n<p>2.two</p>",
+      "parseAnswer": {
+        "type": "root",
+        "position": {
+          "start": {
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "end": {
+            "line": 3,
+            "column": 6,
+            "offset": 11
+          }
+        },
+        "children": [
+          {
+            "type": "paragraph",
+            "position": {
+              "start": {
+                "line": 1,
+                "column": 1,
+                "offset": 0
+              },
+              "end": {
+                "line": 2,
+                "column": 1,
+                "offset": 5
+              }
+            },
+            "children": [
+              {
+                "type": "text",
+                "position": {
+                  "start": {
+                    "line": 1,
+                    "column": 1,
+                    "offset": 0
+                  },
+                  "end": {
+                    "line": 1,
+                    "column": 5,
+                    "offset": 4
+                  }
+                },
+                "value": "-one"
+              }
+            ]
+          },
+          {
+            "type": "paragraph",
+            "position": {
+              "start": {
+                "line": 3,
+                "column": 1,
+                "offset": 6
+              },
+              "end": {
+                "line": 3,
+                "column": 6,
+                "offset": 11
+              }
+            },
+            "children": [
+              {
+                "type": "text",
+                "position": {
+                  "start": {
+                    "line": 3,
+                    "column": 1,
+                    "offset": 6
+                  },
+                  "end": {
+                    "line": 3,
+                    "column": 6,
+                    "offset": 11
+                  }
+                },
+                "value": "2.two"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

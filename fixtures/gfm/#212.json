@@ -1,0 +1,93 @@
+{
+  "title": "GFM#212 https://github.github.com/gfm/#example-212",
+  "cases": [
+    {
+      "description": "without changing the meaning",
+      "input": "> foo\n---",
+      "markupAnswer": "> foo\n\n---",
+      "htmlAnswer": "<blockquote>\n<p>foo</p>\n</blockquote>\n<hr />",
+      "parseAnswer": {
+        "type": "root",
+        "position": {
+          "start": {
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "end": {
+            "line": 2,
+            "column": 4,
+            "offset": 9
+          }
+        },
+        "children": [
+          {
+            "type": "blockquote",
+            "position": {
+              "start": {
+                "line": 1,
+                "column": 1,
+                "offset": 0
+              },
+              "end": {
+                "line": 2,
+                "column": 1,
+                "offset": 6
+              }
+            },
+            "children": [
+              {
+                "type": "paragraph",
+                "position": {
+                  "start": {
+                    "line": 1,
+                    "column": 3,
+                    "offset": 2
+                  },
+                  "end": {
+                    "line": 2,
+                    "column": 1,
+                    "offset": 6
+                  }
+                },
+                "children": [
+                  {
+                    "type": "text",
+                    "position": {
+                      "start": {
+                        "line": 1,
+                        "column": 3,
+                        "offset": 2
+                      },
+                      "end": {
+                        "line": 1,
+                        "column": 6,
+                        "offset": 5
+                      }
+                    },
+                    "value": "foo"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "thematicBreak",
+            "position": {
+              "start": {
+                "line": 2,
+                "column": 1,
+                "offset": 6
+              },
+              "end": {
+                "line": 2,
+                "column": 4,
+                "offset": 9
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,7 +1,7 @@
 # Template of known failures.
 #
 # [[failure]]
-# case_id = "gfm/emphasis/rule#1/#360.json::0::rule-1"
+# case_id = "gfm/#360.json::0::rule-1"
 # parser_profile = "gfm"
 # assert_level = "L2"
 # reason = "Position offset mismatch on multibyte code point"

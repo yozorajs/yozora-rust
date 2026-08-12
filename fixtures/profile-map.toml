@@ -1,23 +1,46 @@
 [gfm]
-include = ["gfm/**/*.json"]
+include = ["gfm/#*.json"]
 exclude = [
-  "gfm/autolink-extension/**/*",
-  "gfm/delete/**/*",
-  "gfm/list-item/task list items\\(extension\\)/**/*",
-  "gfm/table/**/*",
+  "gfm/#198.json",
+  "gfm/#199.json",
+  "gfm/#200.json",
+  "gfm/#201.json",
+  "gfm/#202.json",
+  "gfm/#203.json",
+  "gfm/#204.json",
+  "gfm/#205.json",
+  "gfm/#279.json",
+  "gfm/#280.json",
+  "gfm/#491.json",
+  "gfm/#492.json",
+  "gfm/#493.json",
+  "gfm/#622.json",
+  "gfm/#623.json",
+  "gfm/#624.json",
+  "gfm/#625.json",
+  "gfm/#626.json",
+  "gfm/#627.json",
+  "gfm/#628.json",
+  "gfm/#629.json",
+  "gfm/#630.json",
+  "gfm/#631.json",
+  "gfm/#632.json",
+  "gfm/#633.json",
+  "gfm/#634.json",
+  "gfm/#635.json",
 ]
 
 [gfm_ex]
-include = ["gfm/**/*.json"]
-exclude = ["gfm/**/#616.json", "gfm/**/#619.json", "gfm/**/#620.json"]
+include = ["gfm/#*.json"]
+exclude = ["gfm/#617.json", "gfm/#620.json", "gfm/#621.json"]
 
 [yozora]
-include = ["local/**/*.json", "custom/**/*.json", "gfm/**/*.json"]
+include = ["custom/**/*.json", "gfm/#*.json"]
 exclude = [
   "custom/inline-math/backtick-required/**/*",
-  "gfm/**/#616.json",
-  "gfm/**/#619.json",
-  "gfm/**/#620.json",
+  "gfm/#617.json",
+  "gfm/#620.json",
+  "gfm/#621.json",
 ]
 
 [yozora_inline_math_backtick_required]

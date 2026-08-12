@@ -11,9 +11,9 @@ fn fixture_custom_subset_l1() {
     let fixtures_root = repo_root.join("fixtures");
     let fixture_paths = [
         "custom/admonition/basic.json",
+        "custom/autolink/edge_case.json",
         "custom/ecma-import/condition1.json",
         "custom/inline-math/backtick-optional/#001.json",
-        "custom/large/unicode_1k.json",
         "custom/math/single-line/#1.json",
         "custom/footnote/basic.json",
         "custom/footnote-definition/basic2.json",

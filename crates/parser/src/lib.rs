@@ -217,6 +217,16 @@ impl YozoraParser {
         self
     }
 
+    pub fn unmount_block_tokenizer(&mut self, tokenizer_name: &str) -> &mut Self {
+        self.inner.unmount_block_tokenizer(tokenizer_name);
+        self
+    }
+
+    pub fn unmount_inline_tokenizer(&mut self, tokenizer_name: &str) -> &mut Self {
+        self.inner.unmount_inline_tokenizer(tokenizer_name);
+        self
+    }
+
     pub fn use_fallback_tokenizer(&mut self, tokenizer: AnyFallbackTokenizer) -> &mut Self {
         self.inner.use_fallback_tokenizer(tokenizer);
         self
@@ -578,5 +588,61 @@ mod tests {
             })
             .expect("expected definition node");
         assert_eq!(definition.url, "prefix:/def");
+    }
+
+    #[test]
+    fn undefined_default_options_use_built_in_defaults() {
+        let mut parser = YozoraParser::default();
+        parser.set_default_parse_options(Some(ParseOptions {
+            should_reserve_position: None,
+            preset_definitions: None,
+            preset_footnote_definitions: None,
+            format_url: None,
+        }));
+
+        let root = parser.parse("[link](/url)", None);
+        assert_eq!(root.position, None);
+        assert!(matches!(
+            root.children.as_slice(),
+            [Node::Paragraph(paragraph)]
+                if matches!(paragraph.children.as_slice(), [Node::Link(link)] if link.url == "/url")
+        ));
+    }
+
+    #[test]
+    fn undefined_parse_options_inherit_configured_defaults() {
+        let parser = YozoraParser::new(YozoraParserProps {
+            default_parse_options: Some(ParseOptions {
+                should_reserve_position: Some(true),
+                preset_definitions: Some(vec![Association {
+                    identifier: "link".to_string(),
+                    label: "link".to_string(),
+                }]),
+                preset_footnote_definitions: Some(vec![Association {
+                    identifier: "note".to_string(),
+                    label: "note".to_string(),
+                }]),
+                format_url: Some(Arc::new(|url| format!("formatted:{url}"))),
+            }),
+            ..YozoraParserProps::default()
+        });
+
+        let root = parser.parse(
+            "[link][] [^note] [inline](/url)",
+            Some(ParseOptions {
+                should_reserve_position: None,
+                preset_definitions: None,
+                preset_footnote_definitions: None,
+                format_url: None,
+            }),
+        );
+        assert!(root.position.is_some());
+        assert!(matches!(
+            root.children.as_slice(),
+            [Node::Paragraph(paragraph)]
+                if matches!(paragraph.children.first(), Some(Node::LinkReference(reference)) if reference.identifier == "link")
+                    && paragraph.children.iter().any(|node| matches!(node, Node::FootnoteReference(reference) if reference.identifier == "note"))
+                    && paragraph.children.iter().any(|node| matches!(node, Node::Link(link) if link.url == "formatted:/url"))
+        ));
     }
 }

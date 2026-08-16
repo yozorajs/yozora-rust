@@ -126,6 +126,7 @@ impl BlockTokenizer for ParagraphTokenizer {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::sync::Arc;
 
     use super::*;
@@ -144,6 +145,30 @@ mod tests {
         }
 
         fn process_inlines(&self, node_points: &[NodePoint]) -> Vec<Node> {
+            vec![Node::Text(Text {
+                position: None,
+                value: calc_string_from_node_points(node_points, 0, node_points.len(), false),
+            })]
+        }
+    }
+
+    struct TrackingBlockApi {
+        pointer: Cell<*const NodePoint>,
+        len: Cell<usize>,
+    }
+
+    impl ParseBlockPhaseApi for TrackingBlockApi {
+        fn should_reserve_position(&self) -> bool {
+            false
+        }
+
+        fn format_url(&self, url: &str) -> String {
+            url.to_string()
+        }
+
+        fn process_inlines(&self, node_points: &[NodePoint]) -> Vec<Node> {
+            self.pointer.set(node_points.as_ptr());
+            self.len.set(node_points.len());
             vec![Node::Text(Text {
                 position: None,
                 value: calc_string_from_node_points(node_points, 0, node_points.len(), false),
@@ -183,5 +208,49 @@ mod tests {
             panic!("expected paragraph node");
         };
         assert_eq!(paragraph.children.len(), 1);
+    }
+
+    #[test]
+    fn exposes_lines_builds_nonempty_tokens_and_reuses_single_line_points() {
+        let tokenizer = ParagraphTokenizer::default();
+        let node_points = create_node_point_generator("hello, world!\nhello,")
+            .pop()
+            .expect("expected node points");
+        let node_points = Arc::new(node_points);
+        let line = PhrasingContentLine {
+            node_points: Arc::clone(&node_points),
+            start_index: 0,
+            end_index: 14,
+            first_non_whitespace_index: 0,
+            indent_width: 0,
+            count_of_precede_spaces: 0,
+        };
+        let original_token = BlockToken::new(PARAGRAPH_TOKENIZER_NAME, PARAGRAPH_TYPE, None);
+
+        assert!(tokenizer.build_block_token(&[], &original_token).is_none());
+        let token = tokenizer
+            .build_block_token(std::slice::from_ref(&line), &original_token)
+            .expect("expected paragraph token");
+        let extracted = tokenizer
+            .extract_phrasing_content_lines(&token)
+            .expect("expected paragraph lines");
+        assert_eq!(extracted.len(), 1);
+        assert!(Arc::ptr_eq(&extracted[0].node_points, &node_points));
+
+        let api = TrackingBlockApi {
+            pointer: Cell::new(std::ptr::null()),
+            len: Cell::new(0),
+        };
+        let parse_hook = tokenizer.parse(&api);
+        let ParseBlockHookResult::Nodes(nodes) = parse_hook.parse(&[token]).unwrap() else {
+            panic!("expected synchronous paragraph parse result");
+        };
+        assert_eq!(api.pointer.get(), node_points.as_ptr());
+        assert_eq!(api.len.get(), 13);
+        assert!(matches!(
+            nodes.as_slice(),
+            [Node::Paragraph(paragraph)]
+                if matches!(paragraph.children.as_slice(), [Node::Text(text)] if text.value == "hello, world!")
+        ));
     }
 }

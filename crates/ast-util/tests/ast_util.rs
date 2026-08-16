@@ -5,18 +5,20 @@ use std::task::{Context, Poll, Waker};
 
 use serde_json::{json, Map, Value};
 use yozora_ast::{
-    Admonition, CustomNode, Definition, Footnote, FootnoteDefinition, Html, Image, ImageReference,
-    List, ListItem, Node, Paragraph, Point, Position, ReferenceType, Root, Strong, Text,
+    Admonition, Association, CustomNode, Definition, Emphasis, Footnote, FootnoteDefinition, Html,
+    Image, ImageReference, Link, List, ListItem, Node, Paragraph, Point, Position, ReferenceType,
+    Root, Strong, Text,
 };
 use yozora_ast_util::mutate::{create_postorder_mutation, create_preorder_mutation, MutationStep};
 use yozora_ast_util::{
     calc_definition_map, calc_excerpt_ast, calc_footnote_definition_map, calc_heading_toc,
-    collect_nodes, default_url_resolver, get_excerpt_ast, remove_positions,
-    replace_footnotes_in_references, resolve_urls_for_ast, search_node, shallow_clone_ast,
-    shallow_mutate_ast_in_postorder, shallow_mutate_ast_in_postorder_async,
-    shallow_mutate_ast_in_preorder, shallow_mutate_ast_in_preorder_async, traverse_ast,
-    NodeMatcher, NodeReplacement, NodeReplacementFuture, ParentRef,
-    DEFAULT_FOOTNOTE_IDENTIFIER_PREFIX,
+    calc_identifier_set, collect_definitions, collect_nodes, create_node_matcher,
+    create_shallow_node_collector, default_url_resolver, get_excerpt_ast, remove_positions,
+    replace_footnotes_in_references, resolve_urls_for_ast, resolve_urls_for_ast_with_resolver,
+    search_node, shallow_clone_ast, shallow_mutate_ast_in_postorder,
+    shallow_mutate_ast_in_postorder_async, shallow_mutate_ast_in_preorder,
+    shallow_mutate_ast_in_preorder_async, traverse_ast, NodeMatcher, NodeReplacement,
+    NodeReplacementFuture, ParentRef, ShallowNode, DEFAULT_FOOTNOTE_IDENTIFIER_PREFIX,
 };
 
 fn text(value: &str) -> Node {
@@ -31,6 +33,105 @@ fn paragraph(children: Vec<Node>) -> Node {
         position: None,
         children,
     })
+}
+
+#[test]
+fn node_matcher_handles_all_empty_and_selected_types() {
+    let nodes = [
+        text("text"),
+        Node::Emphasis(Emphasis {
+            position: None,
+            children: Vec::new(),
+        }),
+        Node::Strong(Strong {
+            position: None,
+            children: Vec::new(),
+        }),
+        paragraph(Vec::new()),
+    ];
+
+    for node in &nodes {
+        assert!(create_node_matcher(None).matches(node));
+        assert!(!create_node_matcher(Some(&[])).matches(node));
+    }
+    for (types, expected) in [
+        (&["text"][..], [true, false, false, false]),
+        (&["text", "emphasis"][..], [true, true, false, false]),
+        (
+            &["text", "emphasis", "strong"][..],
+            [true, true, true, false],
+        ),
+    ] {
+        let matcher = create_node_matcher(Some(types));
+        assert_eq!(nodes.each_ref().map(|node| matcher.matches(node)), expected);
+    }
+}
+
+#[test]
+fn shallow_collector_handles_replacements_and_wide_lists() {
+    let nodes = (1..=10).collect::<Vec<_>>();
+    let mut unchanged = create_shallow_node_collector(nodes.clone());
+    for (index, node) in nodes.iter().copied().enumerate() {
+        unchanged.add(ShallowNode::One(node), &node, index);
+    }
+    assert_eq!(unchanged.collect(), nodes);
+
+    let mut replaced = create_shallow_node_collector(nodes.clone());
+    for (index, node) in nodes.iter().copied().enumerate() {
+        replaced.add(
+            ShallowNode::One(if index == 5 { -node } else { node }),
+            &node,
+            index,
+        );
+    }
+    assert_eq!(
+        replaced.collect(),
+        nodes
+            .iter()
+            .enumerate()
+            .map(|(index, node)| if index == 5 { -*node } else { *node })
+            .collect::<Vec<_>>()
+    );
+
+    let replacements = (1..=150_000).collect::<Vec<_>>();
+    let mut wide = create_shallow_node_collector(vec![0]);
+    wide.add(ShallowNode::Many(replacements.clone()), &0, 0);
+    assert_eq!(wide.collect(), replacements);
+}
+
+#[test]
+fn identifier_set_and_definition_collection_follow_reference_order() {
+    let first = Definition {
+        position: None,
+        identifier: "alpha".to_string(),
+        label: "Alpha".to_string(),
+        url: "/first".to_string(),
+        title: None,
+    };
+    let duplicate = Definition {
+        url: "/duplicate".to_string(),
+        ..first.clone()
+    };
+    let root = Root {
+        node_type: "root".to_string(),
+        position: None,
+        children: vec![Node::Definition(first.clone()), Node::Definition(duplicate)],
+    };
+    let preset = Association {
+        identifier: "bravo".to_string(),
+        label: "Bravo".to_string(),
+    };
+
+    let identifiers = calc_identifier_set(
+        &root,
+        NodeMatcher::Types(&["definition"]),
+        std::slice::from_ref(&preset),
+    );
+    assert_eq!(identifiers.len(), 2);
+    assert!(identifiers.contains("alpha"));
+    assert!(identifiers.contains("bravo"));
+
+    assert_eq!(collect_definitions(&root), vec![&first]);
 }
 
 #[test]
@@ -425,6 +526,40 @@ fn toc_avoids_suffix_collisions() {
 }
 
 #[test]
+fn toc_applies_prefix_and_preserves_heading_hierarchy() {
+    let mut root = Root {
+        node_type: "root".to_string(),
+        position: None,
+        children: vec![
+            Node::Heading(yozora_ast::Heading {
+                position: None,
+                identifier: None,
+                depth: 1,
+                children: vec![text("Alpha")],
+            }),
+            Node::Heading(yozora_ast::Heading {
+                position: None,
+                identifier: None,
+                depth: 2,
+                children: vec![text("Bravo")],
+            }),
+            Node::Heading(yozora_ast::Heading {
+                position: None,
+                identifier: None,
+                depth: 1,
+                children: vec![text("Alpha")],
+            }),
+        ],
+    };
+
+    let toc = calc_heading_toc(&mut root, "waw-");
+    assert_eq!(toc.children.len(), 2);
+    assert_eq!(toc.children[0].identifier, "waw-alpha");
+    assert_eq!(toc.children[0].children[0].identifier, "waw-bravo");
+    assert_eq!(toc.children[1].identifier, "waw-alpha-2");
+}
+
+#[test]
 fn search_returns_preorder_paths() {
     let root = Root {
         node_type: "root".to_string(),
@@ -639,6 +774,34 @@ fn url_resolver_matches_directory_and_opaque_semantics() {
             "https://base.example/docs/guide",
         ),
         (&[Some("https://base.example/docs"), Some("/root")], "/root"),
+        (
+            &[
+                Some("https://base.example/docs"),
+                Some("https://other.example/page"),
+            ],
+            "https://other.example/page",
+        ),
+        (
+            &[
+                Some("https://base.example/docs"),
+                Some("mailto:user@example.com"),
+            ],
+            "mailto:user@example.com",
+        ),
+        (
+            &[
+                Some("https://base.example/docs"),
+                Some("data:text/plain,hello"),
+            ],
+            "data:text/plain,hello",
+        ),
+        (
+            &[
+                Some("https://base.example/docs"),
+                Some("git+ssh://git@example.com/repo"),
+            ],
+            "git+ssh://git@example.com/repo",
+        ),
         (&[Some("/a"), Some("./"), Some("./b")], "/a/b"),
         (&[Some("https://x/a"), Some("../../b")], "https://x/b"),
         (&[Some("a"), Some("../../b")], "../b"),
@@ -704,6 +867,54 @@ fn url_resolver_matches_directory_and_opaque_semantics() {
 }
 
 #[test]
+fn resolve_urls_visits_admonition_body_then_title_once() {
+    let title_link = Node::Link(Link {
+        position: None,
+        url: "./title-link".to_string(),
+        title: None,
+        children: vec![text("title")],
+    });
+    let title_image = Node::Image(Image {
+        position: None,
+        url: "./title-image".to_string(),
+        title: None,
+        alt: "image".to_string(),
+    });
+    let body_link = Node::Link(Link {
+        position: None,
+        url: "./body-link".to_string(),
+        title: None,
+        children: vec![text("body")],
+    });
+    let mut root = Root {
+        node_type: "root".to_string(),
+        position: None,
+        children: vec![Node::Admonition(Admonition {
+            position: None,
+            keyword: "note".to_string(),
+            title: vec![title_link, title_image],
+            children: vec![paragraph(vec![body_link])],
+        })],
+    };
+    let mut resolved = Vec::new();
+    resolve_urls_for_ast_with_resolver(&mut root, |url| {
+        resolved.push(url.to_string());
+        format!("resolved:{url}")
+    });
+
+    assert_eq!(resolved, ["./body-link", "./title-link", "./title-image"]);
+    let Node::Admonition(admonition) = &root.children[0] else {
+        panic!("expected admonition");
+    };
+    assert!(
+        matches!(&admonition.title[0], Node::Link(link) if link.url == "resolved:./title-link")
+    );
+    assert!(
+        matches!(&admonition.title[1], Node::Image(image) if image.url == "resolved:./title-image")
+    );
+}
+
+#[test]
 fn resolve_urls_uses_default_matcher_and_resolver() {
     let mut root = Root {
         node_type: "root".to_string(),
@@ -761,6 +972,129 @@ fn footnotes_use_postorder_and_admonition_title_order() {
     );
     assert!(path.is_some());
     assert_eq!(definitions.len(), 2);
+}
+
+#[test]
+fn footnotes_preserve_postorder_outside_admonitions() {
+    let root = Root {
+        node_type: "root".to_string(),
+        position: None,
+        children: vec![paragraph(vec![
+            Node::Footnote(Footnote {
+                position: None,
+                children: vec![text("alpha")],
+            }),
+            Node::Emphasis(Emphasis {
+                position: None,
+                children: vec![Node::Footnote(Footnote {
+                    position: None,
+                    children: vec![text("bravo")],
+                })],
+            }),
+        ])],
+    };
+
+    let result = calc_footnote_definition_map(&root, &[], true, DEFAULT_FOOTNOTE_IDENTIFIER_PREFIX);
+    let Node::Paragraph(paragraph) = &result.root.children[0] else {
+        panic!("expected paragraph");
+    };
+    let Node::Emphasis(emphasis) = &paragraph.children[1] else {
+        panic!("expected emphasis");
+    };
+    assert!(matches!(
+        &paragraph.children[0],
+        Node::FootnoteReference(reference) if reference.identifier == "footnote-2"
+    ));
+    assert!(matches!(
+        &emphasis.children[0],
+        Node::FootnoteReference(reference) if reference.identifier == "footnote-1"
+    ));
+}
+
+#[test]
+fn footnotes_replace_direct_root_children() {
+    let root = Root {
+        node_type: "root".to_string(),
+        position: None,
+        children: vec![Node::Footnote(Footnote {
+            position: None,
+            children: vec![text("alpha")],
+        })],
+    };
+
+    let result = calc_footnote_definition_map(&root, &[], true, DEFAULT_FOOTNOTE_IDENTIFIER_PREFIX);
+    assert!(matches!(
+        result.root.children.as_slice(),
+        [Node::FootnoteReference(reference), Node::FootnoteDefinition(definition)]
+            if reference.identifier == "footnote-1"
+                && definition.identifier == "footnote-1"
+    ));
+}
+
+#[test]
+fn footnotes_preserve_source_order_across_nested_admonition_fields() {
+    let root = Root {
+        node_type: "root".to_string(),
+        position: None,
+        children: vec![Node::Admonition(Admonition {
+            position: None,
+            keyword: "note".to_string(),
+            title: vec![Node::Footnote(Footnote {
+                position: None,
+                children: vec![text("alpha")],
+            })],
+            children: vec![Node::Admonition(Admonition {
+                position: None,
+                keyword: "tip".to_string(),
+                title: vec![Node::Footnote(Footnote {
+                    position: None,
+                    children: vec![text("bravo")],
+                })],
+                children: vec![paragraph(vec![Node::Footnote(Footnote {
+                    position: None,
+                    children: vec![text("charlie")],
+                })])],
+            })],
+        })],
+    };
+
+    let result = calc_footnote_definition_map(&root, &[], true, DEFAULT_FOOTNOTE_IDENTIFIER_PREFIX);
+    let Node::Admonition(outer) = &result.root.children[0] else {
+        panic!("expected outer admonition");
+    };
+    let Node::Admonition(inner) = &outer.children[0] else {
+        panic!("expected inner admonition");
+    };
+    let Node::Paragraph(paragraph) = &inner.children[0] else {
+        panic!("expected paragraph");
+    };
+    let references = [&outer.title[0], &inner.title[0], &paragraph.children[0]];
+    assert_eq!(
+        references
+            .into_iter()
+            .map(|node| match node {
+                Node::FootnoteReference(reference) => reference.identifier.as_str(),
+                _ => panic!("expected footnote reference"),
+            })
+            .collect::<Vec<_>>(),
+        ["footnote-1", "footnote-2", "footnote-3"]
+    );
+
+    let definitions = result.root.children[1..]
+        .iter()
+        .map(|node| match node {
+            Node::FootnoteDefinition(definition) => definition,
+            _ => panic!("expected footnote definition"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        definitions
+            .iter()
+            .map(|definition| definition.identifier.as_str())
+            .collect::<Vec<_>>(),
+        ["footnote-1", "footnote-2", "footnote-3"]
+    );
+    assert_eq!(root.children.len(), 1);
 }
 
 #[test]

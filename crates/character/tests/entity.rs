@@ -21,6 +21,24 @@ fn every_v2_4_0_named_entity_is_searchable() {
 }
 
 #[test]
+fn named_entities_require_a_trailing_semicolon_and_start_after_ampersand() {
+    let points = create_node_point_generator("&nbsp;")
+        .into_iter()
+        .next()
+        .expect("expected entity points");
+    assert!(eat_entity_reference(&points, 0, points.len()).is_none());
+    assert_eq!(
+        eat_entity_reference(&points, 1, points.len())
+            .expect("entity should match")
+            .value,
+        "\u{00a0}"
+    );
+    assert!(ENTITY_REFERENCE_TRIE
+        .search(&points, 1, points.len() - 1)
+        .is_none());
+}
+
+#[test]
 fn every_v2_4_0_unicode_punctuation_is_recognized() {
     for code_point in [
         UnicodePcCodePoint::VALUES,
@@ -44,7 +62,14 @@ fn numeric_entities_match_scalar_rules() {
         ("&#992;", "Ϡ"),
         ("&#xcab;", "ಫ"),
         ("&#0;", "�"),
+        ("&#x0;", "�"),
+        ("&#55296;", "�"),
         ("&#xDFFF;", "�"),
+        ("&#1114112;", "�"),
+        ("&#x110000;", "�"),
+        ("&#55295;", "\u{d7ff}"),
+        ("&#xE000;", "\u{e000}"),
+        ("&#x10FFFF;", "\u{10ffff}"),
     ] {
         let points = create_node_point_generator(source)
             .into_iter()

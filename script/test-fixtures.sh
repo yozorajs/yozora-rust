@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+cargo test -p yozora-suitecases --test reference_test_parity
 cargo test -p yozora-suitecases --test suitecases_custom_subset
 cargo test -p yozora-suitecases --test suitecases_smoke
 cargo test -p yozora-suitecases --test suitecases_upstream_subset

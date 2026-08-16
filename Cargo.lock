@@ -692,6 +692,7 @@ dependencies = [
  "yozora-parser",
  "yozora-parser-gfm",
  "yozora-parser-gfm-ex",
+ "yozora-tokenizer-inline-math",
 ]
 
 [[package]]

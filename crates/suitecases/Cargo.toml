@@ -14,6 +14,7 @@ yozora-core-parser = { path = "../core-parser" }
 yozora-parser = { path = "../parser" }
 yozora-parser-gfm = { path = "../parser-gfm" }
 yozora-parser-gfm-ex = { path = "../parser-gfm-ex" }
+yozora-tokenizer-inline-math = { path = "../tokenizer-inline-math" }
 
 [lib]
 path = "src/lib.rs"

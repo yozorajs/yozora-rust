@@ -1,0 +1,1093 @@
+{
+  "schema_version": 2,
+  "reference_commit": "4bbc3d4f591a87efe7d7f474c1f9f07f0dcbfdc1",
+  "direct_coverage": {
+    "packages/ast-util/__test__/ast-util.spec.ts": {
+      "reference_sha256": "52fb823c5a93d23701cf9dc8240d5efd868390de773cd9b20927dd64b46dec92",
+      "rust_tests": [
+        "crates/ast-util/tests/ast_util.rs::node_matcher_handles_all_empty_and_selected_types",
+        "crates/ast-util/tests/ast_util.rs::shallow_collector_handles_replacements_and_wide_lists"
+      ],
+      "case_ids": [
+        "packages/ast-util/__test__/ast-util.spec.ts:5::0",
+        "packages/ast-util/__test__/ast-util.spec.ts:13::0",
+        "packages/ast-util/__test__/ast-util.spec.ts:21::0",
+        "packages/ast-util/__test__/ast-util.spec.ts:29::0",
+        "packages/ast-util/__test__/ast-util.spec.ts:37::0",
+        "packages/ast-util/__test__/ast-util.spec.ts:51::0",
+        "packages/ast-util/__test__/ast-util.spec.ts:58::0",
+        "packages/ast-util/__test__/ast-util.spec.ts:70::0",
+        "packages/ast-util/__test__/ast-util.spec.ts:84::0"
+      ]
+    },
+    "packages/ast-util/__test__/clone.spec.ts": {
+      "reference_sha256": "4d5801d718fa09ee62f74fc7cfe3170ac1c32f08f468b59392c802c4dc2b9d03",
+      "rust_tests": [
+        "crates/ast-util/tests/ast_util.rs::shallow_clone_stops_entire_traversal_at_nested_match",
+        "crates/ast-util/tests/ast_util.rs::deep_ast_operations_are_stack_safe"
+      ],
+      "case_ids": [
+        "packages/ast-util/__test__/clone.spec.ts:10::0",
+        "packages/ast-util/__test__/clone.spec.ts:18::0"
+      ]
+    },
+    "packages/ast-util/__test__/collect.spec.ts": {
+      "reference_sha256": "9417dd0e728ad2618cfd51884b6aa91524dd464a31b614dcc9d8e1f8b35416c2",
+      "rust_tests": [
+        "crates/ast-util/tests/ast_util.rs::collect_nodes_respects_matcher_and_preorder"
+      ],
+      "case_ids": [
+        "packages/ast-util/__test__/collect.spec.ts:8::0"
+      ]
+    },
+    "packages/ast-util/__test__/definition.spec.ts": {
+      "reference_sha256": "813999800e4a1bb42d06167bff339fb8bd00524c2f03102f831ee52406285aa2",
+      "rust_tests": [
+        "crates/ast-util/tests/ast_util.rs::identifier_set_and_definition_collection_follow_reference_order",
+        "crates/ast-util/tests/ast_util.rs::definition_map_appends_only_missing_presets"
+      ],
+      "case_ids": [
+        "packages/ast-util/__test__/definition.spec.ts:12::0",
+        "packages/ast-util/__test__/definition.spec.ts:18::0",
+        "packages/ast-util/__test__/definition.spec.ts:36::0",
+        "packages/ast-util/__test__/definition.spec.ts:47::0",
+        "packages/ast-util/__test__/definition.spec.ts:57::0",
+        "packages/ast-util/__test__/definition.spec.ts:81::0"
+      ]
+    },
+    "packages/ast-util/__test__/excerpt.spec.ts": {
+      "reference_sha256": "caf73b4fb83a9c145238bdcdf76267159136a48b9ddb47220776aefe08a7e07c",
+      "rust_tests": [
+        "crates/ast-util/tests/ast_util.rs::excerpt_uses_utf16_units_without_splitting_astral_character",
+        "crates/ast-util/tests/ast_util.rs::excerpt_truncates_nested_literals_and_zero_limit",
+        "crates/ast-util/tests/ast_util.rs::excerpt_separator_stops_at_root_or_nested_literal"
+      ],
+      "case_ids": [
+        "packages/ast-util/__test__/excerpt.spec.ts:10::0",
+        "packages/ast-util/__test__/excerpt.spec.ts:17::0",
+        "packages/ast-util/__test__/excerpt.spec.ts:42::0",
+        "packages/ast-util/__test__/excerpt.spec.ts:63::0",
+        "packages/ast-util/__test__/excerpt.spec.ts:77::0",
+        "packages/ast-util/__test__/excerpt.spec.ts:100::0",
+        "packages/ast-util/__test__/excerpt.spec.ts:106::0",
+        "packages/ast-util/__test__/excerpt.spec.ts:106::1",
+        "packages/ast-util/__test__/excerpt.spec.ts:124::0",
+        "packages/ast-util/__test__/excerpt.spec.ts:148::0"
+      ]
+    },
+    "packages/ast-util/__test__/footnote-definition.spec.ts": {
+      "reference_sha256": "be0a0e1e4bd260bc23301cf2c2a177ad0c36ba0443b4d64e8fceb0018e0772b0",
+      "rust_tests": [
+        "crates/ast-util/tests/ast_util.rs::footnote_definition_map_appends_missing_presets",
+        "crates/ast-util/tests/ast_util.rs::footnotes_use_postorder_and_admonition_title_order",
+        "crates/ast-util/tests/ast_util.rs::footnotes_preserve_postorder_outside_admonitions",
+        "crates/ast-util/tests/ast_util.rs::footnotes_preserve_source_order_across_nested_admonition_fields"
+      ],
+      "case_ids": [
+        "packages/ast-util/__test__/footnote-definition.spec.ts:16::0",
+        "packages/ast-util/__test__/footnote-definition.spec.ts:31::0",
+        "packages/ast-util/__test__/footnote-definition.spec.ts:38::0",
+        "packages/ast-util/__test__/footnote-definition.spec.ts:67::0",
+        "packages/ast-util/__test__/footnote-definition.spec.ts:80::0",
+        "packages/ast-util/__test__/footnote-definition.spec.ts:115::0",
+        "packages/ast-util/__test__/footnote-definition.spec.ts:147::0",
+        "packages/ast-util/__test__/footnote-definition.spec.ts:211::0"
+      ]
+    },
+    "packages/ast-util/__test__/mutate-async.spec.ts": {
+      "reference_sha256": "c43159b9403af726a52dd1789f52d1e2ed315758982a1164b0bb60d9e4b52a05",
+      "rust_tests": [
+        "crates/ast-util/tests/ast_util.rs::remove_positions_covers_admonition_title_and_body",
+        "crates/ast-util/tests/ast_util.rs::remove_positions_preserves_metadata_and_cleans_custom_node_arrays",
+        "crates/ast-util/tests/ast_util.rs::async_postorder_awaits_replacements",
+        "crates/ast-util/tests/ast_util.rs::async_preorder_replaces_parent_before_descendants"
+      ],
+      "case_ids": [
+        "packages/ast-util/__test__/mutate-async.spec.ts:58::0",
+        "packages/ast-util/__test__/mutate-async.spec.ts:69::0",
+        "packages/ast-util/__test__/mutate-async.spec.ts:102::0",
+        "packages/ast-util/__test__/mutate-async.spec.ts:137::0"
+      ]
+    },
+    "packages/ast-util/__test__/replace.spec.ts": {
+      "reference_sha256": "67527d846d3e6d8392eaf48dae8259fb5658a1aafe67ca12f68aa2758dbf3cac",
+      "rust_tests": [
+        "crates/ast-util/tests/ast_util.rs::mutation_factories_resume_with_replacements",
+        "crates/ast-util/tests/ast_util.rs::preorder_replacement_skips_replaced_descendants",
+        "crates/ast-util/tests/ast_util.rs::postorder_replacement_visits_descendants_first"
+      ],
+      "case_ids": [
+        "packages/ast-util/__test__/replace.spec.ts:10::0",
+        "packages/ast-util/__test__/replace.spec.ts:26::0",
+        "packages/ast-util/__test__/replace.spec.ts:46::0",
+        "packages/ast-util/__test__/replace.spec.ts:57::0",
+        "packages/ast-util/__test__/replace.spec.ts:73::0",
+        "packages/ast-util/__test__/replace.spec.ts:93::0"
+      ]
+    },
+    "packages/ast-util/__test__/search.spec.ts": {
+      "reference_sha256": "ffc8f8eefac056ce2e1ad35919b27a4a0e611f02cc31d703cb5ed8db82a41c29",
+      "rust_tests": [
+        "crates/ast-util/tests/ast_util.rs::search_returns_preorder_paths"
+      ],
+      "case_ids": [
+        "packages/ast-util/__test__/search.spec.ts:10::0",
+        "packages/ast-util/__test__/search.spec.ts:15::0",
+        "packages/ast-util/__test__/search.spec.ts:25::0"
+      ]
+    },
+    "packages/ast-util/__test__/stack-safety.spec.ts": {
+      "reference_sha256": "aacf14dba7880726e77d1ac362c0889b965e3305bf60e41e7cea37e9fb849126",
+      "rust_tests": [
+        "crates/ast-util/tests/ast_util.rs::deep_ast_operations_are_stack_safe"
+      ],
+      "case_ids": [
+        "packages/ast-util/__test__/stack-safety.spec.ts:42::0",
+        "packages/ast-util/__test__/stack-safety.spec.ts:56::0",
+        "packages/ast-util/__test__/stack-safety.spec.ts:76::0"
+      ]
+    },
+    "packages/ast-util/__test__/toc.spec.ts": {
+      "reference_sha256": "8e80c780ed1796c9b57571f8471cbecff7e32e0fb70b5f8d312e510d77571bf6",
+      "rust_tests": [
+        "crates/ast-util/tests/ast_util.rs::toc_applies_prefix_and_preserves_heading_hierarchy",
+        "crates/ast-util/tests/ast_util.rs::toc_avoids_suffix_collisions",
+        "crates/ast-util/tests/ast_util.rs::toc_scales_for_many_duplicate_headings",
+        "crates/ast-util/tests/ast_util.rs::toc_identifiers_include_image_alt_text"
+      ],
+      "case_ids": [
+        "packages/ast-util/__test__/toc.spec.ts:30::0",
+        "packages/ast-util/__test__/toc.spec.ts:36::0",
+        "packages/ast-util/__test__/toc.spec.ts:42::0",
+        "packages/ast-util/__test__/toc.spec.ts:83::0",
+        "packages/ast-util/__test__/toc.spec.ts:99::0",
+        "packages/ast-util/__test__/toc.spec.ts:111::0",
+        "packages/ast-util/__test__/toc.spec.ts:153::0"
+      ]
+    },
+    "packages/ast-util/__test__/traverse.spec.ts": {
+      "reference_sha256": "83bf5e6d96fa93cd85d4c216bdef6da0b0cbb5473786eebd829556cc6be72d5b",
+      "rust_tests": [
+        "crates/ast-util/tests/ast_util.rs::deep_ast_operations_are_stack_safe",
+        "crates/ast-util/tests/ast_util.rs::preorder_replacement_skips_replaced_descendants",
+        "crates/ast-util/tests/ast_util.rs::postorder_replacement_visits_descendants_first"
+      ],
+      "case_ids": [
+        "packages/ast-util/__test__/traverse.spec.ts:10::0",
+        "packages/ast-util/__test__/traverse.spec.ts:21::0"
+      ]
+    },
+    "packages/ast-util/__test__/url.spec.ts": {
+      "reference_sha256": "f1a9330589cd58247bc16d7b54dfd8dc3ac7bbb9b7a9a087e363a43657297eeb",
+      "rust_tests": [
+        "crates/ast-util/tests/ast_util.rs::url_resolver_matches_directory_and_opaque_semantics",
+        "crates/ast-util/tests/ast_util.rs::resolve_urls_uses_default_matcher_and_resolver",
+        "crates/ast-util/tests/ast_util.rs::resolve_urls_visits_admonition_body_then_title_once"
+      ],
+      "case_ids": [
+        "packages/ast-util/__test__/url.spec.ts:7::0",
+        "packages/ast-util/__test__/url.spec.ts:7::1",
+        "packages/ast-util/__test__/url.spec.ts:7::2",
+        "packages/ast-util/__test__/url.spec.ts:7::3",
+        "packages/ast-util/__test__/url.spec.ts:7::4",
+        "packages/ast-util/__test__/url.spec.ts:7::5",
+        "packages/ast-util/__test__/url.spec.ts:18::0",
+        "packages/ast-util/__test__/url.spec.ts:18::1",
+        "packages/ast-util/__test__/url.spec.ts:18::2",
+        "packages/ast-util/__test__/url.spec.ts:18::3",
+        "packages/ast-util/__test__/url.spec.ts:18::4",
+        "packages/ast-util/__test__/url.spec.ts:18::5",
+        "packages/ast-util/__test__/url.spec.ts:18::6",
+        "packages/ast-util/__test__/url.spec.ts:18::7",
+        "packages/ast-util/__test__/url.spec.ts:18::8",
+        "packages/ast-util/__test__/url.spec.ts:18::9",
+        "packages/ast-util/__test__/url.spec.ts:18::10",
+        "packages/ast-util/__test__/url.spec.ts:18::11",
+        "packages/ast-util/__test__/url.spec.ts:18::12",
+        "packages/ast-util/__test__/url.spec.ts:18::13",
+        "packages/ast-util/__test__/url.spec.ts:18::14",
+        "packages/ast-util/__test__/url.spec.ts:18::15",
+        "packages/ast-util/__test__/url.spec.ts:18::16",
+        "packages/ast-util/__test__/url.spec.ts:18::17",
+        "packages/ast-util/__test__/url.spec.ts:18::18",
+        "packages/ast-util/__test__/url.spec.ts:18::19",
+        "packages/ast-util/__test__/url.spec.ts:18::20",
+        "packages/ast-util/__test__/url.spec.ts:18::21",
+        "packages/ast-util/__test__/url.spec.ts:18::22",
+        "packages/ast-util/__test__/url.spec.ts:56::0",
+        "packages/ast-util/__test__/url.spec.ts:65::0",
+        "packages/ast-util/__test__/url.spec.ts:74::0"
+      ]
+    },
+    "packages/character/__test__/ascii.spec.ts": {
+      "reference_sha256": "d512b3695d5c87f3ef2d9e9617335d2d41150b40100e723b4abed92f89510499",
+      "rust_tests": [
+        "crates/character/tests/character.rs::character_sets_and_predicates_are_consistent"
+      ],
+      "case_ids": [
+        "packages/character/__test__/ascii.spec.ts:25::0",
+        "packages/character/__test__/ascii.spec.ts:29::0",
+        "packages/character/__test__/ascii.spec.ts:35::0",
+        "packages/character/__test__/ascii.spec.ts:83::0",
+        "packages/character/__test__/ascii.spec.ts:87::0",
+        "packages/character/__test__/ascii.spec.ts:93::0",
+        "packages/character/__test__/ascii.spec.ts:119::0",
+        "packages/character/__test__/ascii.spec.ts:125::0",
+        "packages/character/__test__/ascii.spec.ts:174::0",
+        "packages/character/__test__/ascii.spec.ts:178::0",
+        "packages/character/__test__/ascii.spec.ts:184::0"
+      ]
+    },
+    "packages/character/__test__/character.spec.ts": {
+      "reference_sha256": "b97d59232094646f69ca304837a8d464bd7b5d344652e14be10ef7fa57ae3d32",
+      "rust_tests": [
+        "crates/character/tests/character.rs::character_sets_and_predicates_are_consistent",
+        "crates/character/tests/entity.rs::every_v2_4_0_unicode_punctuation_is_recognized"
+      ],
+      "case_ids": [
+        "packages/character/__test__/character.spec.ts:26::0",
+        "packages/character/__test__/character.spec.ts:30::0",
+        "packages/character/__test__/character.spec.ts:36::0",
+        "packages/character/__test__/character.spec.ts:55::0",
+        "packages/character/__test__/character.spec.ts:59::0",
+        "packages/character/__test__/character.spec.ts:65::0",
+        "packages/character/__test__/character.spec.ts:89::0",
+        "packages/character/__test__/character.spec.ts:93::0",
+        "packages/character/__test__/character.spec.ts:99::0",
+        "packages/character/__test__/character.spec.ts:113::0",
+        "packages/character/__test__/character.spec.ts:162::0",
+        "packages/character/__test__/character.spec.ts:166::0",
+        "packages/character/__test__/character.spec.ts:172::0"
+      ]
+    },
+    "packages/character/__test__/entity.spec.ts": {
+      "reference_sha256": "c97ad80027ad4aa637c0a2ecf5a2e93646594640cfd897100f9bae43debcbd05",
+      "rust_tests": [
+        "crates/character/tests/entity.rs::every_v2_4_0_named_entity_is_searchable",
+        "crates/character/tests/entity.rs::named_entities_require_a_trailing_semicolon_and_start_after_ampersand",
+        "crates/character/tests/entity.rs::numeric_entities_match_scalar_rules"
+      ],
+      "case_ids": [
+        "packages/character/__test__/entity.spec.ts:4::0",
+        "packages/character/__test__/entity.spec.ts:14::0",
+        "packages/character/__test__/entity.spec.ts:26::0",
+        "packages/character/__test__/entity.spec.ts:36::0",
+        "packages/character/__test__/entity.spec.ts:36::1",
+        "packages/character/__test__/entity.spec.ts:36::2",
+        "packages/character/__test__/entity.spec.ts:36::3",
+        "packages/character/__test__/entity.spec.ts:50::0",
+        "packages/character/__test__/entity.spec.ts:60::0",
+        "packages/character/__test__/entity.spec.ts:70::0",
+        "packages/character/__test__/entity.spec.ts:70::1",
+        "packages/character/__test__/entity.spec.ts:70::2",
+        "packages/character/__test__/entity.spec.ts:76::0",
+        "packages/character/__test__/entity.spec.ts:76::1",
+        "packages/character/__test__/entity.spec.ts:76::2",
+        "packages/character/__test__/entity.spec.ts:76::3",
+        "packages/character/__test__/entity.spec.ts:76::4",
+        "packages/character/__test__/entity.spec.ts:76::5",
+        "packages/character/__test__/entity.spec.ts:88::0",
+        "packages/character/__test__/entity.spec.ts:88::1",
+        "packages/character/__test__/entity.spec.ts:88::2"
+      ]
+    },
+    "packages/character/__test__/unicode.spec.ts": {
+      "reference_sha256": "5ca24641477c36e5ae6deedf4a18e90596471d8b71bdc92dcf37071150dc2f63",
+      "rust_tests": [
+        "crates/character/tests/character.rs::unicode_whitespace_set_matches_predicate"
+      ],
+      "case_ids": [
+        "packages/character/__test__/unicode.spec.ts:23::0",
+        "packages/character/__test__/unicode.spec.ts:27::0",
+        "packages/character/__test__/unicode.spec.ts:33::0"
+      ]
+    },
+    "packages/character/__test__/util/fold-case.spec.ts": {
+      "reference_sha256": "f865b1ca96d8e65787c3ac0a77ce2af8899ab86133e0e99303bd98e14a8a13fc",
+      "rust_tests": [
+        "crates/character/src/util/fold_case.rs::follows_unicode_case_folding_map",
+        "crates/character/tests/character.rs::fold_case_covers_reference_cyrillic_additions"
+      ],
+      "case_ids": [
+        "packages/character/__test__/util/fold-case.spec.ts:4::0",
+        "packages/character/__test__/util/fold-case.spec.ts:9::0",
+        "packages/character/__test__/util/fold-case.spec.ts:9::1",
+        "packages/character/__test__/util/fold-case.spec.ts:9::2",
+        "packages/character/__test__/util/fold-case.spec.ts:9::3",
+        "packages/character/__test__/util/fold-case.spec.ts:9::4",
+        "packages/character/__test__/util/fold-case.spec.ts:9::5",
+        "packages/character/__test__/util/fold-case.spec.ts:9::6",
+        "packages/character/__test__/util/fold-case.spec.ts:9::7",
+        "packages/character/__test__/util/fold-case.spec.ts:9::8",
+        "packages/character/__test__/util/fold-case.spec.ts:23::0"
+      ]
+    },
+    "packages/character/__test__/util/han.spec.ts": {
+      "reference_sha256": "3fb4ef0c1fea48a707232e062340df5cdd1a806c131ee64d87dabf22dd7215ce",
+      "rust_tests": [
+        "crates/character/tests/character.rs::strips_and_tightens_chinese_characters"
+      ],
+      "case_ids": [
+        "packages/character/__test__/util/han.spec.ts:4::0",
+        "packages/character/__test__/util/han.spec.ts:11::0",
+        "packages/character/__test__/util/han.spec.ts:17::0",
+        "packages/character/__test__/util/han.spec.ts:23::0",
+        "packages/character/__test__/util/han.spec.ts:31::0",
+        "packages/character/__test__/util/han.spec.ts:36::0"
+      ]
+    },
+    "packages/character/__test__/util/node-point.spec.ts": {
+      "reference_sha256": "6c6555dbe176fc6c3f758b1c5f497d5dc685e91437d01b2274aa9e83bd8c1c14",
+      "rust_tests": [
+        "crates/character/tests/character.rs::node_point_generator_normalizes_controls",
+        "crates/character/tests/character.rs::node_point_generation_is_chunk_independent",
+        "crates/character/tests/character.rs::offsets_remain_utf16_source_indices",
+        "crates/character/tests/character.rs::reconstructs_tabs_newlines_escapes_and_entities"
+      ],
+      "case_ids": [
+        "packages/character/__test__/util/node-point.spec.ts:14::0",
+        "packages/character/__test__/util/node-point.spec.ts:38[for-of-0:'a\\r\\nb']::0",
+        "packages/character/__test__/util/node-point.spec.ts:38[for-of-1:'a😀b']::0",
+        "packages/character/__test__/util/node-point.spec.ts:38[for-of-2:'a\\r\\n😀b']::0",
+        "packages/character/__test__/util/node-point.spec.ts:38[for-of-3:'text\\r']::0",
+        "packages/character/__test__/util/node-point.spec.ts:48::0",
+        "packages/character/__test__/util/node-point.spec.ts:57::0",
+        "packages/character/__test__/util/node-point.spec.ts:67::0",
+        "packages/character/__test__/util/node-point.spec.ts:76::0",
+        "packages/character/__test__/util/node-point.spec.ts:82::0"
+      ]
+    },
+    "packages/invariant/__test__/invariant.spec.ts": {
+      "reference_sha256": "f01fe57edbfdfebc858c35815e448532993990a35504c402681a4c067de234a8",
+      "rust_tests": [
+        "crates/invariant/src/lib.rs::accepts_true_condition",
+        "crates/invariant/src/lib.rs::reports_context_in_non_production_mode"
+      ],
+      "case_ids": [
+        "packages/invariant/__test__/invariant.spec.ts:4::0",
+        "packages/invariant/__test__/invariant.spec.ts:10::0"
+      ]
+    },
+    "packages/markup-weaver/__test__/break.spec.ts": {
+      "reference_sha256": "8655f5e1559b6d403bf0509fc0c24b9fbede9a404bea07a455ef908315963652",
+      "rust_tests": [
+        "crates/markup-weaver/tests/basic.rs::weaves_hard_break_with_one_line_ending",
+        "crates/markup-weaver/tests/basic.rs::escapes_block_markers_after_hard_break"
+      ],
+      "case_ids": [
+        "packages/markup-weaver/__test__/break.spec.ts:19::0",
+        "packages/markup-weaver/__test__/break.spec.ts:26::0",
+        "packages/markup-weaver/__test__/break.spec.ts:32::0",
+        "packages/markup-weaver/__test__/break.spec.ts:32::1",
+        "packages/markup-weaver/__test__/break.spec.ts:32::2",
+        "packages/markup-weaver/__test__/break.spec.ts:32::3",
+        "packages/markup-weaver/__test__/break.spec.ts:32::4",
+        "packages/markup-weaver/__test__/break.spec.ts:32::5"
+      ]
+    },
+    "packages/markup-weaver/__test__/custom.spec.ts": {
+      "reference_sha256": "809ae7a1930dedb21e259d7ec60456ddc92eefae09288c8952ccfe0f0258229d",
+      "rust_tests": [
+        "crates/markup-weaver/tests/basic.rs::supports_custom_node_types"
+      ],
+      "case_ids": [
+        "packages/markup-weaver/__test__/custom.spec.ts:15::0"
+      ]
+    },
+    "packages/markup-weaver/__test__/escaping.spec.ts": {
+      "reference_sha256": "5f0d3db49f910a072ab8a18ebbe22d109662cc4e3cd7c9e51d3c960334470a03",
+      "rust_tests": [
+        "crates/markup-weaver/tests/basic.rs::preserves_literal_backslashes_in_text",
+        "crates/markup-weaver/tests/basic.rs::preserves_backslash_before_nested_inline_delimiter",
+        "crates/markup-weaver/tests/basic.rs::keeps_outer_escaper_active_after_nested_same_type"
+      ],
+      "case_ids": [
+        "packages/markup-weaver/__test__/escaping.spec.ts:4::0",
+        "packages/markup-weaver/__test__/escaping.spec.ts:20::0",
+        "packages/markup-weaver/__test__/escaping.spec.ts:46::0"
+      ]
+    },
+    "packages/markup-weaver/__test__/link.spec.ts": {
+      "reference_sha256": "14f716a012af153df64a56a56db0c20366e8dac8183cfddb438976a1030cca68",
+      "rust_tests": [
+        "crates/markup-weaver/tests/basic.rs::weaves_protocol_autolink",
+        "crates/markup-weaver/tests/basic.rs::keeps_explicit_protocol_link_when_label_differs"
+      ],
+      "case_ids": [
+        "packages/markup-weaver/__test__/link.spec.ts:10::0",
+        "packages/markup-weaver/__test__/link.spec.ts:10::1",
+        "packages/markup-weaver/__test__/link.spec.ts:23::0"
+      ]
+    },
+    "packages/parser-gfm/__test__/parser-gfm.spec.ts": {
+      "reference_sha256": "6771d8f1190e16f9039da688c8169a8bcb015ea0aa3e9b4c8817613843632cd3",
+      "rust_tests": [
+        "crates/parser/tests/profile_contracts.rs::chunked_input_is_independent_of_boundaries",
+        "crates/parser/tests/profile_contracts.rs::recognizes_block_tokenizers_after_partial_tab_indentation",
+        "crates/parser/tests/profile_contracts.rs::positions_use_utf16_units_and_terminal_line_endings",
+        "crates/parser/tests/profile_contracts.rs::failed_multiline_definition_is_reprocessed_before_following_blocks",
+        "crates/parser/tests/block_parse_scheduler.rs::lazily_parses_children_in_parent_before_child_order",
+        "crates/parser/tests/block_parse_scheduler.rs::does_not_parse_children_that_parent_does_not_request",
+        "crates/parser/tests/block_parse_scheduler.rs::throws_child_failure_back_into_parent_generator",
+        "crates/parser/tests/block_parse_scheduler.rs::rejects_cyclic_block_token_requests",
+        "crates/parser/tests/upstream_stress.rs::parses_deeply_nested_blocks_without_stack_overflow",
+        "crates/parser/tests/upstream_stress.rs::parses_deeply_nested_images_without_stack_overflow",
+        "crates/parser/tests/upstream_stress.rs::handles_unmatched_cross_tokenizer_delimiters_linearly",
+        "crates/parser/tests/upstream_stress.rs::materializes_wide_sibling_lists",
+        "crates/core-parser/src/parser.rs::same_priority_replacement_preserves_order"
+      ],
+      "case_ids": [
+        "packages/parser-gfm/__test__/parser-gfm.spec.ts:147::0",
+        "packages/parser-gfm/__test__/parser-gfm.spec.ts:153::0",
+        "packages/parser-gfm/__test__/parser-gfm.spec.ts:153::1",
+        "packages/parser-gfm/__test__/parser-gfm.spec.ts:153::2",
+        "packages/parser-gfm/__test__/parser-gfm.spec.ts:153::3",
+        "packages/parser-gfm/__test__/parser-gfm.spec.ts:165::0",
+        "packages/parser-gfm/__test__/parser-gfm.spec.ts:172::0",
+        "packages/parser-gfm/__test__/parser-gfm.spec.ts:180::0",
+        "packages/parser-gfm/__test__/parser-gfm.spec.ts:187::0",
+        "packages/parser-gfm/__test__/parser-gfm.spec.ts:205::0",
+        "packages/parser-gfm/__test__/parser-gfm.spec.ts:205::1",
+        "packages/parser-gfm/__test__/parser-gfm.spec.ts:205::2",
+        "packages/parser-gfm/__test__/parser-gfm.spec.ts:216::0",
+        "packages/parser-gfm/__test__/parser-gfm.spec.ts:236::0",
+        "packages/parser-gfm/__test__/parser-gfm.spec.ts:236::1",
+        "packages/parser-gfm/__test__/parser-gfm.spec.ts:236::2",
+        "packages/parser-gfm/__test__/parser-gfm.spec.ts:264::0",
+        "packages/parser-gfm/__test__/parser-gfm.spec.ts:273::0",
+        "packages/parser-gfm/__test__/parser-gfm.spec.ts:283::0",
+        "packages/parser-gfm/__test__/parser-gfm.spec.ts:293::0",
+        "packages/parser-gfm/__test__/parser-gfm.spec.ts:313::0",
+        "packages/parser-gfm/__test__/parser-gfm.spec.ts:326::0",
+        "packages/parser-gfm/__test__/parser-gfm.spec.ts:350::0",
+        "packages/parser-gfm/__test__/parser-gfm.spec.ts:361::0",
+        "packages/parser-gfm/__test__/parser-gfm.spec.ts:369::0"
+      ]
+    },
+    "packages/parser/__test__/inactive-delimiter.spec.ts": {
+      "reference_sha256": "74f0e8eb77d989c015e7a7998aa74791d7c3091b7992e729b3e72206d826c00c",
+      "rust_tests": [
+        "crates/parser/tests/parser_registration.rs::materializes_inactive_inline_delimiter_once"
+      ],
+      "case_ids": [
+        "packages/parser/__test__/inactive-delimiter.spec.ts:10::0"
+      ]
+    },
+    "packages/parser/__test__/parser.spec.ts": {
+      "reference_sha256": "6b98587280a7b8c8ff934c9d85f9348d6752fc625f605f18db2e82e1aa773547",
+      "rust_tests": [
+        "crates/core-parser/src/parser.rs::constructs_without_props_and_parses_an_empty_root",
+        "crates/parser/tests/profile_contracts.rs::recognizes_yozora_extensions_after_partial_tab_indentation",
+        "crates/parser/tests/parser_registration.rs::fallback_collision_does_not_mutate_registration_state",
+        "crates/parser/tests/parser_registration.rs::allows_replacing_fallbacks_with_same_names",
+        "crates/parser/tests/parser_registration.rs::unmounts_only_the_selected_tokenizer_type",
+        "crates/parser/tests/parser_registration.rs::unmounts_both_tokenizer_types_by_shared_name",
+        "crates/parser/src/lib.rs::parse_options_format_url_is_applied_to_url_nodes",
+        "crates/parser/src/lib.rs::undefined_default_options_use_built_in_defaults",
+        "crates/parser/src/lib.rs::undefined_parse_options_inherit_configured_defaults"
+      ],
+      "case_ids": [
+        "packages/parser/__test__/parser.spec.ts:28::0",
+        "packages/parser/__test__/parser.spec.ts:41::0",
+        "packages/parser/__test__/parser.spec.ts:50::0",
+        "packages/parser/__test__/parser.spec.ts:57::0",
+        "packages/parser/__test__/parser.spec.ts:68::0",
+        "packages/parser/__test__/parser.spec.ts:87::0",
+        "packages/parser/__test__/parser.spec.ts:98::0",
+        "packages/parser/__test__/parser.spec.ts:128::0",
+        "packages/parser/__test__/parser.spec.ts:139::0",
+        "packages/parser/__test__/parser.spec.ts:153::0",
+        "packages/parser/__test__/parser.spec.ts:164::0",
+        "packages/parser/__test__/parser.spec.ts:184::0",
+        "packages/parser/__test__/parser.spec.ts:212::0",
+        "packages/parser/__test__/parser.spec.ts:229::0"
+      ]
+    },
+    "tokenizers/autolink-extension/__test__/autolink-extension.spec.ts": {
+      "reference_sha256": "ee1ba78dcef2411257588408b1111b761d984ee0dc2eb4050fb2f5f4638e0e37",
+      "rust_tests": [
+        "crates/parser/tests/autolink_extension.rs::recognizes_valid_extended_urls",
+        "crates/parser/tests/autolink_extension.rs::rejects_underscore_in_final_domain_segments",
+        "crates/parser/tests/autolink_extension.rs::recognizes_valid_www_after_rejected_candidate_and_boundary",
+        "crates/parser/tests/autolink_extension.rs::recognizes_url_after_underscore_boundary",
+        "crates/parser/tests/autolink_extension.rs::recognizes_extended_email_local_part_boundaries",
+        "crates/parser/tests/autolink_extension.rs::rejects_empty_email_domain_segments_and_trims_period",
+        "crates/parser/tests/autolink_extension.rs::recognizes_extended_protocol_autolinks",
+        "crates/parser/tests/autolink_extension.rs::explicit_link_overrides_protocol_like_label",
+        "crates/parser/tests/autolink_extension.rs::rejects_email_suffix_inside_invalid_mailto",
+        "crates/parser/tests/autolink_extension.rs::keeps_protocol_trailing_punctuation_outside_link",
+        "crates/parser/tests/autolink_extension.rs::large_rejected_candidates_remain_plain_text"
+      ],
+      "case_ids": [
+        "tokenizers/autolink-extension/__test__/autolink-extension.spec.ts:18::0",
+        "tokenizers/autolink-extension/__test__/autolink-extension.spec.ts:18::1",
+        "tokenizers/autolink-extension/__test__/autolink-extension.spec.ts:28::0",
+        "tokenizers/autolink-extension/__test__/autolink-extension.spec.ts:36::0",
+        "tokenizers/autolink-extension/__test__/autolink-extension.spec.ts:36::1",
+        "tokenizers/autolink-extension/__test__/autolink-extension.spec.ts:36::2",
+        "tokenizers/autolink-extension/__test__/autolink-extension.spec.ts:53::0",
+        "tokenizers/autolink-extension/__test__/autolink-extension.spec.ts:53::1",
+        "tokenizers/autolink-extension/__test__/autolink-extension.spec.ts:69::0",
+        "tokenizers/autolink-extension/__test__/autolink-extension.spec.ts:69::1",
+        "tokenizers/autolink-extension/__test__/autolink-extension.spec.ts:69::2",
+        "tokenizers/autolink-extension/__test__/autolink-extension.spec.ts:69::3",
+        "tokenizers/autolink-extension/__test__/autolink-extension.spec.ts:69::4",
+        "tokenizers/autolink-extension/__test__/autolink-extension.spec.ts:79::0",
+        "tokenizers/autolink-extension/__test__/autolink-extension.spec.ts:79::1",
+        "tokenizers/autolink-extension/__test__/autolink-extension.spec.ts:86::0",
+        "tokenizers/autolink-extension/__test__/autolink-extension.spec.ts:98::0",
+        "tokenizers/autolink-extension/__test__/autolink-extension.spec.ts:98::1",
+        "tokenizers/autolink-extension/__test__/autolink-extension.spec.ts:98::2",
+        "tokenizers/autolink-extension/__test__/autolink-extension.spec.ts:109::0",
+        "tokenizers/autolink-extension/__test__/autolink-extension.spec.ts:126::0",
+        "tokenizers/autolink-extension/__test__/autolink-extension.spec.ts:143::0",
+        "tokenizers/autolink-extension/__test__/autolink-extension.spec.ts:143::1",
+        "tokenizers/autolink-extension/__test__/autolink-extension.spec.ts:153::0",
+        "tokenizers/autolink-extension/__test__/autolink-extension.spec.ts:169::0",
+        "tokenizers/autolink-extension/__test__/autolink-extension.spec.ts:186::0",
+        "tokenizers/autolink-extension/__test__/autolink-extension.spec.ts:186::1",
+        "tokenizers/autolink-extension/__test__/autolink-extension.spec.ts:186::2"
+      ]
+    },
+    "tokenizers/autolink/__test__/autolink.spec.ts": {
+      "reference_sha256": "8440b9f787ad8cd047a372496576b20e655cc7075199bb163a7fff0872b40753",
+      "rust_tests": [
+        "crates/parser/tests/inline_tokenizer_parity.rs::standard_autolinks_preserve_unicode_labels_and_backslashes"
+      ],
+      "case_ids": [
+        "tokenizers/autolink/__test__/autolink.spec.ts:16::0",
+        "tokenizers/autolink/__test__/autolink.spec.ts:16::1",
+        "tokenizers/autolink/__test__/autolink.spec.ts:33::0"
+      ]
+    },
+    "tokenizers/blockquote/__test__/blockquote.spec.ts": {
+      "reference_sha256": "2fee6c6ca9aa7d8d750cbbeac4b280f021b16645948a302cafcc81b36d1eeba4",
+      "rust_tests": [
+        "crates/parser/tests/simple_blocks.rs::blockquote_handles_tabs_after_markers"
+      ],
+      "case_ids": [
+        "tokenizers/blockquote/__test__/blockquote.spec.ts:9::0",
+        "tokenizers/blockquote/__test__/blockquote.spec.ts:21[for-of-0:[0, '']]::0",
+        "tokenizers/blockquote/__test__/blockquote.spec.ts:21[for-of-1:[1, ' ']]::0",
+        "tokenizers/blockquote/__test__/blockquote.spec.ts:21[for-of-2:[2, ' ']]::0",
+        "tokenizers/blockquote/__test__/blockquote.spec.ts:21[for-of-3:[3, ' ']]::0"
+      ]
+    },
+    "tokenizers/break/__test__/break.spec.ts": {
+      "reference_sha256": "13c14ea70b46d32993e28caff5fd4b792bfb5d497e71874fbac73235981d9244",
+      "rust_tests": [
+        "crates/parser/tests/inline_tokenizer_parity.rs::hard_breaks_own_line_endings_and_soft_breaks_stay_in_text",
+        "crates/parser/tests/inline_tokenizer_parity.rs::hard_break_positions_include_the_line_ending"
+      ],
+      "case_ids": [
+        "tokenizers/break/__test__/break.spec.ts:9::0",
+        "tokenizers/break/__test__/break.spec.ts:9::1",
+        "tokenizers/break/__test__/break.spec.ts:9::2",
+        "tokenizers/break/__test__/break.spec.ts:29::0",
+        "tokenizers/break/__test__/break.spec.ts:35::0",
+        "tokenizers/break/__test__/break.spec.ts:35::1",
+        "tokenizers/break/__test__/break.spec.ts:35::2"
+      ]
+    },
+    "tokenizers/definition/__test__/link-definition.spec.ts": {
+      "reference_sha256": "afedb7047004266ae18592a8c4ba211b936e95db57dc475735250ab7926a990e",
+      "rust_tests": [
+        "crates/parser/tests/definition.rs::parses_destination_and_title_after_definition_label_line",
+        "crates/parser/tests/definition.rs::preserves_unicode_whitespace_when_normalizing_labels",
+        "crates/parser/tests/definition.rs::limits_definition_labels_to_999_characters",
+        "crates/parser/tests/definition.rs::resolves_unicode_case_fold_equivalent_labels",
+        "crates/parser/tests/definition.rs::rejects_unbalanced_definition_destinations",
+        "crates/parser/tests/definition.rs::preserves_trailing_backslash_in_destination_at_eof",
+        "crates/parser/tests/definition.rs::rejects_whitespace_escaped_in_definition_destination",
+        "crates/parser/tests/definition.rs::validates_trailing_content_after_parenthesized_title"
+      ],
+      "case_ids": [
+        "tokenizers/definition/__test__/link-definition.spec.ts:12::0",
+        "tokenizers/definition/__test__/link-definition.spec.ts:12::1",
+        "tokenizers/definition/__test__/link-definition.spec.ts:12::2",
+        "tokenizers/definition/__test__/link-definition.spec.ts:35::0",
+        "tokenizers/definition/__test__/link-definition.spec.ts:35::1",
+        "tokenizers/definition/__test__/link-definition.spec.ts:35::2",
+        "tokenizers/definition/__test__/link-definition.spec.ts:66::0",
+        "tokenizers/definition/__test__/link-definition.spec.ts:66::1",
+        "tokenizers/definition/__test__/link-definition.spec.ts:66::2",
+        "tokenizers/definition/__test__/link-definition.spec.ts:84::0",
+        "tokenizers/definition/__test__/link-definition.spec.ts:84::1",
+        "tokenizers/definition/__test__/link-definition.spec.ts:84::2",
+        "tokenizers/definition/__test__/link-definition.spec.ts:104::0",
+        "tokenizers/definition/__test__/link-definition.spec.ts:104::1",
+        "tokenizers/definition/__test__/link-definition.spec.ts:104::2",
+        "tokenizers/definition/__test__/link-definition.spec.ts:122::0",
+        "tokenizers/definition/__test__/link-definition.spec.ts:122::1",
+        "tokenizers/definition/__test__/link-definition.spec.ts:122::2",
+        "tokenizers/definition/__test__/link-definition.spec.ts:141::0",
+        "tokenizers/definition/__test__/link-definition.spec.ts:141::1",
+        "tokenizers/definition/__test__/link-definition.spec.ts:141::2",
+        "tokenizers/definition/__test__/link-definition.spec.ts:157::0",
+        "tokenizers/definition/__test__/link-definition.spec.ts:157::1",
+        "tokenizers/definition/__test__/link-definition.spec.ts:157::2"
+      ]
+    },
+    "tokenizers/delete/__test__/delete.spec.ts": {
+      "reference_sha256": "c93abf000ad4b40801a1de7c0994e86583efa6c793d47fe42b7f78da1647b56f",
+      "rust_tests": [
+        "crates/parser/tests/inline_tokenizer_parity.rs::delete_matches_only_one_or_two_balanced_tildes_and_omits_position"
+      ],
+      "case_ids": [
+        "tokenizers/delete/__test__/delete.spec.ts:12::0",
+        "tokenizers/delete/__test__/delete.spec.ts:21::0",
+        "tokenizers/delete/__test__/delete.spec.ts:21::1",
+        "tokenizers/delete/__test__/delete.spec.ts:21::2",
+        "tokenizers/delete/__test__/delete.spec.ts:21::3",
+        "tokenizers/delete/__test__/delete.spec.ts:21::4",
+        "tokenizers/delete/__test__/delete.spec.ts:34::0"
+      ]
+    },
+    "tokenizers/ecma-import/__test__/ecma-import.spec.ts": {
+      "reference_sha256": "a8e6bd530a682ec408cb8141d5ca6f5d3a6dd25e3e8790bf997d862c3fcba4d4",
+      "rust_tests": [
+        "crates/parser/tests/ecma_import.rs::ecma_import_omits_position_when_disabled",
+        "crates/parser/tests/ecma_import.rs::accepts_supported_default_bindings",
+        "crates/parser/tests/ecma_import.rs::accepts_supported_named_imports",
+        "crates/parser/tests/ecma_import.rs::handles_absent_default_repeated_sources_and_trailing_comma",
+        "crates/parser/tests/ecma_import.rs::rejects_unsupported_or_invalid_declarations",
+        "crates/tokenizer-ecma-import/src/util.rs::matches_side_effect_imports",
+        "crates/tokenizer-ecma-import/src/util.rs::matches_default_imports",
+        "crates/tokenizer-ecma-import/src/util.rs::matches_named_imports"
+      ],
+      "case_ids": [
+        "tokenizers/ecma-import/__test__/ecma-import.spec.ts:13::0",
+        "tokenizers/ecma-import/__test__/ecma-import.spec.ts:36::0",
+        "tokenizers/ecma-import/__test__/ecma-import.spec.ts:36::1",
+        "tokenizers/ecma-import/__test__/ecma-import.spec.ts:36::2",
+        "tokenizers/ecma-import/__test__/ecma-import.spec.ts:48::0",
+        "tokenizers/ecma-import/__test__/ecma-import.spec.ts:65::0",
+        "tokenizers/ecma-import/__test__/ecma-import.spec.ts:72::0",
+        "tokenizers/ecma-import/__test__/ecma-import.spec.ts:82::0",
+        "tokenizers/ecma-import/__test__/ecma-import.spec.ts:99::0",
+        "tokenizers/ecma-import/__test__/ecma-import.spec.ts:99::1",
+        "tokenizers/ecma-import/__test__/ecma-import.spec.ts:99::2",
+        "tokenizers/ecma-import/__test__/ecma-import.spec.ts:99::3",
+        "tokenizers/ecma-import/__test__/ecma-import.spec.ts:99::4",
+        "tokenizers/ecma-import/__test__/ecma-import.spec.ts:99::5",
+        "tokenizers/ecma-import/__test__/ecma-import.spec.ts:99::6",
+        "tokenizers/ecma-import/__test__/ecma-import.spec.ts:99::7",
+        "tokenizers/ecma-import/__test__/ecma-import.spec.ts:99::8",
+        "tokenizers/ecma-import/__test__/ecma-import.spec.ts:99::9",
+        "tokenizers/ecma-import/__test__/ecma-import.spec.ts:99::10",
+        "tokenizers/ecma-import/__test__/ecma-import.spec.ts:99::11",
+        "tokenizers/ecma-import/__test__/ecma-import.spec.ts:99::12",
+        "tokenizers/ecma-import/__test__/ecma-import.spec.ts:99::13",
+        "tokenizers/ecma-import/__test__/ecma-import.spec.ts:120::0",
+        "tokenizers/ecma-import/__test__/ecma-import.spec.ts:128::0",
+        "tokenizers/ecma-import/__test__/ecma-import.spec.ts:136::0"
+      ]
+    },
+    "tokenizers/emphasis/__test__/emphasis.spec.ts": {
+      "reference_sha256": "4cf4339524df95398ad2fe26792e54a542c2e59216ef1ce880b284078aa19f8d",
+      "rust_tests": [
+        "crates/parser/tests/inline_tokenizer_parity.rs::unicode_punctuation_does_not_open_emphasis"
+      ],
+      "case_ids": [
+        "tokenizers/emphasis/__test__/emphasis.spec.ts:9::0",
+        "tokenizers/emphasis/__test__/emphasis.spec.ts:9::1"
+      ]
+    },
+    "tokenizers/fenced-code/__test__/fencd-code.spec.ts": {
+      "reference_sha256": "0f21a7a27aff0af8fbfd241d91a5aa6b04af4a2995b3c0ddb20fcc046527f571",
+      "rust_tests": [
+        "crates/parser/tests/code_blocks.rs::fenced_code_omits_position_when_disabled",
+        "crates/parser/tests/code_blocks.rs::removes_fence_indentation_from_mixed_whitespace",
+        "crates/parser/tests/code_blocks.rs::recognizes_fence_after_partial_tab_in_list_item",
+        "crates/parser/tests/code_blocks.rs::preserves_invalid_closing_fence_as_content"
+      ],
+      "case_ids": [
+        "tokenizers/fenced-code/__test__/fencd-code.spec.ts:11::0",
+        "tokenizers/fenced-code/__test__/fencd-code.spec.ts:24[for-indentWidth=1]::0",
+        "tokenizers/fenced-code/__test__/fencd-code.spec.ts:24[for-indentWidth=2]::0",
+        "tokenizers/fenced-code/__test__/fencd-code.spec.ts:24[for-indentWidth=3]::0",
+        "tokenizers/fenced-code/__test__/fencd-code.spec.ts:34::0",
+        "tokenizers/fenced-code/__test__/fencd-code.spec.ts:52::0",
+        "tokenizers/fenced-code/__test__/fencd-code.spec.ts:52::1",
+        "tokenizers/fenced-code/__test__/fencd-code.spec.ts:52::2"
+      ]
+    },
+    "tokenizers/footnote-definition/__test__/tokenizer.spec.ts": {
+      "reference_sha256": "b6f39cc0df88131de6fe916e203d0c4fad62dbd371bd367c2ee1503c6d94475d",
+      "rust_tests": [
+        "crates/parser/tests/footnote.rs::recognizes_definition_after_partial_tab_indentation",
+        "crates/parser/tests/footnote.rs::recognizes_escaped_and_maximum_length_labels"
+      ],
+      "case_ids": [
+        "tokenizers/footnote-definition/__test__/tokenizer.spec.ts:21::0",
+        "tokenizers/footnote-definition/__test__/tokenizer.spec.ts:32::0"
+      ]
+    },
+    "tokenizers/footnote-definition/__test__/util.spec.ts": {
+      "reference_sha256": "822cc358ddb72cc4234fe128cc19c63f5c02705ac1095302765805aad8918bc5",
+      "rust_tests": [
+        "crates/tokenizer-footnote-definition/src/util.rs::handles_backslash_escaped_brackets",
+        "crates/tokenizer-footnote-definition/src/util.rs::requires_label_on_one_line",
+        "crates/tokenizer-footnote-definition/src/util.rs::rejects_unclosed_label",
+        "crates/tokenizer-footnote-definition/src/util.rs::rejects_empty_label",
+        "crates/tokenizer-footnote-definition/src/util.rs::limits_label_content_to_999_characters"
+      ],
+      "case_ids": [
+        "tokenizers/footnote-definition/__test__/util.spec.ts:10::0",
+        "tokenizers/footnote-definition/__test__/util.spec.ts:16::0",
+        "tokenizers/footnote-definition/__test__/util.spec.ts:23::0",
+        "tokenizers/footnote-definition/__test__/util.spec.ts:27::0",
+        "tokenizers/footnote-definition/__test__/util.spec.ts:31::0"
+      ]
+    },
+    "tokenizers/footnote/__test__/footnote.spec.ts": {
+      "reference_sha256": "790981082e5d4b8280c051f5c065222f0159efee21ce7ae3a6498af7ba0bfaed",
+      "rust_tests": [
+        "crates/parser/tests/footnote.rs::does_not_nest_inline_footnotes",
+        "crates/parser/tests/footnote.rs::does_not_nest_inline_footnotes_through_links"
+      ],
+      "case_ids": [
+        "tokenizers/footnote/__test__/footnote.spec.ts:20::0",
+        "tokenizers/footnote/__test__/footnote.spec.ts:36::0"
+      ]
+    },
+    "tokenizers/heading/__test__/heading.spec.ts": {
+      "reference_sha256": "5e8a1af350f5a905e6f5f26cf883791d7df5d74c449ebd1865caa3c09492e403",
+      "rust_tests": [
+        "crates/parser/tests/simple_blocks.rs::rejects_unspaced_atx_heading_content"
+      ],
+      "case_ids": [
+        "tokenizers/heading/__test__/heading.spec.ts:9::0",
+        "tokenizers/heading/__test__/heading.spec.ts:9::1",
+        "tokenizers/heading/__test__/heading.spec.ts:9::2"
+      ]
+    },
+    "tokenizers/html-block/__test__/html-block.spec.ts": {
+      "reference_sha256": "a0bed2bdcbdf1f6c1244dc405be2729ffb69c02b9dd23be98d6ad5789b4eeb77",
+      "rust_tests": [
+        "crates/parser/tests/html_block_conditions.rs::html_block_omits_position_when_disabled",
+        "crates/parser/tests/html_block_conditions.rs::incomplete_cdata_opener_is_paragraph_text"
+      ],
+      "case_ids": [
+        "tokenizers/html-block/__test__/html-block.spec.ts:9::0",
+        "tokenizers/html-block/__test__/html-block.spec.ts:18::0",
+        "tokenizers/html-block/__test__/html-block.spec.ts:18::1"
+      ]
+    },
+    "tokenizers/html-inline/__test__/inline-html.spec.ts": {
+      "reference_sha256": "6edfb965b543101e394c47a80bcb6fffaf803cdb2bce7ccf8657c826fa4be12e",
+      "rust_tests": [
+        "crates/tokenizer-html-inline/src/tokenizer.rs::typed_finder_does_not_rescan_unclosed_suffixes",
+        "crates/tokenizer-html-inline/src/tokenizer.rs::typed_finder_rechecks_closer_when_range_expands",
+        "crates/tokenizer-html-inline/src/tokenizer.rs::typed_finders_keep_closer_caches_isolated",
+        "crates/tokenizer-html-inline/src/tokenizer.rs::typed_finders_match_fresh_results_under_interleaved_queries"
+      ],
+      "case_ids": [
+        "tokenizers/html-inline/__test__/inline-html.spec.ts:11::0",
+        "tokenizers/html-inline/__test__/inline-html.spec.ts:11::1",
+        "tokenizers/html-inline/__test__/inline-html.spec.ts:11::2",
+        "tokenizers/html-inline/__test__/inline-html.spec.ts:35::0",
+        "tokenizers/html-inline/__test__/inline-html.spec.ts:35::1",
+        "tokenizers/html-inline/__test__/inline-html.spec.ts:35::2",
+        "tokenizers/html-inline/__test__/inline-html.spec.ts:53::0",
+        "tokenizers/html-inline/__test__/inline-html.spec.ts:53::1",
+        "tokenizers/html-inline/__test__/inline-html.spec.ts:53::2",
+        "tokenizers/html-inline/__test__/inline-html.spec.ts:75::0",
+        "tokenizers/html-inline/__test__/inline-html.spec.ts:75::1",
+        "tokenizers/html-inline/__test__/inline-html.spec.ts:75::2"
+      ]
+    },
+    "tokenizers/image/__test__/image.spec.ts": {
+      "reference_sha256": "e103c5226a964b252c8f28cc5865aae2dd4d21b09b540d5a3595ff85ad827a3d",
+      "rust_tests": [
+        "crates/parser/tests/image.rs::image_omits_position_when_disabled",
+        "crates/parser/tests/image.rs::empty_image_destinations_are_formatted"
+      ],
+      "case_ids": [
+        "tokenizers/image/__test__/image.spec.ts:9::0",
+        "tokenizers/image/__test__/image.spec.ts:22::0",
+        "tokenizers/image/__test__/image.spec.ts:22::1"
+      ]
+    },
+    "tokenizers/image/__test__/util.spec.ts": {
+      "reference_sha256": "53f8e2fcbd92e89953b9a7b135ea7083caa5951580bcb0292b61245eee8e33b3",
+      "rust_tests": [
+        "crates/tokenizer-image/src/util.rs::collects_literal_values_and_nested_image_alt_in_source_order",
+        "crates/tokenizer-image/src/util.rs::handles_deep_nodes_without_recursive_stack_growth"
+      ],
+      "case_ids": [
+        "tokenizers/image/__test__/util.spec.ts:5::0",
+        "tokenizers/image/__test__/util.spec.ts:14::0"
+      ]
+    },
+    "tokenizers/indented-code/__test__/indented-code.spec.ts": {
+      "reference_sha256": "4e214ee3e2f565bb99cf89b62d34f0edbb5511147cb0fd6e7c3163e3753c34b0",
+      "rust_tests": [
+        "crates/parser/tests/code_blocks.rs::indented_code_handles_space_tab_indentation_consistently"
+      ],
+      "case_ids": [
+        "tokenizers/indented-code/__test__/indented-code.spec.ts:10[for-spaceCount=1]::0",
+        "tokenizers/indented-code/__test__/indented-code.spec.ts:10[for-spaceCount=2]::0",
+        "tokenizers/indented-code/__test__/indented-code.spec.ts:10[for-spaceCount=3]::0"
+      ]
+    },
+    "tokenizers/inline-code/__test__/inline-code.spec.ts": {
+      "reference_sha256": "cc0ac5731f3666f68d55a24204c3f315ce8637e3418f76a3377b609ef00fd5ae",
+      "rust_tests": [
+        "crates/parser/tests/inline_tokenizer_parity.rs::inline_code_handles_unmatched_candidates_and_preserves_tabs"
+      ],
+      "case_ids": [
+        "tokenizers/inline-code/__test__/inline-code.spec.ts:9::0",
+        "tokenizers/inline-code/__test__/inline-code.spec.ts:18::0",
+        "tokenizers/inline-code/__test__/inline-code.spec.ts:18::1"
+      ]
+    },
+    "tokenizers/inline-math/__test__/inline-math.spec.ts": {
+      "reference_sha256": "8bbf4609c9ec62d0b43f68b6a9520197646474457591734700a3d71d30d8a424",
+      "rust_tests": [
+        "crates/parser/tests/inline_tokenizer_parity.rs::inline_math_handles_unmatched_candidates_and_preserves_tabs"
+      ],
+      "case_ids": [
+        "tokenizers/inline-math/__test__/inline-math.spec.ts:32::0",
+        "tokenizers/inline-math/__test__/inline-math.spec.ts:45::0",
+        "tokenizers/inline-math/__test__/inline-math.spec.ts:45::1"
+      ]
+    },
+    "tokenizers/link-reference/__test__/link-reference.spec.ts": {
+      "reference_sha256": "efa5ca4b751b47056d6260cbdcc99cdf1a0adc8360d346ed7960b48aa2e6b40d",
+      "rust_tests": [
+        "crates/parser/tests/link.rs::does_not_create_link_containing_link_nested_in_footnote"
+      ],
+      "case_ids": [
+        "tokenizers/link-reference/__test__/link-reference.spec.ts:13::0"
+      ]
+    },
+    "tokenizers/link/__test__/link.spec.ts": {
+      "reference_sha256": "1113607d2c6179877c35fcf569a0d85a37a089622d15bdf09b16a69fb7082c95",
+      "rust_tests": [
+        "crates/parser/tests/link.rs::link_omits_position_when_disabled",
+        "crates/parser/tests/link.rs::empty_link_destinations_are_formatted",
+        "crates/parser/tests/link.rs::rejects_destination_whitespace_after_backslash",
+        "crates/parser/tests/link.rs::resolves_inline_links_and_autolinks_in_source_order",
+        "crates/parser/tests/link.rs::limits_nested_parentheses_in_link_and_image_destinations",
+        "crates/parser/tests/link.rs::preserves_reference_url_escaping",
+        "crates/parser/tests/link.rs::does_not_create_link_containing_link_nested_in_footnote",
+        "crates/core-tokenizer/src/util/uri.rs::encodes_link_destinations_like_the_reference",
+        "crates/core-tokenizer/src/util/uri.rs::preserves_existing_percent_escapes_and_is_idempotent",
+        "crates/core-tokenizer/src/util/uri.rs::validates_balanced_link_text_ranges",
+        "crates/core-tokenizer/src/util/uri.rs::ignores_brackets_inside_higher_priority_tokens",
+        "crates/core-tokenizer/src/util/uri.rs::rejects_nested_links_only_when_they_overlap_the_range"
+      ],
+      "case_ids": [
+        "tokenizers/link/__test__/link.spec.ts:13::0",
+        "tokenizers/link/__test__/link.spec.ts:25::0",
+        "tokenizers/link/__test__/link.spec.ts:25::1",
+        "tokenizers/link/__test__/link.spec.ts:40::0",
+        "tokenizers/link/__test__/link.spec.ts:40::1",
+        "tokenizers/link/__test__/link.spec.ts:40::2",
+        "tokenizers/link/__test__/link.spec.ts:40::3",
+        "tokenizers/link/__test__/link.spec.ts:57::0",
+        "tokenizers/link/__test__/link.spec.ts:57::1",
+        "tokenizers/link/__test__/link.spec.ts:57::2",
+        "tokenizers/link/__test__/link.spec.ts:89::0",
+        "tokenizers/link/__test__/link.spec.ts:89::1",
+        "tokenizers/link/__test__/link.spec.ts:105::0",
+        "tokenizers/link/__test__/link.spec.ts:105::1",
+        "tokenizers/link/__test__/link.spec.ts:105::2",
+        "tokenizers/link/__test__/link.spec.ts:105::3",
+        "tokenizers/link/__test__/link.spec.ts:105::4",
+        "tokenizers/link/__test__/link.spec.ts:105::5",
+        "tokenizers/link/__test__/link.spec.ts:105::6",
+        "tokenizers/link/__test__/link.spec.ts:105::7",
+        "tokenizers/link/__test__/link.spec.ts:121::0",
+        "tokenizers/link/__test__/link.spec.ts:127::0",
+        "tokenizers/link/__test__/link.spec.ts:127::1",
+        "tokenizers/link/__test__/link.spec.ts:127::2",
+        "tokenizers/link/__test__/link.spec.ts:127::3",
+        "tokenizers/link/__test__/link.spec.ts:127::4",
+        "tokenizers/link/__test__/link.spec.ts:127::5",
+        "tokenizers/link/__test__/link.spec.ts:127::6",
+        "tokenizers/link/__test__/link.spec.ts:127::7",
+        "tokenizers/link/__test__/link.spec.ts:127::8",
+        "tokenizers/link/__test__/link.spec.ts:141::0",
+        "tokenizers/link/__test__/link.spec.ts:141::1",
+        "tokenizers/link/__test__/link.spec.ts:150::0",
+        "tokenizers/link/__test__/link.spec.ts:150::1",
+        "tokenizers/link/__test__/link.spec.ts:150::2",
+        "tokenizers/link/__test__/link.spec.ts:150::3",
+        "tokenizers/link/__test__/link.spec.ts:150::4",
+        "tokenizers/link/__test__/link.spec.ts:150::5",
+        "tokenizers/link/__test__/link.spec.ts:150::6",
+        "tokenizers/link/__test__/link.spec.ts:150::7",
+        "tokenizers/link/__test__/link.spec.ts:159::0",
+        "tokenizers/link/__test__/link.spec.ts:159::1",
+        "tokenizers/link/__test__/link.spec.ts:159::2",
+        "tokenizers/link/__test__/link.spec.ts:159::3",
+        "tokenizers/link/__test__/link.spec.ts:159::4",
+        "tokenizers/link/__test__/link.spec.ts:159::5",
+        "tokenizers/link/__test__/link.spec.ts:159::6",
+        "tokenizers/link/__test__/link.spec.ts:173::0",
+        "tokenizers/link/__test__/link.spec.ts:179::0",
+        "tokenizers/link/__test__/link.spec.ts:194::0",
+        "tokenizers/link/__test__/link.spec.ts:194::1",
+        "tokenizers/link/__test__/link.spec.ts:208::0",
+        "tokenizers/link/__test__/link.spec.ts:230::0",
+        "tokenizers/link/__test__/link.spec.ts:252::0"
+      ]
+    },
+    "tokenizers/list/__test__/list.spec.ts": {
+      "reference_sha256": "9fff542da7b034095aab3f4386c458f091ae5568e1fe3e43d095d0ec50840407",
+      "rust_tests": [
+        "crates/parser/tests/list.rs::handles_space_tab_indentation_in_list_items",
+        "crates/parser/tests/list.rs::matches_continuation_indentation_by_columns",
+        "crates/parser/tests/list.rs::tracks_tab_columns_across_nested_containers",
+        "crates/parser/tests/list.rs::preserves_tabs_not_consumed_by_list_indentation",
+        "crates/parser/tests/list.rs::handles_tabs_after_list_markers_by_column_width",
+        "crates/parser/tests/list.rs::indented_empty_items_do_not_interrupt_paragraphs",
+        "crates/parser/tests/list.rs::task_like_non_empty_item_interrupts_paragraph",
+        "crates/parser/tests/list.rs::consumes_whitespace_after_task_markers",
+        "crates/parser/tests/list.rs::keeps_task_content_aligned_to_list_indentation"
+      ],
+      "case_ids": [
+        "tokenizers/list/__test__/list.spec.ts:17[for-spaceCount=1]::0",
+        "tokenizers/list/__test__/list.spec.ts:17[for-spaceCount=2]::0",
+        "tokenizers/list/__test__/list.spec.ts:17[for-spaceCount=3]::0",
+        "tokenizers/list/__test__/list.spec.ts:38::0",
+        "tokenizers/list/__test__/list.spec.ts:50::0",
+        "tokenizers/list/__test__/list.spec.ts:73::0",
+        "tokenizers/list/__test__/list.spec.ts:85[for-of-0:[0, '']]::0",
+        "tokenizers/list/__test__/list.spec.ts:85[for-of-1:[1, ' ']]::0",
+        "tokenizers/list/__test__/list.spec.ts:85[for-of-2:[2, ' ']]::0",
+        "tokenizers/list/__test__/list.spec.ts:85[for-of-3:[3, ' ']]::0",
+        "tokenizers/list/__test__/list.spec.ts:101[for-of-0:[0, '']]::0",
+        "tokenizers/list/__test__/list.spec.ts:101[for-of-1:[1, ' ']]::0",
+        "tokenizers/list/__test__/list.spec.ts:101[for-of-2:[2, ' ']]::0",
+        "tokenizers/list/__test__/list.spec.ts:101[for-of-3:[3, ' ']]::0",
+        "tokenizers/list/__test__/list.spec.ts:108::0",
+        "tokenizers/list/__test__/list.spec.ts:114::0",
+        "tokenizers/list/__test__/list.spec.ts:114::1",
+        "tokenizers/list/__test__/list.spec.ts:114::2",
+        "tokenizers/list/__test__/list.spec.ts:135::0",
+        "tokenizers/list/__test__/list.spec.ts:135::1",
+        "tokenizers/list/__test__/list.spec.ts:135::2"
+      ]
+    },
+    "tokenizers/paragraph/__test__/paragraph.patch.spec.ts": {
+      "reference_sha256": "71ed3c9ca551a9bc6b3a0c0cbf749b580e223231ee74f1987de021c3f19367b1",
+      "rust_tests": [
+        "crates/tokenizer-paragraph/src/tokenizer.rs::exposes_lines_builds_nonempty_tokens_and_reuses_single_line_points"
+      ],
+      "case_ids": [
+        "tokenizers/paragraph/__test__/paragraph.patch.spec.ts:48::0",
+        "tokenizers/paragraph/__test__/paragraph.patch.spec.ts:52::0",
+        "tokenizers/paragraph/__test__/paragraph.patch.spec.ts:64::0"
+      ]
+    },
+    "tokenizers/setext-heading/__test__/setext-heading.spec.ts": {
+      "reference_sha256": "b02701b9c6310b3ab2232d8bbd48383847d79baaedbc0585eaa37f7f62f41cd5",
+      "rust_tests": [
+        "crates/parser/tests/simple_blocks.rs::setext_underlines_allow_ascii_tabs_but_not_nbsp"
+      ],
+      "case_ids": [
+        "tokenizers/setext-heading/__test__/setext-heading.spec.ts:9::0",
+        "tokenizers/setext-heading/__test__/setext-heading.spec.ts:9::1",
+        "tokenizers/setext-heading/__test__/setext-heading.spec.ts:9::2"
+      ]
+    },
+    "tokenizers/table/__test__/table.spec.ts": {
+      "reference_sha256": "b5131e07f830a93d0712cccb047ff932d395a104d0c77cfeaeb3b2902f4ca89b",
+      "rust_tests": [
+        "crates/parser/tests/table.rs::preserves_trailing_backslash_in_final_cell",
+        "crates/parser/tests/table.rs::recognizes_pipe_less_single_column_alignment",
+        "crates/parser/tests/table.rs::preserves_setext_heading_precedence",
+        "crates/parser/tests/table.rs::recognizes_empty_header_cells",
+        "crates/parser/tests/table.rs::lone_pipe_is_not_an_empty_header_cell"
+      ],
+      "case_ids": [
+        "tokenizers/table/__test__/table.spec.ts:12::0",
+        "tokenizers/table/__test__/table.spec.ts:22::0",
+        "tokenizers/table/__test__/table.spec.ts:22::1",
+        "tokenizers/table/__test__/table.spec.ts:22::2",
+        "tokenizers/table/__test__/table.spec.ts:38::0",
+        "tokenizers/table/__test__/table.spec.ts:46::0",
+        "tokenizers/table/__test__/table.spec.ts:46::1",
+        "tokenizers/table/__test__/table.spec.ts:46::2",
+        "tokenizers/table/__test__/table.spec.ts:64::0"
+      ]
+    },
+    "tokenizers/text/__test__/text.spec.ts": {
+      "reference_sha256": "44e5aa6ffe01168bc7d1c7c7416cf664acadc467e2a8fef8fd7d4d30cf5bbcfc",
+      "rust_tests": [
+        "crates/parser/tests/simple_blocks.rs::text_and_paragraph_omit_positions_when_disabled",
+        "crates/parser/tests/simple_blocks.rs::soft_breaks_preserve_unicode_whitespace",
+        "crates/parser/tests/simple_blocks.rs::soft_breaks_remove_ascii_space_and_tab"
+      ],
+      "case_ids": [
+        "tokenizers/text/__test__/text.spec.ts:9::0",
+        "tokenizers/text/__test__/text.spec.ts:21::0",
+        "tokenizers/text/__test__/text.spec.ts:21::1",
+        "tokenizers/text/__test__/text.spec.ts:37::0",
+        "tokenizers/text/__test__/text.spec.ts:37::1"
+      ]
+    },
+    "tokenizers/thematic-break/__test__/thematic-break.spec.ts": {
+      "reference_sha256": "3d55342e270b9ee22c2b00977d48218583af5be6480c034751056b360ee9f99e",
+      "rust_tests": [
+        "crates/parser/tests/simple_blocks.rs::thematic_breaks_allow_ascii_tabs_but_not_nbsp"
+      ],
+      "case_ids": [
+        "tokenizers/thematic-break/__test__/thematic-break.spec.ts:9::0",
+        "tokenizers/thematic-break/__test__/thematic-break.spec.ts:9::1",
+        "tokenizers/thematic-break/__test__/thematic-break.spec.ts:9::2"
+      ]
+    }
+  },
+  "not_applicable": [
+    {
+      "case_id": "packages/ast-util/__test__/clone.spec.ts:46::0",
+      "reason": "The safe Rust clone API exposes immutable ParentRef values; mutating a parent object through the child termination callback is outside the accepted ownership contract."
+    },
+    {
+      "case_id": "packages/character/__test__/util/node-point.spec.ts:38[for-of-4:'text\\uD800']::0",
+      "reason": "Rust str cannot contain an unpaired UTF-16 surrogate."
+    },
+    {
+      "case_id": "packages/parser-gfm/__test__/parser-gfm.spec.ts:303::0",
+      "reason": "Rust Vec<Node> iteration is infallible, so a completed generator result cannot throw while being iterated."
+    },
+    {
+      "case_id": "packages/parser-gfm/__test__/parser-gfm.spec.ts:334::0",
+      "reason": "ParseBlockGenerator is a synchronous Rust trait and cannot return an async generator value."
+    },
+    {
+      "case_id": "packages/parser-gfm/__test__/parser-gfm.spec.ts:342::0",
+      "reason": "ParseBlockGeneratorResult is a typed enum, so malformed JavaScript iterator-result objects are not representable."
+    },
+    {
+      "case_id": "tokenizers/link/__test__/link.spec.ts:141::2",
+      "reason": "Rust str cannot contain a lone high surrogate."
+    },
+    {
+      "case_id": "tokenizers/link/__test__/link.spec.ts:141::3",
+      "reason": "Rust str cannot contain a lone low surrogate."
+    }
+  ],
+  "fixture_not_applicable": [
+    {
+      "case_id": "gfm-new/#657.json::0::all-other-html-tags-are-left-untouched",
+      "reason": "The reference fixture has neither parseAnswer nor markupAnswer and is not an asserted test case."
+    }
+  ],
+  "fixture_coverage": {
+    "reviewed_scanners_fnv1a64": "7e624bff14e1a3de",
+    "parse_runner": "crates/suitecases/tests/suitecases_upstream_batch_report.rs",
+    "parse_profiles": [
+      "gfm",
+      "gfm_ex",
+      "yozora",
+      "yozora_inline_math_backtick_required"
+    ],
+    "markup_runner": "crates/markup-weaver/tests/markup_fixtures.rs",
+    "entrypoint": "script/test-fixtures.sh"
+  }
+}

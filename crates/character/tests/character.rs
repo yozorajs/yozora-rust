@@ -58,6 +58,44 @@ fn character_sets_and_predicates_are_consistent() {
     for code_point in whitespace_characters() {
         assert!(is_whitespace_character(code_point));
     }
+
+    for code_point in 0..=AsciiCodePoint::DELETE as i32 {
+        assert_eq!(
+            is_ascii_whitespace_character(code_point),
+            ascii_whitespace_characters().contains(&code_point),
+            "ASCII whitespace U+{code_point:04X}"
+        );
+        assert_eq!(
+            is_ascii_punctuation_character(code_point),
+            ascii_punctuation_characters().contains(&code_point),
+            "ASCII punctuation U+{code_point:04X}"
+        );
+        assert_eq!(
+            is_ascii_digit_character(code_point),
+            (AsciiCodePoint::DIGIT0 as i32..=AsciiCodePoint::DIGIT9 as i32).contains(&code_point),
+            "ASCII digit U+{code_point:04X}"
+        );
+        assert_eq!(
+            is_ascii_control_character(code_point),
+            ascii_control_characters().contains(&code_point),
+            "ASCII control U+{code_point:04X}"
+        );
+        assert_eq!(
+            is_space_character(code_point),
+            space_characters().contains(&code_point),
+            "space U+{code_point:04X}"
+        );
+        assert_eq!(
+            is_whitespace_character(code_point),
+            whitespace_characters().contains(&code_point),
+            "whitespace U+{code_point:04X}"
+        );
+        assert_eq!(
+            is_control_character(code_point),
+            control_characters().contains(&code_point),
+            "control U+{code_point:04X}"
+        );
+    }
 }
 
 #[test]
@@ -78,6 +116,13 @@ fn unicode_whitespace_set_matches_predicate() {
         VirtualCodePoint::LineEnd as i32,
     ] {
         assert!(values.contains(&code_point));
+    }
+    for code_point in 0..=AsciiCodePoint::DELETE as i32 {
+        assert_eq!(
+            is_unicode_whitespace_character(code_point),
+            values.contains(&code_point),
+            "U+{code_point:04X}"
+        );
     }
 }
 
@@ -215,8 +260,14 @@ fn strips_and_tightens_chinese_characters() {
         ("中\n文\n字", "中文字"),
         ("中\n；\n文", "中；文"),
         ("中文\nEnglish", "中文\nEnglish"),
+        ("中文\n.English", "中文\n.English"),
+        ("中文；\nEnglish", "中文；\nEnglish"),
         ("English\n中文", "English\n中文"),
+        ("English.\n中文", "English.\n中文"),
+        ("English\n；中文", "English\n；中文"),
         ("English\nEnglish", "English\nEnglish"),
+        ("English.\nEnglish", "English.\nEnglish"),
+        ("English\n.English", "English\n.English"),
     ] {
         assert_eq!(strip_chinese_characters(source), expected);
     }

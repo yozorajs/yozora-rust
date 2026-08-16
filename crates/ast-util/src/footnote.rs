@@ -71,6 +71,7 @@ pub fn replace_footnotes_in_references(
         fields: Vec<(Field, &'a [Node])>,
         field_index: usize,
         child_index: usize,
+        traversed: Vec<Node>,
         output: Vec<Node>,
         title: Option<Vec<Node>>,
         children: Option<Vec<Node>>,
@@ -89,6 +90,7 @@ pub fn replace_footnotes_in_references(
             fields,
             field_index: 0,
             child_index: 0,
+            traversed: Vec::new(),
             output: Vec::new(),
             title: None,
             children: None,
@@ -110,7 +112,39 @@ pub fn replace_footnotes_in_references(
         }
     }
 
+    fn replace_footnote(
+        node: Node,
+        footnote_id: &mut usize,
+        footnote_definition_map: &mut HashMap<String, FootnoteDefinition>,
+        identifier_prefix: &str,
+        new_definitions: &mut Vec<Node>,
+    ) -> Node {
+        let Node::Footnote(footnote) = node else {
+            return node;
+        };
+        let (label, identifier) =
+            next_identifier(footnote_id, footnote_definition_map, identifier_prefix);
+        let definition = FootnoteDefinition {
+            position: None,
+            identifier: identifier.clone(),
+            label: label.clone(),
+            children: vec![Node::Paragraph(Paragraph {
+                position: None,
+                children: footnote.children,
+            })],
+        };
+        let reference = Node::FootnoteReference(FootnoteReference {
+            position: footnote.position,
+            identifier: identifier.clone(),
+            label,
+        });
+        footnote_definition_map.insert(identifier, definition.clone());
+        new_definitions.push(Node::FootnoteDefinition(definition));
+        reference
+    }
+
     let mut root_output = Vec::new();
+    let mut root_traversed = Vec::new();
     let mut root_index = 0usize;
     let mut stack = Vec::<Frame<'_>>::new();
     let mut footnote_id = 1usize;
@@ -125,6 +159,17 @@ pub fn replace_footnotes_in_references(
                     stack.push(frame(child));
                     continue;
                 }
+
+                for node in std::mem::take(&mut current.traversed) {
+                    current.output.push(replace_footnote(
+                        node,
+                        &mut footnote_id,
+                        footnote_definition_map,
+                        identifier_prefix,
+                        &mut new_definitions,
+                    ));
+                }
+
                 let output = std::mem::take(&mut current.output);
                 match current.fields[current.field_index].0 {
                     Field::Title => current.title = Some(output),
@@ -143,31 +188,10 @@ pub fn replace_footnotes_in_references(
             if let Some(children) = current.children {
                 node = clone_with_children(&node, children);
             }
-            if let Node::Footnote(footnote) = node {
-                let (label, identifier) =
-                    next_identifier(&mut footnote_id, footnote_definition_map, identifier_prefix);
-                let definition = FootnoteDefinition {
-                    position: None,
-                    identifier: identifier.clone(),
-                    label: label.clone(),
-                    children: vec![Node::Paragraph(Paragraph {
-                        position: None,
-                        children: footnote.children,
-                    })],
-                };
-                let reference = Node::FootnoteReference(FootnoteReference {
-                    position: footnote.position,
-                    identifier: identifier.clone(),
-                    label,
-                });
-                footnote_definition_map.insert(identifier, definition.clone());
-                new_definitions.push(Node::FootnoteDefinition(definition));
-                node = reference;
-            }
             if let Some(parent) = stack.last_mut() {
-                parent.output.push(node);
+                parent.traversed.push(node);
             } else {
-                root_output.push(node);
+                root_traversed.push(node);
             }
             continue;
         }
@@ -176,6 +200,15 @@ pub fn replace_footnotes_in_references(
             stack.push(frame(&root.children[root_index]));
             root_index += 1;
             continue;
+        }
+        for node in root_traversed {
+            root_output.push(replace_footnote(
+                node,
+                &mut footnote_id,
+                footnote_definition_map,
+                identifier_prefix,
+                &mut new_definitions,
+            ));
         }
         root_output.extend(new_definitions);
         return Root {

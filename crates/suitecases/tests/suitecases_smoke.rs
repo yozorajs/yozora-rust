@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use yozora_suitecases::{
     format_unexpected_report, is_fixture_enabled_for_profile, parse_known_failures_toml,
-    parse_profile_map_toml, run_fixture_subset, SuiteRunOptions,
+    parse_profile_map_toml, run_fixture_subset, AssertLevel, SuiteAdapter, SuiteRunOptions,
 };
 
 mod support;
@@ -55,4 +55,20 @@ fn suitecases_smoke_case() {
         "{}",
         format_unexpected_report(&report, 20)
     );
+}
+
+#[test]
+fn backtick_required_profile_disables_optional_inline_math() {
+    let adapter = ParserSuiteAdapter::new("yozora_inline_math_backtick_required", AssertLevel::L1);
+
+    let plain = adapter.run_case("$x$").expect("parse plain math syntax");
+    assert_eq!(plain["children"][0]["type"], "paragraph");
+    assert_eq!(plain["children"][0]["children"][0]["type"], "text");
+    assert_eq!(plain["children"][0]["children"][0]["value"], "$x$");
+
+    let wrapped = adapter
+        .run_case("`$x$`")
+        .expect("parse backtick-wrapped math syntax");
+    assert_eq!(wrapped["children"][0]["children"][0]["type"], "inlineMath");
+    assert_eq!(wrapped["children"][0]["children"][0]["value"], "x");
 }

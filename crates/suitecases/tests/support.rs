@@ -6,6 +6,7 @@ use yozora_parser::YozoraParser;
 use yozora_parser_gfm::GfmParser;
 use yozora_parser_gfm_ex::GfmExParser;
 use yozora_suitecases::{AssertLevel, SuiteAdapter};
+use yozora_tokenizer_inline_math::INLINE_MATH_TOKENIZER_NAME;
 
 pub struct ParserSuiteAdapter {
     profile: String,
@@ -35,7 +36,9 @@ impl SuiteAdapter for ParserSuiteAdapter {
         let root = match self.profile.as_str() {
             "yozora" => YozoraParser::default().parse(input, self.parse_options.clone()),
             "yozora_inline_math_backtick_required" => {
-                YozoraParser::default().parse(input, self.parse_options.clone())
+                let mut parser = YozoraParser::default();
+                parser.unmount_inline_tokenizer(INLINE_MATH_TOKENIZER_NAME);
+                parser.parse(input, self.parse_options.clone())
             }
             "gfm" => GfmParser::default().parse(input, self.parse_options.clone()),
             "gfm_ex" => GfmExParser::default().parse(input, self.parse_options.clone()),

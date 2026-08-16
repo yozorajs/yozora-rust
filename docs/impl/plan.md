@@ -67,6 +67,15 @@ markup-weaver
 3. 上游 package 与 tokenizer 单测语义逐项迁移；stack-safety 与大输入回归通过。
 4. 公共 export 对照表无缺项；Rust 命名仅做约定允许的 snake_case 转换。
 5. `cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo test --workspace` 全部通过。
+6. `test-parity/reference-tests.json` 固定上游 direct tests、fixture scanners、fixture 文件 hash 与 fixture cases；
+   `test-parity/coverage.json` 为每个适用 direct case 显式登记 case ID 并指向 Rust tests，
+   只为不可表示的语言差异保留精确 `N/A`。
+
+Reference test inventory 通过以下命令防止漂移：
+
+```sh
+./script/test-reference-parity.sh /path/to/yozora
+```
 
 ## 实施顺序
 

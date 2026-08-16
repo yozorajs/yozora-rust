@@ -115,7 +115,14 @@ impl DefaultParser {
     pub fn unmount_tokenizer(&mut self, tokenizer_name: &str) -> &mut Self {
         self.unmount_inline_tokenizer(tokenizer_name);
         self.unmount_block_tokenizer(tokenizer_name);
+        self
+    }
 
+    pub fn unmount_block_tokenizer(&mut self, tokenizer_name: &str) -> &mut Self {
+        if let Some(index) = self.block_tokenizer_map.remove(tokenizer_name) {
+            self.block_tokenizers.remove(index);
+            self.rebuild_block_index();
+        }
         if self
             .block_fallback_tokenizer
             .as_ref()
@@ -123,7 +130,14 @@ impl DefaultParser {
         {
             self.block_fallback_tokenizer = None;
         }
+        self
+    }
 
+    pub fn unmount_inline_tokenizer(&mut self, tokenizer_name: &str) -> &mut Self {
+        if let Some(index) = self.inline_tokenizer_map.remove(tokenizer_name) {
+            self.inline_tokenizers.remove(index);
+            self.rebuild_inline_index();
+        }
         if self
             .inline_fallback_tokenizer
             .as_ref()
@@ -131,7 +145,6 @@ impl DefaultParser {
         {
             self.inline_fallback_tokenizer = None;
         }
-
         self
     }
 
@@ -265,20 +278,6 @@ impl DefaultParser {
         self.inline_tokenizers.insert(insert_index, tokenizer);
         self.rebuild_inline_index();
         Ok(())
-    }
-
-    fn unmount_block_tokenizer(&mut self, tokenizer_name: &str) {
-        if let Some(index) = self.block_tokenizer_map.remove(tokenizer_name) {
-            self.block_tokenizers.remove(index);
-            self.rebuild_block_index();
-        }
-    }
-
-    fn unmount_inline_tokenizer(&mut self, tokenizer_name: &str) {
-        if let Some(index) = self.inline_tokenizer_map.remove(tokenizer_name) {
-            self.inline_tokenizers.remove(index);
-            self.rebuild_inline_index();
-        }
     }
 
     fn rebuild_block_index(&mut self) {
@@ -564,6 +563,13 @@ mod tests {
         ) -> InlineToken {
             InlineToken::new(self.name.clone(), "text", (start_index, end_index))
         }
+    }
+
+    #[test]
+    fn constructs_without_props_and_parses_an_empty_root() {
+        let root = DefaultParser::default().parse("", None);
+        assert_eq!(root.position, None);
+        assert!(root.children.is_empty());
     }
 
     #[test]

@@ -15,6 +15,8 @@ pub(crate) struct HtmlInlineCloserCache {
     declaration: isize,
     end_index: isize,
     instruction: isize,
+    #[cfg(test)]
+    scan_steps: usize,
 }
 
 impl Default for HtmlInlineCloserCache {
@@ -24,7 +26,20 @@ impl Default for HtmlInlineCloserCache {
             declaration: -1,
             end_index: -1,
             instruction: -1,
+            #[cfg(test)]
+            scan_steps: 0,
         }
+    }
+}
+
+#[cfg(test)]
+impl HtmlInlineCloserCache {
+    pub(crate) fn scan_steps(&self) -> usize {
+        self.scan_steps
+    }
+
+    fn record_scan(&mut self, steps: usize) {
+        self.scan_steps += steps;
     }
 }
 
@@ -36,6 +51,8 @@ pub(crate) fn find_html_inline_delimiter(
 ) -> Option<HtmlInlineDelimiter> {
     let mut i = start_index;
     while i < end_index {
+        #[cfg(test)]
+        closer_cache.record_scan(1);
         i = eat_optional_whitespaces(node_points, i, end_index);
         if i >= end_index {
             break;
@@ -102,6 +119,8 @@ fn try_to_eat_delimiter(
             end_index,
         )
     {
+        #[cfg(test)]
+        closer_cache.record_scan(end_index.saturating_sub(start_index + 2));
         if let Some(delimiter) =
             eat_html_inline_instruction_delimiter(node_points, start_index, end_index)
         {
@@ -122,6 +141,8 @@ fn try_to_eat_delimiter(
             end_index,
         )
     {
+        #[cfg(test)]
+        closer_cache.record_scan(end_index.saturating_sub(start_index + 3));
         if let Some(delimiter) =
             eat_html_inline_declaration_delimiter(node_points, start_index, end_index)
         {
@@ -134,6 +155,8 @@ fn try_to_eat_delimiter(
         && third_code_point == Some(AsciiCodePoint::OPEN_BRACKET as i32)
         && may_have_closer(closer_cache, closer_cache.cdata, start_index + 3, end_index)
     {
+        #[cfg(test)]
+        closer_cache.record_scan(end_index.saturating_sub(start_index + 3));
         if let Some(delimiter) =
             eat_html_inline_cdata_delimiter(node_points, start_index, end_index)
         {
@@ -172,6 +195,8 @@ fn update_closer_cache(
     let mut i = end_index;
     while i > start_index {
         i -= 1;
+        #[cfg(test)]
+        cache.record_scan(1);
         if node_points[i].code_point != AsciiCodePoint::CLOSE_ANGLE as i32 {
             continue;
         }

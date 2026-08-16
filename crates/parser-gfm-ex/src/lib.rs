@@ -168,6 +168,16 @@ impl GfmExParser {
         self
     }
 
+    pub fn unmount_block_tokenizer(&mut self, tokenizer_name: &str) -> &mut Self {
+        self.inner.unmount_block_tokenizer(tokenizer_name);
+        self
+    }
+
+    pub fn unmount_inline_tokenizer(&mut self, tokenizer_name: &str) -> &mut Self {
+        self.inner.unmount_inline_tokenizer(tokenizer_name);
+        self
+    }
+
     pub fn use_fallback_tokenizer(&mut self, tokenizer: AnyFallbackTokenizer) -> &mut Self {
         self.inner.use_fallback_tokenizer(tokenizer);
         self

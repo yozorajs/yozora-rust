@@ -1,5 +1,5 @@
 use yozora_ast::{InlineMath, Node};
-use yozora_character::{calc_string_from_node_points, is_space_like};
+use yozora_character::{calc_string_from_node_points, AsciiCodePoint, CodePoint, VirtualCodePoint};
 use yozora_core_tokenizer::{InlineToken, NodeInterval, ParseInlinePhaseApi};
 
 use crate::types::InlineMathTokenData;
@@ -28,7 +28,7 @@ pub(crate) fn parse_inline_math_tokens(
 
         let mut is_all_space = true;
         for point in &node_points[start_index..end_index] {
-            if is_space_like(point.code_point) {
+            if is_code_padding(point.code_point) {
                 continue;
             }
             is_all_space = false;
@@ -38,7 +38,7 @@ pub(crate) fn parse_inline_math_tokens(
         if !is_all_space && start_index + 2 < end_index {
             let first_character = node_points[start_index].code_point;
             let last_character = node_points[end_index - 1].code_point;
-            if is_space_like(first_character) && is_space_like(last_character) {
+            if is_code_padding(first_character) && is_code_padding(last_character) {
                 start_index += 1;
                 end_index -= 1;
             }
@@ -60,4 +60,8 @@ pub(crate) fn parse_inline_math_tokens(
     }
 
     nodes
+}
+
+fn is_code_padding(code_point: CodePoint) -> bool {
+    code_point == AsciiCodePoint::SPACE as i32 || code_point == VirtualCodePoint::LineEnd as i32
 }

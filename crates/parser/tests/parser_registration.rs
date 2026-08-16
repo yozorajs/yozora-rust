@@ -148,3 +148,62 @@ fn unmounts_both_tokenizer_types_by_shared_name() {
             if matches!(paragraph.children.as_slice(), [Node::Text(text)] if text.value == "`code`")
     ));
 }
+
+#[test]
+fn unmounts_only_the_selected_tokenizer_type() {
+    let shared_name = "shared";
+
+    let mut parser = create_parser();
+    parser
+        .use_tokenizer(
+            AnyTokenizer::Block(Box::new(FencedCodeTokenizer::new(TokenizerOptions {
+                name: Some(shared_name.to_string()),
+                ..TokenizerOptions::default()
+            }))),
+            None,
+        )
+        .use_tokenizer(
+            AnyTokenizer::Inline(Box::new(InlineCodeTokenizer::new(TokenizerOptions {
+                name: Some(shared_name.to_string()),
+                ..TokenizerOptions::default()
+            }))),
+            None,
+        );
+    parser.unmount_block_tokenizer(shared_name);
+    assert!(matches!(
+        parser.parse("```\ncode\n```", None).children.first(),
+        Some(Node::Paragraph(_))
+    ));
+    assert!(matches!(
+        parser.parse("`code`", None).children.first(),
+        Some(Node::Paragraph(paragraph))
+            if matches!(paragraph.children.as_slice(), [Node::InlineCode(code)] if code.value == "code")
+    ));
+
+    let mut parser = create_parser();
+    parser
+        .use_tokenizer(
+            AnyTokenizer::Block(Box::new(FencedCodeTokenizer::new(TokenizerOptions {
+                name: Some(shared_name.to_string()),
+                ..TokenizerOptions::default()
+            }))),
+            None,
+        )
+        .use_tokenizer(
+            AnyTokenizer::Inline(Box::new(InlineCodeTokenizer::new(TokenizerOptions {
+                name: Some(shared_name.to_string()),
+                ..TokenizerOptions::default()
+            }))),
+            None,
+        );
+    parser.unmount_inline_tokenizer(shared_name);
+    assert!(matches!(
+        parser.parse("```\ncode\n```", None).children.first(),
+        Some(Node::Code(code)) if code.value == "code\n"
+    ));
+    assert!(matches!(
+        parser.parse("`code`", None).children.first(),
+        Some(Node::Paragraph(paragraph))
+            if matches!(paragraph.children.as_slice(), [Node::Text(text)] if text.value == "`code`")
+    ));
+}

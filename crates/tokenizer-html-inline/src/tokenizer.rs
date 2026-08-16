@@ -92,6 +92,11 @@ impl<'a> HtmlInlineDelimiterGenerator<'a> {
         );
         self.last_delimiter.clone()
     }
+
+    #[cfg(test)]
+    fn closer_scan_steps(&self) -> usize {
+        self.closer_cache.scan_steps()
+    }
 }
 
 pub struct HtmlInlineMatchHook<'a> {
@@ -301,35 +306,111 @@ mod tests {
 
     #[test]
     fn typed_finder_rechecks_closer_when_range_expands() {
-        let node_points = create_node_point_generator("<?x?>")
-            .pop()
-            .expect("expected node points");
-        let api = DummyMatchApi { node_points };
-        let hook = HtmlInlineMatchHook::new(&api);
-        let mut finder = hook.find_delimiter();
+        for source in ["<?x?>", "<!A x>", "<![CDATA[x]]>"] {
+            let node_points = create_node_point_generator(source)
+                .pop()
+                .expect("expected node points");
+            let api = DummyMatchApi { node_points };
+            let hook = HtmlInlineMatchHook::new(&api);
+            let mut finder = hook.find_delimiter();
 
-        assert!(finder.next((0, api.get_block_end_index() - 1)).is_none());
-        assert!(matches!(
-            finder.next((0, api.get_block_end_index())),
-            Some(HtmlInlineDelimiter::Instruction(_))
-        ));
+            assert!(
+                finder.next((0, api.get_block_end_index() - 1)).is_none(),
+                "source={source:?}"
+            );
+            let delimiter = finder
+                .next((0, api.get_block_end_index()))
+                .unwrap_or_else(|| panic!("expected delimiter for {source:?}"));
+            assert_eq!(delimiter.delimiter().start_index, 0);
+            assert_eq!(delimiter.delimiter().end_index, api.get_block_end_index());
+        }
     }
 
     #[test]
     fn typed_finders_keep_closer_caches_isolated() {
-        let node_points = create_node_point_generator("<?ok?> <?")
-            .pop()
-            .expect("expected node points");
-        let api = DummyMatchApi { node_points };
-        let hook = HtmlInlineMatchHook::new(&api);
-        let mut first_finder = hook.find_delimiter();
-        let mut second_finder = hook.find_delimiter();
+        for (source, start_index, end_index) in [
+            ("<?ok?> <?", 7, 6),
+            ("<!A ok> <!B ", 8, 7),
+            ("<![CDATA[ok]]> <![CDATA[", 15, 14),
+        ] {
+            let node_points = create_node_point_generator(source)
+                .pop()
+                .expect("expected node points");
+            let api = DummyMatchApi { node_points };
+            let hook = HtmlInlineMatchHook::new(&api);
+            let mut first_finder = hook.find_delimiter();
+            let mut second_finder = hook.find_delimiter();
 
-        assert!(second_finder.next((7, api.get_block_end_index())).is_none());
-        let delimiter = first_finder
-            .next((0, api.get_block_end_index()))
-            .expect("expected processing instruction");
-        assert_eq!(delimiter.delimiter().end_index, 6);
+            assert!(
+                second_finder
+                    .next((start_index, api.get_block_end_index()))
+                    .is_none(),
+                "source={source:?}"
+            );
+            let delimiter = first_finder
+                .next((0, api.get_block_end_index()))
+                .unwrap_or_else(|| panic!("expected delimiter for {source:?}"));
+            assert_eq!(delimiter.delimiter().end_index, end_index);
+        }
+    }
+
+    #[test]
+    fn typed_finder_does_not_rescan_unclosed_suffixes() {
+        for prefix in ["<?", "<!A ", "<![CDATA["] {
+            let source = format!("x {}", prefix.repeat(500));
+            let node_points = create_node_point_generator(source)
+                .pop()
+                .expect("expected node points");
+            let api = DummyMatchApi { node_points };
+            let hook = HtmlInlineMatchHook::new(&api);
+            let mut finder = hook.find_delimiter();
+
+            assert!(finder.next((0, api.get_block_end_index())).is_none());
+            assert!(
+                finder.closer_scan_steps() < api.get_block_end_index() * 64,
+                "source length={}, closer scan steps={}",
+                api.get_block_end_index(),
+                finder.closer_scan_steps()
+            );
+        }
+    }
+
+    #[test]
+    fn typed_finders_match_fresh_results_under_interleaved_queries() {
+        for (valid, invalid) in [
+            ("<?ok?> ", "<?"),
+            ("<!A ok> ", "<!B "),
+            ("<![CDATA[ok]]> ", "<![CDATA["),
+        ] {
+            let source = format!("{valid}{}", invalid.repeat(8));
+            let node_points = create_node_point_generator(source)
+                .pop()
+                .expect("expected node points");
+            let api = DummyMatchApi { node_points };
+            let hook = HtmlInlineMatchHook::new(&api);
+            let mut finders = [hook.find_delimiter(), hook.find_delimiter()];
+            let mut start_indices = [0, valid.len()];
+
+            for index in 0..12 {
+                let finder_index = index % finders.len();
+                let range = (
+                    start_indices[finder_index],
+                    if index < finders.len() {
+                        api.get_block_end_index() - 1
+                    } else {
+                        api.get_block_end_index()
+                    },
+                );
+                let expected_hook = HtmlInlineMatchHook::new(&api);
+                let mut expected_finder = expected_hook.find_delimiter();
+
+                assert_eq!(
+                    finders[finder_index].next(range),
+                    expected_finder.next(range)
+                );
+                start_indices[finder_index] += 1;
+            }
+        }
     }
 
     #[test]

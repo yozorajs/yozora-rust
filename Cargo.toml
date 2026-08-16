@@ -49,9 +49,15 @@ members = [
 [workspace.package]
 edition = "2021"
 license = "MIT"
-version = "2.4.0"
+license-file = "LICENSE"
+readme = "README.md"
+version = "0.1.0"
 authors = ["guanghechen"]
-repository = "https://github.com/yozorajs/yozora"
+repository = "https://github.com/yozorajs/yozora-rust"
+
+[workspace.metadata.yozora]
+reference-version = "2.4.0"
+reference-commit = "4bbc3d4f591a87efe7d7f474c1f9f07f0dcbfdc1"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

@@ -3,6 +3,11 @@ name = "yozora-invariant"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+license-file.workspace = true
+readme.workspace = true
+description = "Invariant assertion utility for Yozora."
+include = ["src/**"]
+repository.workspace = true
 
 [lib]
 path = "src/lib.rs"

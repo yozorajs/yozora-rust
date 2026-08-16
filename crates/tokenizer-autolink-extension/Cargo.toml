@@ -3,13 +3,17 @@ name = "yozora-tokenizer-autolink-extension"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+license-file.workspace = true
+readme.workspace = true
+description = "Yozora tokenizer for extended autolinks."
+include = ["src/**"]
 repository.workspace = true
 
 [dependencies]
-yozora-core-tokenizer = { path = "../core-tokenizer" }
-yozora-ast = { path = "../ast" }
-yozora-character = { path = "../character" }
-yozora-tokenizer-autolink = { path = "../tokenizer-autolink" }
+yozora-core-tokenizer = { version = "0.1.0", path = "../core-tokenizer" }
+yozora-ast = { version = "0.1.0", path = "../ast" }
+yozora-character = { version = "0.1.0", path = "../character" }
+yozora-tokenizer-autolink = { version = "0.1.0", path = "../tokenizer-autolink" }
 
 [lib]
 path = "src/lib.rs"

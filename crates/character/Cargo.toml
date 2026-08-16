@@ -3,6 +3,10 @@ name = "yozora-character"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+license-file.workspace = true
+readme.workspace = true
+description = "Character classification, Unicode handling, and source point utilities for Yozora."
+include = ["src/**"]
 repository.workspace = true
 
 [lib]

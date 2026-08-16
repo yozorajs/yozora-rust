@@ -3,11 +3,15 @@ name = "yozora-core-tokenizer"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+license-file.workspace = true
+readme.workspace = true
+description = "Core tokenizer traits, token types, and parsing utilities for Yozora."
+include = ["src/**"]
 repository.workspace = true
 
 [dependencies]
-yozora-ast = { path = "../ast" }
-yozora-character = { path = "../character" }
+yozora-ast = { version = "0.1.0", path = "../ast" }
+yozora-character = { version = "0.1.0", path = "../character" }
 
 [lib]
 path = "src/lib.rs"

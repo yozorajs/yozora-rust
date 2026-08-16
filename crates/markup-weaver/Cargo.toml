@@ -3,11 +3,16 @@ name = "yozora-markup-weaver"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+license-file.workspace = true
+readme.workspace = true
+description = "Serialize Yozora AST nodes back into Markdown markup."
+include = ["src/**"]
+repository.workspace = true
 
 [dependencies]
-yozora-ast = { path = "../ast" }
+yozora-ast = { version = "0.1.0", path = "../ast" }
 
 [dev-dependencies]
 serde_json.workspace = true
-yozora-core-parser = { path = "../core-parser" }
-yozora-parser = { path = "../parser" }
+yozora-core-parser = { version = "0.1.0", path = "../core-parser" }
+yozora-parser = { version = "0.1.0", path = "../parser" }

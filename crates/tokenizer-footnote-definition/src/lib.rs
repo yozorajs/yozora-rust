@@ -1,10 +1,16 @@
 mod r#match;
 mod parse;
 mod tokenizer;
+mod types;
+pub mod util;
 
-pub use parse::{FootnoteDefinitionLabel, FootnoteDefinitionTokenData};
-pub use r#match::eat_footnote_label;
-pub use tokenizer::{FootnoteDefinitionTokenizer, FOOTNOTE_DEFINITION_TOKENIZER_NAME};
+pub use tokenizer::{
+    FootnoteDefinitionMatchHook, FootnoteDefinitionParseHook, FootnoteDefinitionTokenizer,
+};
+pub use types::{
+    FootnoteDefinitionLabel, FootnoteDefinitionTokenData, FOOTNOTE_DEFINITION_TOKENIZER_NAME,
+};
+pub use util::eat_footnote_label;
 
 pub type FootnoteDefinitionToken =
     yozora_core_tokenizer::TypedBlockToken<FootnoteDefinitionTokenData>;
@@ -14,13 +20,14 @@ pub type FootnoteDefinitionTokenizerProps = yozora_core_tokenizer::TokenizerOpti
 pub fn footnote_definition_match<'a>(
     tokenizer: &'a FootnoteDefinitionTokenizer,
     api: &'a dyn yozora_core_tokenizer::MatchBlockPhaseApi,
-) -> Box<dyn yozora_core_tokenizer::MatchBlockHook + 'a> {
-    yozora_core_tokenizer::BlockTokenizer::r#match(tokenizer, api)
+) -> FootnoteDefinitionMatchHook<'a> {
+    FootnoteDefinitionMatchHook::new(tokenizer, api)
 }
 
 pub fn footnote_definition_parse<'a>(
     tokenizer: &'a FootnoteDefinitionTokenizer,
     api: &'a dyn yozora_core_tokenizer::ParseBlockPhaseApi,
-) -> Box<dyn yozora_core_tokenizer::ParseBlockHook + 'a> {
-    yozora_core_tokenizer::BlockTokenizer::parse(tokenizer, api)
+) -> FootnoteDefinitionParseHook<'a> {
+    let _ = tokenizer;
+    FootnoteDefinitionParseHook::new(api)
 }

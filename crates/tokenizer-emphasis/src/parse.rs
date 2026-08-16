@@ -1,10 +1,7 @@
 use yozora_ast::{Emphasis, Node, Strong};
 use yozora_core_tokenizer::{InlineToken, NodeInterval, ParseInlinePhaseApi};
 
-#[derive(Debug, Clone)]
-pub struct EmphasisTokenData {
-    pub thickness: usize,
-}
+use crate::types::EmphasisTokenData;
 
 pub(crate) fn parse_emphasis_tokens(
     tokens: &[InlineToken],

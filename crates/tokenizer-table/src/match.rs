@@ -1,41 +1,15 @@
-use std::sync::Arc;
-
-use yozora_ast::{
-    AlignType, NodeType, Position, TableColumn, TABLE_CELL_TYPE, TABLE_ROW_TYPE, TABLE_TYPE,
-};
+use yozora_ast::{AlignType, Position, TableColumn, TABLE_CELL_TYPE, TABLE_ROW_TYPE, TABLE_TYPE};
 use yozora_character::{is_whitespace_character, AsciiCodePoint};
 use yozora_core_tokenizer::*;
 
-#[derive(Debug, Clone)]
-pub struct TableCellTokenData {
-    pub tokenizer: Option<Arc<str>>,
-    pub node_type: NodeType,
-    pub children: Option<BlockTokenChildren>,
-    pub position: Position,
-    pub lines: Vec<PhrasingContentLine>,
-}
-
-#[derive(Debug, Clone)]
-pub struct TableRowTokenData {
-    pub tokenizer: Option<Arc<str>>,
-    pub node_type: NodeType,
-    pub children: Option<BlockTokenChildren>,
-    pub position: Position,
-    pub cells: Vec<TableCellTokenData>,
-}
-
-#[derive(Debug, Clone)]
-pub struct TableTokenData {
-    pub columns: Vec<TableColumn>,
-    pub rows: Vec<TableRowTokenData>,
-}
+use crate::types::{TableCellTokenData, TableRowTokenData, TableTokenData};
 
 pub(crate) fn eat_and_interrupt_previous_sibling(
     line: &PhrasingContentLine,
     prev_sibling_token: &BlockToken,
     match_api: &dyn MatchBlockPhaseApi,
 ) -> Option<EatAndInterruptPreviousSiblingResult> {
-    if line.count_of_precede_spaces >= 4 || line.first_non_whitespace_index >= line.end_index {
+    if line.indent_width >= 4 || line.first_non_whitespace_index >= line.end_index {
         return None;
     }
 
@@ -191,6 +165,7 @@ fn calc_delimiter_columns(line: &PhrasingContentLine) -> Option<Vec<TableColumn>
 fn is_header_cell_count_matched(line: &PhrasingContentLine, expected_columns: usize) -> bool {
     let node_points = line.node_points.as_ref();
     let mut cell_count = 0usize;
+    let mut has_seen_pipe = false;
     let mut has_non_whitespace_before_pipe = false;
 
     let mut index = line.start_index;
@@ -202,9 +177,10 @@ fn is_header_cell_count_matched(line: &PhrasingContentLine, expected_columns: us
         }
 
         if code_point == AsciiCodePoint::VERTICAL_SLASH as i32 {
-            if has_non_whitespace_before_pipe || cell_count > 0 {
+            if has_non_whitespace_before_pipe || has_seen_pipe {
                 cell_count += 1;
             }
+            has_seen_pipe = true;
             has_non_whitespace_before_pipe = false;
             index += 1;
             continue;
@@ -217,7 +193,7 @@ fn is_header_cell_count_matched(line: &PhrasingContentLine, expected_columns: us
         index += 1;
     }
 
-    if has_non_whitespace_before_pipe && expected_columns > 1 {
+    if has_non_whitespace_before_pipe {
         cell_count += 1;
     }
 

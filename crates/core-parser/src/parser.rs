@@ -387,8 +387,9 @@ mod tests {
         AnyFallbackTokenizer, AnyTokenizer, BlockToken, BlockTokenizer, FindDelimiterGenerator,
         InlineFallbackTokenizer, InlineToken, InlineTokenizer, IsDelimiterPairResult,
         MatchBlockHook, MatchBlockPhaseApi, MatchInlineFallbackPhaseApi, MatchInlineHook,
-        MatchInlinePhaseApi, ParseBlockHook, ParseBlockPhaseApi, ParseInlineHook,
-        ParseInlinePhaseApi, ProcessDelimiterPairResult, TokenDelimiter, Tokenizer, TokenizerType,
+        MatchInlinePhaseApi, ParseBlockHook, ParseBlockHookResult, ParseBlockPhaseApi,
+        ParseBlockResult, ParseInlineHook, ParseInlinePhaseApi, ProcessDelimiterPairResult,
+        TokenDelimiter, Tokenizer, TokenizerType,
     };
 
     use super::DefaultParser;
@@ -420,8 +421,11 @@ mod tests {
     struct NoopParseBlockHook;
 
     impl ParseBlockHook for NoopParseBlockHook {
-        fn parse(&self, _tokens: &[BlockToken]) -> Vec<Node> {
-            Vec::new()
+        fn parse<'a>(
+            &'a self,
+            _tokens: &'a [BlockToken],
+        ) -> ParseBlockResult<ParseBlockHookResult<'a>> {
+            Ok(Vec::new().into())
         }
     }
 

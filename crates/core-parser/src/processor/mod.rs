@@ -116,7 +116,6 @@ struct ParseContext<'a, 'b> {
 
 struct ParseBlockApiAdapter<'a, 'b> {
     context: &'b ParseContext<'a, 'b>,
-    parsed_children: Rc<RefCell<HashMap<BlockTokenSliceKey, Vec<Node>>>>,
 }
 
 impl ParseBlockPhaseApi for ParseBlockApiAdapter<'_, '_> {
@@ -130,20 +129,6 @@ impl ParseBlockPhaseApi for ParseBlockApiAdapter<'_, '_> {
 
     fn process_inlines(&self, node_points: &[NodePoint]) -> Vec<Node> {
         process_inlines_with_context(self.context, node_points)
-    }
-
-    fn parse_block_tokens(&self, tokens: Option<&[BlockToken]>) -> Vec<Node> {
-        let Some(tokens) = tokens else {
-            return Vec::new();
-        };
-        if tokens.is_empty() {
-            return Vec::new();
-        }
-        let parsed = self
-            .parsed_children
-            .borrow_mut()
-            .remove(&block_token_slice_key(tokens));
-        parsed.unwrap_or_else(|| parse_block_tokens_with_context(self.context, tokens))
     }
 }
 
@@ -486,11 +471,7 @@ fn parse_block_tokens_with_context(
         return Vec::new();
     }
 
-    let parsed_children = Rc::new(RefCell::new(HashMap::new()));
-    let api = ParseBlockApiAdapter {
-        context,
-        parsed_children: Rc::clone(&parsed_children),
-    };
+    let api = ParseBlockApiAdapter { context };
     let mut parse_block_hooks: Vec<Box<dyn yozora_core_tokenizer::ParseBlockHook + '_>> =
         Vec::with_capacity(context.options.block_tokenizers.len());
     for tokenizer in context.options.block_tokenizers {
@@ -502,141 +483,24 @@ fn parse_block_tokens_with_context(
         .block_fallback_tokenizer
         .map(|tokenizer| (tokenizer.name(), tokenizer.parse(&api)));
 
-    schedule_block_tokens(
-        context,
-        tokens,
-        &parse_block_hooks,
-        fallback_block_hook.as_ref(),
-        parsed_children,
-    )
-}
-
-type BlockTokenSliceKey = (usize, usize);
-
-fn block_token_slice_key(tokens: &[BlockToken]) -> BlockTokenSliceKey {
-    (tokens.as_ptr() as usize, tokens.len())
-}
-
-struct PendingBlockBatch {
-    start_index: usize,
-    end_index: usize,
-    next_child_index: usize,
-}
-
-struct ParseBlockFrame<'a> {
-    tokens: &'a [BlockToken],
-    next_token_index: usize,
-    parsed_nodes: Vec<Node>,
-    pending_batch: Option<PendingBlockBatch>,
-}
-
-impl<'a> ParseBlockFrame<'a> {
-    fn new(tokens: &'a [BlockToken]) -> Self {
-        Self {
-            tokens,
-            next_token_index: 0,
-            parsed_nodes: Vec::new(),
-            pending_batch: None,
-        }
+    let mut parse_block_hook_map: HashMap<&str, &dyn yozora_core_tokenizer::ParseBlockHook> =
+        HashMap::with_capacity(
+            parse_block_hooks.len() + usize::from(fallback_block_hook.is_some()),
+        );
+    for (tokenizer, hook) in context
+        .options
+        .block_tokenizers
+        .iter()
+        .zip(parse_block_hooks.iter())
+    {
+        parse_block_hook_map.insert(tokenizer.name(), hook.as_ref());
     }
-}
-
-fn schedule_block_tokens<'a>(
-    context: &ParseContext<'_, '_>,
-    tokens: &'a [BlockToken],
-    parse_block_hooks: &[Box<dyn yozora_core_tokenizer::ParseBlockHook + '_>],
-    fallback_block_hook: Option<&(&str, Box<dyn yozora_core_tokenizer::ParseBlockHook + '_>)>,
-    parsed_children: Rc<RefCell<HashMap<BlockTokenSliceKey, Vec<Node>>>>,
-) -> Vec<Node> {
-    enum Action<'a> {
-        Continue,
-        Push(&'a [BlockToken]),
-        Settle(BlockTokenSliceKey, Vec<Node>),
+    if let Some((name, hook)) = fallback_block_hook.as_ref() {
+        parse_block_hook_map.insert(name, hook.as_ref());
     }
 
-    let mut frames = vec![ParseBlockFrame::new(tokens)];
-    loop {
-        let action = {
-            let frame = frames
-                .last_mut()
-                .expect("block parse scheduler should contain a frame");
-            if let Some(pending) = frame.pending_batch.as_mut() {
-                let mut child_tokens = None;
-                while pending.next_child_index < pending.end_index {
-                    let token = &frame.tokens[pending.next_child_index];
-                    pending.next_child_index += 1;
-                    let children = token.children.as_slice();
-                    if children.is_empty()
-                        || parsed_children
-                            .borrow()
-                            .contains_key(&block_token_slice_key(children))
-                    {
-                        continue;
-                    }
-                    child_tokens = Some(children);
-                    break;
-                }
-
-                if let Some(children) = child_tokens {
-                    Action::Push(children)
-                } else {
-                    let pending = frame
-                        .pending_batch
-                        .take()
-                        .expect("pending block batch should exist");
-                    let tokenizer_name = frame.tokens[pending.start_index].tokenizer.as_ref();
-                    let hook: &dyn yozora_core_tokenizer::ParseBlockHook = if let Some(hook_index) =
-                        context.options.block_tokenizer_map.get(tokenizer_name)
-                    {
-                        parse_block_hooks[*hook_index].as_ref()
-                    } else if fallback_block_hook.is_some_and(|(name, _)| *name == tokenizer_name) {
-                        fallback_block_hook
-                            .map(|(_, hook)| hook.as_ref())
-                            .expect("fallback hook should exist")
-                    } else {
-                        panic!("[parseBlock] tokenizer '{tokenizer_name}' not found")
-                    };
-                    frame
-                        .parsed_nodes
-                        .extend(hook.parse(&frame.tokens[pending.start_index..pending.end_index]));
-                    Action::Continue
-                }
-            } else if frame.next_token_index >= frame.tokens.len() {
-                Action::Settle(
-                    block_token_slice_key(frame.tokens),
-                    std::mem::take(&mut frame.parsed_nodes),
-                )
-            } else {
-                let batch_start_index = frame.next_token_index;
-                let tokenizer_name = frame.tokens[batch_start_index].tokenizer.as_ref();
-                let mut batch_end_index = batch_start_index + 1;
-                while batch_end_index < frame.tokens.len()
-                    && frame.tokens[batch_end_index].tokenizer.as_ref() == tokenizer_name
-                {
-                    batch_end_index += 1;
-                }
-                frame.next_token_index = batch_end_index;
-                frame.pending_batch = Some(PendingBlockBatch {
-                    start_index: batch_start_index,
-                    end_index: batch_end_index,
-                    next_child_index: batch_start_index,
-                });
-                Action::Continue
-            }
-        };
-
-        match action {
-            Action::Continue => {}
-            Action::Push(tokens) => frames.push(ParseBlockFrame::new(tokens)),
-            Action::Settle(key, nodes) => {
-                frames.pop();
-                if frames.is_empty() {
-                    return nodes;
-                }
-                parsed_children.borrow_mut().insert(key, nodes);
-            }
-        }
-    }
+    block::parse::parse_block_tokens(Some(tokens), &parse_block_hook_map)
+        .unwrap_or_else(|error| panic!("{error}"))
 }
 
 fn process_inlines_with_context(

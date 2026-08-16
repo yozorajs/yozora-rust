@@ -1,67 +1,71 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
 
-use crate::ast::{AlignType, Position, ReferenceType};
+use crate::ast::Position;
 
-pub const ROOT_TYPE: &str = "root";
-pub const ADMONITION_TYPE: &str = "admonition";
-pub const BLOCKQUOTE_TYPE: &str = "blockquote";
-pub const BREAK_TYPE: &str = "break";
-pub const CODE_TYPE: &str = "code";
-pub const DEFINITION_TYPE: &str = "definition";
-pub const DELETE_TYPE: &str = "delete";
-pub const ECMA_IMPORT_TYPE: &str = "ecmaImport";
-pub const EMPHASIS_TYPE: &str = "emphasis";
-pub const FOOTNOTE_TYPE: &str = "footnote";
-pub const FOOTNOTE_DEFINITION_TYPE: &str = "footnoteDefinition";
-pub const FOOTNOTE_REFERENCE_TYPE: &str = "footnoteReference";
-pub const FRONTMATTER_TYPE: &str = "frontmatter";
-pub const HEADING_TYPE: &str = "heading";
-pub const HTML_TYPE: &str = "html";
-pub const IMAGE_TYPE: &str = "image";
-pub const IMAGE_REFERENCE_TYPE: &str = "imageReference";
-pub const INLINE_CODE_TYPE: &str = "inlineCode";
-pub const INLINE_MATH_TYPE: &str = "inlineMath";
-pub const LINK_TYPE: &str = "link";
-pub const LINK_REFERENCE_TYPE: &str = "linkReference";
-pub const LIST_TYPE: &str = "list";
-pub const LIST_ITEM_TYPE: &str = "listItem";
-pub const MATH_TYPE: &str = "math";
-pub const PARAGRAPH_TYPE: &str = "paragraph";
-pub const STRONG_TYPE: &str = "strong";
-pub const TABLE_TYPE: &str = "table";
-pub const TABLE_ROW_TYPE: &str = "tableRow";
-pub const TABLE_CELL_TYPE: &str = "tableCell";
-pub const TEXT_TYPE: &str = "text";
-pub const THEMATIC_BREAK_TYPE: &str = "thematicBreak";
+pub mod admonition;
+pub mod blockquote;
+pub mod r#break;
+pub mod code;
+pub mod definition;
+pub mod delete;
+pub mod ecma_import;
+pub mod emphasis;
+pub mod footnote;
+pub mod footnote_definition;
+pub mod footnote_reference;
+pub mod frontmatter;
+pub mod heading;
+pub mod html;
+pub mod image;
+pub mod image_reference;
+pub mod inline_code;
+pub mod inline_math;
+pub mod link;
+pub mod link_reference;
+pub mod list;
+pub mod list_item;
+pub mod math;
+pub mod paragraph;
+pub mod root;
+pub mod strong;
+pub mod table;
+pub mod table_cell;
+pub mod table_row;
+pub mod text;
+pub mod thematic_break;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Root {
-    #[serde(rename = "type")]
-    pub node_type: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub position: Option<Position>,
-    pub children: Vec<Node>,
-}
-
-impl Default for Root {
-    fn default() -> Self {
-        Self {
-            node_type: ROOT_TYPE.to_string(),
-            position: None,
-            children: Vec::new(),
-        }
-    }
-}
-
-impl Drop for Root {
-    fn drop(&mut self) {
-        let mut stack = std::mem::take(&mut self.children);
-        while let Some(mut node) = stack.pop() {
-            take_node_children(&mut node, &mut stack);
-        }
-    }
-}
+pub use admonition::{Admonition, ADMONITION_TYPE};
+pub use blockquote::{Blockquote, BLOCKQUOTE_TYPE};
+pub use code::{Code, CODE_TYPE};
+pub use definition::{Definition, DEFINITION_TYPE};
+pub use delete::{Delete, DeleteNode, DELETE_TYPE};
+pub use ecma_import::{EcmaImport, EcmaImportNamedImport, ECMA_IMPORT_TYPE};
+pub use emphasis::{Emphasis, EMPHASIS_TYPE};
+pub use footnote::{Footnote, FOOTNOTE_TYPE};
+pub use footnote_definition::{FootnoteDefinition, FOOTNOTE_DEFINITION_TYPE};
+pub use footnote_reference::{FootnoteReference, FOOTNOTE_REFERENCE_TYPE};
+pub use frontmatter::{Frontmatter, FRONTMATTER_TYPE};
+pub use heading::{Heading, HEADING_TYPE};
+pub use html::{Html, HtmlContentType, HTML_TYPE};
+pub use image::{Image, IMAGE_TYPE};
+pub use image_reference::{ImageReference, IMAGE_REFERENCE_TYPE};
+pub use inline_code::{InlineCode, INLINE_CODE_TYPE};
+pub use inline_math::{InlineMath, INLINE_MATH_TYPE};
+pub use link::{Link, LINK_TYPE};
+pub use link_reference::{LinkReference, LINK_REFERENCE_TYPE};
+pub use list::{List, LIST_TYPE};
+pub use list_item::{ListItem, TaskStatus, LIST_ITEM_TYPE};
+pub use math::{Math, MATH_TYPE};
+pub use paragraph::{Paragraph, PARAGRAPH_TYPE};
+pub use r#break::{Break, BreakNode, BREAK_TYPE};
+pub use root::{Root, ROOT_TYPE};
+pub use strong::{Strong, STRONG_TYPE};
+pub use table::{Table, TableColumn, TABLE_TYPE};
+pub use table_cell::{TableCell, TABLE_CELL_TYPE};
+pub use table_row::{TableRow, TABLE_ROW_TYPE};
+pub use text::{Text, TEXT_TYPE};
+pub use thematic_break::{ThematicBreak, THEMATIC_BREAK_TYPE};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Node {
@@ -98,7 +102,7 @@ pub enum Node {
     Custom(CustomNode),
 }
 
-fn take_node_children(node: &mut Node, stack: &mut Vec<Node>) {
+pub(super) fn take_node_children(node: &mut Node, stack: &mut Vec<Node>) {
     match node {
         Node::Admonition(node) => {
             stack.extend(std::mem::take(&mut node.title));
@@ -376,291 +380,4 @@ impl Node {
             _ => None,
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Admonition {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub position: Option<Position>,
-    pub keyword: String,
-    pub title: Vec<Node>,
-    pub children: Vec<Node>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Blockquote {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub position: Option<Position>,
-    pub children: Vec<Node>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BreakNode {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub position: Option<Position>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Code {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub position: Option<Position>,
-    pub value: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub lang: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub meta: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Definition {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub position: Option<Position>,
-    pub identifier: String,
-    pub label: String,
-    pub url: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct DeleteNode {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub position: Option<Position>,
-    pub children: Vec<Node>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct EcmaImportNamedImport {
-    pub src: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub alias: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct EcmaImport {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub position: Option<Position>,
-    #[serde(rename = "moduleName")]
-    pub module_name: String,
-    #[serde(rename = "defaultImport", skip_serializing_if = "Option::is_none")]
-    pub default_import: Option<String>,
-    #[serde(rename = "namedImports")]
-    pub named_imports: Vec<EcmaImportNamedImport>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Emphasis {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub position: Option<Position>,
-    pub children: Vec<Node>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Footnote {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub position: Option<Position>,
-    pub children: Vec<Node>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct FootnoteDefinition {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub position: Option<Position>,
-    pub identifier: String,
-    pub label: String,
-    pub children: Vec<Node>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct FootnoteReference {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub position: Option<Position>,
-    pub identifier: String,
-    pub label: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Frontmatter {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub position: Option<Position>,
-    pub value: String,
-    pub lang: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub meta: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Heading {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub position: Option<Position>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub identifier: Option<String>,
-    pub depth: u8,
-    pub children: Vec<Node>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum HtmlContentType {
-    Cdata,
-    Closing,
-    Comment,
-    Declaration,
-    Instruction,
-    Open,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Html {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub position: Option<Position>,
-    pub value: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ImageReference {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub position: Option<Position>,
-    pub identifier: String,
-    pub label: String,
-    #[serde(rename = "referenceType")]
-    pub reference_type: ReferenceType,
-    pub alt: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Image {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub position: Option<Position>,
-    pub url: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
-    pub alt: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct InlineCode {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub position: Option<Position>,
-    pub value: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct InlineMath {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub position: Option<Position>,
-    pub value: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct LinkReference {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub position: Option<Position>,
-    pub identifier: String,
-    pub label: String,
-    #[serde(rename = "referenceType")]
-    pub reference_type: ReferenceType,
-    pub children: Vec<Node>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Link {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub position: Option<Position>,
-    pub url: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
-    pub children: Vec<Node>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum TaskStatus {
-    Todo,
-    Doing,
-    Done,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ListItem {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub position: Option<Position>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub status: Option<TaskStatus>,
-    pub children: Vec<Node>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct List {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub position: Option<Position>,
-    pub ordered: bool,
-    #[serde(rename = "orderType", skip_serializing_if = "Option::is_none")]
-    pub order_type: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub start: Option<usize>,
-    pub marker: u32,
-    pub spread: bool,
-    pub children: Vec<Node>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Math {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub position: Option<Position>,
-    pub value: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Paragraph {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub position: Option<Position>,
-    pub children: Vec<Node>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Strong {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub position: Option<Position>,
-    pub children: Vec<Node>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TableCell {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub position: Option<Position>,
-    pub children: Vec<Node>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TableRow {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub position: Option<Position>,
-    pub children: Vec<Node>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TableColumn {
-    pub align: Option<AlignType>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Table {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub position: Option<Position>,
-    pub columns: Vec<TableColumn>,
-    pub children: Vec<Node>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Text {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub position: Option<Position>,
-    pub value: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ThematicBreak {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub position: Option<Position>,
 }

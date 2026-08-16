@@ -5,26 +5,26 @@ use crate::types::token::InlineToken;
 
 /// Encode link destination in a uri-safe form.
 pub fn encode_link_destination(destination: &str) -> String {
-    let mut decoded = destination.to_string();
-    while let Ok(next) = try_percent_decode_once(&decoded) {
-        if next == decoded {
-            break;
-        }
-        decoded = next;
-    }
-
-    encode_uri_like(&decoded)
+    encode_uri_like(destination)
 }
 
 /// Normalize link label into a lookup identifier.
 pub fn resolve_label_to_identifier(label: &str) -> String {
     let collapsed = label
-        .split_whitespace()
+        .split(is_link_label_whitespace)
+        .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
         .join(" ")
         .to_lowercase();
 
     fold_case(&collapsed)
+}
+
+fn is_link_label_whitespace(character: char) -> bool {
+    matches!(
+        character,
+        '\t' | '\n' | '\u{000B}' | '\u{000C}' | '\r' | ' '
+    )
 }
 
 /// Resolve label text and normalized identifier from node-point interval.
@@ -156,40 +156,6 @@ pub fn is_valid_link_text(
         && check_balanced_brackets_status(start_index, end_index, internal_tokens, node_points) == 0
 }
 
-fn try_percent_decode_once(input: &str) -> Result<String, ()> {
-    let bytes = input.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0usize;
-
-    while i < bytes.len() {
-        if bytes[i] == b'%' {
-            if i + 2 >= bytes.len() {
-                return Err(());
-            }
-
-            let hi = from_hex(bytes[i + 1]).ok_or(())?;
-            let lo = from_hex(bytes[i + 2]).ok_or(())?;
-            out.push((hi << 4) | lo);
-            i += 3;
-            continue;
-        }
-
-        out.push(bytes[i]);
-        i += 1;
-    }
-
-    String::from_utf8(out).map_err(|_| ())
-}
-
-fn from_hex(ch: u8) -> Option<u8> {
-    match ch {
-        b'0'..=b'9' => Some(ch - b'0'),
-        b'a'..=b'f' => Some(ch - b'a' + 10),
-        b'A'..=b'F' => Some(ch - b'A' + 10),
-        _ => None,
-    }
-}
-
 fn encode_uri_like(input: &str) -> String {
     let mut out = String::new();
     for &b in input.as_bytes() {
@@ -226,6 +192,7 @@ fn is_allowed_uri_byte(b: u8) -> bool {
                 | b'\''
                 | b'('
                 | b')'
+                | b'%'
                 | b'#'
         )
 }
@@ -235,5 +202,137 @@ fn hex_digit(v: u8) -> char {
         0..=9 => (b'0' + v) as char,
         10..=15 => (b'A' + (v - 10)) as char,
         _ => '0',
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use yozora_ast::{FOOTNOTE_TYPE, INLINE_CODE_TYPE};
+    use yozora_character::create_node_point_generator;
+
+    #[test]
+    fn encodes_link_destinations_like_the_reference() {
+        let safe = "AZaz09-_.+!*'(),%#@?=;:/&$~";
+        assert_eq!(encode_link_destination(safe), safe);
+
+        for (source, expected) in [
+            (" ", "%20"),
+            ("\"", "%22"),
+            ("\\", "%5C"),
+            ("[", "%5B"),
+            ("]", "%5D"),
+            ("|", "%7C"),
+            ("^", "%5E"),
+            ("`", "%60"),
+            ("\u{1}", "%01"),
+            ("ä", "%C3%A4"),
+            ("😀", "%F0%9F%98%80"),
+        ] {
+            assert_eq!(
+                encode_link_destination(source),
+                expected,
+                "source={source:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn preserves_existing_percent_escapes_and_is_idempotent() {
+        for source in ["%2F", "%252F", "%ZZ", "foo%2", "100%", "foo bar", "ä", "😀"] {
+            let encoded = encode_link_destination(source);
+            assert_eq!(
+                encode_link_destination(&encoded),
+                encoded,
+                "source={source:?}"
+            );
+        }
+
+        assert_eq!(
+            encode_link_destination("https://example.com/%252Fadmin"),
+            "https://example.com/%252Fadmin"
+        );
+    }
+
+    #[test]
+    fn validates_balanced_link_text_ranges() {
+        for (source, expected) in [
+            ("", true),
+            ("foo", true),
+            ("foo [bar]", true),
+            (r"foo \[bar", true),
+            (r"foo \]bar", true),
+            ("foo [bar", false),
+            ("foo ]bar", false),
+        ] {
+            let node_points = create_node_point_generator(source)
+                .pop()
+                .unwrap_or_default();
+            assert_eq!(
+                is_valid_link_text(&node_points, 0, node_points.len(), &[]),
+                expected,
+                "source={source:?}"
+            );
+        }
+
+        let node_points = create_node_point_generator("[foo]")
+            .pop()
+            .expect("expected node points");
+        assert!(is_valid_link_text(&node_points, 1, 4, &[]));
+    }
+
+    #[test]
+    fn normalizes_only_reference_ascii_label_whitespace() {
+        assert_eq!(resolve_label_to_identifier(" a\t\nb "), "a b");
+        assert_eq!(resolve_label_to_identifier("a\u{00A0}b"), "a\u{00A0}b");
+        assert_eq!(resolve_label_to_identifier("a\u{2003}b"), "a\u{2003}b");
+    }
+
+    #[test]
+    fn ignores_brackets_inside_higher_priority_tokens() {
+        let node_points = create_node_point_generator("foo `]`")
+            .pop()
+            .expect("expected node points");
+        let tokens = vec![InlineToken::new("test", INLINE_CODE_TYPE, (4, 7))];
+
+        assert!(is_valid_link_text(
+            &node_points,
+            0,
+            node_points.len(),
+            &tokens,
+        ));
+    }
+
+    #[test]
+    fn rejects_nested_links_only_when_they_overlap_the_range() {
+        let node_points = create_node_point_generator("foo")
+            .pop()
+            .expect("expected node points");
+        let nested_link = InlineToken::new("test", LINK_TYPE, (2, 3));
+        let footnote =
+            InlineToken::new("test", FOOTNOTE_TYPE, (0, 3)).with_children(vec![nested_link]);
+
+        assert!(!is_valid_link_text(
+            &node_points,
+            0,
+            node_points.len(),
+            std::slice::from_ref(&footnote),
+        ));
+        assert!(is_valid_link_text(
+            &node_points,
+            0,
+            2,
+            std::slice::from_ref(&footnote),
+        ));
+
+        for node_type in [LINK_TYPE, LINK_REFERENCE_TYPE] {
+            let token = InlineToken::new("test", node_type, (0, node_points.len()));
+            assert!(!is_valid_link_text(
+                &node_points,
+                0,
+                node_points.len(),
+                &[token],
+            ));
+        }
     }
 }

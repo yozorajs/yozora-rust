@@ -1,9 +1,7 @@
-use yozora_ast::Node;
 use yozora_core_tokenizer::*;
 
+use crate::types::HEADING_TOKENIZER_NAME;
 use crate::{parse, r#match};
-
-pub const HEADING_TOKENIZER_NAME: &str = "@yozora/tokenizer-heading";
 
 #[derive(Debug, Clone)]
 pub struct HeadingTokenizer {
@@ -44,7 +42,14 @@ impl Tokenizer for HeadingTokenizer {
     }
 }
 
-struct HeadingMatchHook;
+#[derive(Debug, Clone, Copy, Default)]
+pub struct HeadingMatchHook;
+
+impl HeadingMatchHook {
+    pub fn new() -> Self {
+        Self
+    }
+}
 
 impl MatchBlockHook for HeadingMatchHook {
     fn is_containing_block(&self) -> bool {
@@ -69,22 +74,28 @@ impl MatchBlockHook for HeadingMatchHook {
     }
 }
 
-struct HeadingParseHook<'a> {
+pub struct HeadingParseHook<'a> {
     api: &'a dyn ParseBlockPhaseApi,
 }
 
+impl<'a> HeadingParseHook<'a> {
+    pub fn new(api: &'a dyn ParseBlockPhaseApi) -> Self {
+        Self { api }
+    }
+}
+
 impl ParseBlockHook for HeadingParseHook<'_> {
-    fn parse(&self, tokens: &[BlockToken]) -> Vec<Node> {
-        parse::parse_heading_tokens(tokens, self.api)
+    fn parse<'a>(&'a self, tokens: &'a [BlockToken]) -> ParseBlockResult<ParseBlockHookResult<'a>> {
+        Ok(parse::parse_heading_tokens(tokens, self.api).into())
     }
 }
 
 impl BlockTokenizer for HeadingTokenizer {
     fn r#match<'a>(&'a self, _api: &'a dyn MatchBlockPhaseApi) -> Box<dyn MatchBlockHook + 'a> {
-        Box::new(HeadingMatchHook)
+        Box::new(HeadingMatchHook::new())
     }
 
     fn parse<'a>(&'a self, api: &'a dyn ParseBlockPhaseApi) -> Box<dyn ParseBlockHook + 'a> {
-        Box::new(HeadingParseHook { api })
+        Box::new(HeadingParseHook::new(api))
     }
 }

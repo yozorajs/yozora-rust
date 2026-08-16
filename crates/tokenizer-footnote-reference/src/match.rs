@@ -2,22 +2,16 @@ use yozora_ast::FOOTNOTE_REFERENCE_TYPE;
 use yozora_character::AsciiCodePoint;
 use yozora_core_tokenizer::{
     resolve_link_label_and_identifier, DelimiterType, InlineToken, MatchInlinePhaseApi,
-    TokenDelimiter,
 };
 use yozora_tokenizer_footnote_definition::eat_footnote_label;
 
-use crate::parse::FootnoteReferenceTokenData;
-
-#[derive(Debug, Clone)]
-pub(crate) struct DelimiterEntry {
-    pub delimiter: TokenDelimiter,
-}
+use crate::types::{FootnoteReferenceDelimiter, FootnoteReferenceTokenData};
 
 pub(crate) fn find_delimiter_entry(
     api: &dyn MatchInlinePhaseApi,
     start_index: usize,
     end_index: usize,
-) -> Option<DelimiterEntry> {
+) -> Option<FootnoteReferenceDelimiter> {
     let node_points = api.get_node_points();
     let mut i = start_index;
 
@@ -31,9 +25,11 @@ pub(crate) fn find_delimiter_entry(
             x if x == AsciiCodePoint::OPEN_BRACKET as i32 => {
                 let next_index = eat_footnote_label(node_points, i, end_index);
                 if next_index >= 0 {
-                    return Some(DelimiterEntry {
-                        delimiter: create_delimiter(DelimiterType::Full, i, next_index as usize),
-                    });
+                    return Some(create_delimiter(
+                        DelimiterType::Full,
+                        i,
+                        next_index as usize,
+                    ));
                 }
             }
             _ => {}
@@ -47,7 +43,7 @@ pub(crate) fn find_delimiter_entry(
 
 pub(crate) fn process_single_delimiter(
     api: &dyn MatchInlinePhaseApi,
-    delimiter: &TokenDelimiter,
+    delimiter: &FootnoteReferenceDelimiter,
 ) -> Vec<InlineToken> {
     if delimiter.end_index <= delimiter.start_index + 2 {
         return Vec::new();
@@ -80,8 +76,8 @@ fn create_delimiter(
     delimiter_type: DelimiterType,
     start_index: usize,
     end_index: usize,
-) -> TokenDelimiter {
-    TokenDelimiter {
+) -> FootnoteReferenceDelimiter {
+    FootnoteReferenceDelimiter {
         delimiter_type,
         start_index,
         end_index,

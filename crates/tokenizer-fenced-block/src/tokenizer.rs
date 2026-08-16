@@ -1,40 +1,13 @@
-use yozora_ast::{Node, NodeType};
-use yozora_character::AsciiCodePoint;
 use yozora_core_tokenizer::{
     BlockToken, BlockTokenizer, MatchBlockHook, MatchBlockPhaseApi, ParseBlockHook,
-    ParseBlockPhaseApi, Tokenizer, TokenizerMeta, TokenizerPriority, TokenizerType,
+    ParseBlockHookResult, ParseBlockPhaseApi, ParseBlockResult, Tokenizer, TokenizerMeta,
+    TokenizerPriority, TokenizerType,
 };
 
-use crate::r#match::{self, CheckInfoStringFn, FencedBlockHookContext};
-
-pub const FENCED_BLOCK_TOKENIZER_NAME: &str = "@yozora/tokenizer-fenced-block";
-pub const FENCED_BLOCK_TYPE: &str = "fencedBlock";
-
-#[derive(Clone)]
-pub struct FencedBlockTokenizerOptions {
-    pub name: Option<String>,
-    pub priority: Option<i32>,
-    pub node_type: NodeType,
-    pub markers: Vec<i32>,
-    pub markers_required: usize,
-    pub check_info_string: Option<CheckInfoStringFn>,
-}
-
-impl Default for FencedBlockTokenizerOptions {
-    fn default() -> Self {
-        Self {
-            name: None,
-            priority: None,
-            node_type: FENCED_BLOCK_TYPE,
-            markers: vec![
-                AsciiCodePoint::BACKTICK as i32,
-                AsciiCodePoint::TILDE as i32,
-            ],
-            markers_required: 3,
-            check_info_string: None,
-        }
-    }
-}
+use crate::r#match;
+use crate::types::{
+    FencedBlockHookContext, FencedBlockTokenizerOptions, FENCED_BLOCK_TOKENIZER_NAME,
+};
 
 #[derive(Clone)]
 pub struct FencedBlockTokenizer {
@@ -90,7 +63,10 @@ impl Tokenizer for FencedBlockTokenizer {
 struct FencedBlockParseHook;
 
 impl ParseBlockHook for FencedBlockParseHook {
-    fn parse(&self, _tokens: &[BlockToken]) -> Vec<Node> {
+    fn parse<'a>(
+        &'a self,
+        _tokens: &'a [BlockToken],
+    ) -> ParseBlockResult<ParseBlockHookResult<'a>> {
         panic!(
             "[{}] FencedBlockTokenizer is an abstract base tokenizer and does not implement parse().",
             FENCED_BLOCK_TOKENIZER_NAME

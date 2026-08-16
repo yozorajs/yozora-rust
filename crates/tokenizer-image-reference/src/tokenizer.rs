@@ -4,9 +4,8 @@ use std::rc::Rc;
 use yozora_ast::Node;
 use yozora_core_tokenizer::*;
 
+use crate::types::{ImageReferenceDelimiter, IMAGE_REFERENCE_TOKENIZER_NAME};
 use crate::{parse, r#match};
-
-pub const IMAGE_REFERENCE_TOKENIZER_NAME: &str = "@yozora/tokenizer-image-reference";
 
 #[derive(Debug, Clone)]
 pub struct ImageReferenceTokenizer {
@@ -47,56 +46,44 @@ impl Tokenizer for ImageReferenceTokenizer {
     }
 }
 
-struct ImageReferenceMatchHook<'a> {
+pub struct ImageReferenceDelimiterGenerator<'a> {
     api: &'a dyn MatchInlinePhaseApi,
-    delimiters: Rc<RefCell<Vec<r#match::DelimiterEntry>>>,
 }
 
-impl ImageReferenceMatchHook<'_> {
-    fn lookup_brackets(
-        &self,
-        delimiter: &TokenDelimiter,
-    ) -> Vec<r#match::ImageReferenceDelimiterBracket> {
-        self.delimiters
-            .borrow()
-            .iter()
-            .rev()
-            .find(|entry| {
-                entry.delimiter.start_index == delimiter.start_index
-                    && entry.delimiter.end_index == delimiter.end_index
-                    && entry.delimiter.delimiter_type == delimiter.delimiter_type
-            })
-            .map(|entry| entry.brackets.clone())
-            .unwrap_or_default()
+impl ImageReferenceDelimiterGenerator<'_> {
+    pub fn next(&mut self, range_index: (usize, usize)) -> Option<ImageReferenceDelimiter> {
+        r#match::find_image_reference_delimiter_entry(
+            self.api.get_node_points(),
+            range_index.0,
+            range_index.1,
+        )
     }
 }
 
-impl<'a> MatchInlineHook<'a> for ImageReferenceMatchHook<'a> {
-    fn find_delimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
-        self.delimiters.borrow_mut().clear();
+pub struct ImageReferenceMatchHook<'a> {
+    api: &'a dyn MatchInlinePhaseApi,
+    delimiters: Rc<RefCell<Vec<ImageReferenceDelimiter>>>,
+}
 
-        let api = self.api;
-        let delimiters = Rc::clone(&self.delimiters);
-
-        Box::new(gen_find_delimiter(move |start_index, end_index| {
-            let entry = r#match::find_image_reference_delimiter_entry(
-                api.get_node_points(),
-                start_index,
-                end_index,
-            )?;
-            let delimiter = entry.delimiter.clone();
-            delimiters.borrow_mut().push(entry);
-            Some(delimiter)
-        }))
+impl<'a> ImageReferenceMatchHook<'a> {
+    pub fn new(api: &'a dyn MatchInlinePhaseApi) -> Self {
+        Self {
+            api,
+            delimiters: Rc::new(RefCell::new(Vec::new())),
+        }
     }
 
-    fn is_delimiter_pair(
+    pub fn find_delimiter(&self) -> ImageReferenceDelimiterGenerator<'a> {
+        ImageReferenceDelimiterGenerator { api: self.api }
+    }
+
+    pub fn is_delimiter_pair(
         &self,
-        opener_delimiter: &TokenDelimiter,
-        closer_delimiter: &TokenDelimiter,
+        opener_delimiter: &ImageReferenceDelimiter,
+        closer_delimiter: &ImageReferenceDelimiter,
         internal_tokens: &[InlineToken],
     ) -> IsDelimiterPairResult {
-        let status = r#match::check_balanced_brackets_status(
+        let status = check_balanced_brackets_status(
             opener_delimiter.end_index,
             closer_delimiter.start_index,
             internal_tokens,
@@ -120,20 +107,17 @@ impl<'a> MatchInlineHook<'a> for ImageReferenceMatchHook<'a> {
         }
     }
 
-    fn process_delimiter_pair(
+    pub fn process_delimiter_pair(
         &self,
-        opener_delimiter: &TokenDelimiter,
-        closer_delimiter: &TokenDelimiter,
+        opener_delimiter: &ImageReferenceDelimiter,
+        closer_delimiter: &ImageReferenceDelimiter,
         internal_tokens: &[InlineToken],
     ) -> ProcessDelimiterPairResult {
-        let brackets = self.lookup_brackets(closer_delimiter);
         let tokens = r#match::process_delimiter_pair(
             self.api,
             opener_delimiter,
             closer_delimiter,
-            &brackets,
             internal_tokens,
-            self.api.get_node_points(),
         );
 
         ProcessDelimiterPairResult {
@@ -142,10 +126,101 @@ impl<'a> MatchInlineHook<'a> for ImageReferenceMatchHook<'a> {
             remain_closer_delimiter: None,
         }
     }
+
+    fn lookup_delimiter(&self, delimiter: &TokenDelimiter) -> Option<ImageReferenceDelimiter> {
+        self.delimiters
+            .borrow()
+            .iter()
+            .rev()
+            .find(|candidate| {
+                candidate.start_index == delimiter.start_index
+                    && candidate.end_index == delimiter.end_index
+                    && candidate.delimiter_type == delimiter.delimiter_type
+            })
+            .cloned()
+    }
 }
 
-struct ImageReferenceParseHook<'a> {
+impl<'a> MatchInlineHook<'a> for ImageReferenceMatchHook<'a> {
+    fn find_delimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
+        self.delimiters.borrow_mut().clear();
+
+        let mut finder = ImageReferenceMatchHook::find_delimiter(self);
+        let delimiters = Rc::clone(&self.delimiters);
+
+        Box::new(gen_find_delimiter(move |start_index, end_index| {
+            let delimiter = finder.next((start_index, end_index))?;
+            let core_delimiter = delimiter.to_core();
+            delimiters.borrow_mut().push(delimiter);
+            Some(core_delimiter)
+        }))
+    }
+
+    fn is_delimiter_pair(
+        &self,
+        opener_delimiter: &TokenDelimiter,
+        closer_delimiter: &TokenDelimiter,
+        internal_tokens: &[InlineToken],
+    ) -> IsDelimiterPairResult {
+        let Some(opener_delimiter) = self.lookup_delimiter(opener_delimiter) else {
+            return IsDelimiterPairResult::NotPaired {
+                opener: false,
+                closer: false,
+            };
+        };
+        let Some(closer_delimiter) = self.lookup_delimiter(closer_delimiter) else {
+            return IsDelimiterPairResult::NotPaired {
+                opener: false,
+                closer: false,
+            };
+        };
+
+        ImageReferenceMatchHook::is_delimiter_pair(
+            self,
+            &opener_delimiter,
+            &closer_delimiter,
+            internal_tokens,
+        )
+    }
+
+    fn process_delimiter_pair(
+        &self,
+        opener_delimiter: &TokenDelimiter,
+        closer_delimiter: &TokenDelimiter,
+        internal_tokens: &[InlineToken],
+    ) -> ProcessDelimiterPairResult {
+        let Some(opener_delimiter) = self.lookup_delimiter(opener_delimiter) else {
+            return ProcessDelimiterPairResult {
+                tokens: Vec::new(),
+                remain_opener_delimiter: None,
+                remain_closer_delimiter: None,
+            };
+        };
+        let Some(closer_delimiter) = self.lookup_delimiter(closer_delimiter) else {
+            return ProcessDelimiterPairResult {
+                tokens: Vec::new(),
+                remain_opener_delimiter: None,
+                remain_closer_delimiter: None,
+            };
+        };
+
+        ImageReferenceMatchHook::process_delimiter_pair(
+            self,
+            &opener_delimiter,
+            &closer_delimiter,
+            internal_tokens,
+        )
+    }
+}
+
+pub struct ImageReferenceParseHook<'a> {
     api: &'a dyn ParseInlinePhaseApi,
+}
+
+impl<'a> ImageReferenceParseHook<'a> {
+    pub fn new(api: &'a dyn ParseInlinePhaseApi) -> Self {
+        Self { api }
+    }
 }
 
 impl ParseInlineHook for ImageReferenceParseHook<'_> {
@@ -159,13 +234,84 @@ impl InlineTokenizer for ImageReferenceTokenizer {
         &'a self,
         api: &'a dyn MatchInlinePhaseApi,
     ) -> Box<dyn MatchInlineHook<'a> + 'a> {
-        Box::new(ImageReferenceMatchHook {
-            api,
-            delimiters: Rc::new(RefCell::new(Vec::new())),
-        })
+        Box::new(ImageReferenceMatchHook::new(api))
     }
 
     fn parse<'a>(&'a self, api: &'a dyn ParseInlinePhaseApi) -> Box<dyn ParseInlineHook + 'a> {
-        Box::new(ImageReferenceParseHook { api })
+        Box::new(ImageReferenceParseHook::new(api))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use yozora_character::{create_node_point_generator, NodePoint};
+
+    struct DummyMatchApi {
+        node_points: Vec<NodePoint>,
+    }
+
+    impl MatchInlinePhaseApi for DummyMatchApi {
+        fn has_definition(&self, identifier: &str) -> bool {
+            identifier == "bar"
+        }
+
+        fn has_footnote_definition(&self, _identifier: &str) -> bool {
+            false
+        }
+
+        fn get_node_points(&self) -> &[NodePoint] {
+            &self.node_points
+        }
+
+        fn get_block_start_index(&self) -> usize {
+            0
+        }
+
+        fn get_block_end_index(&self) -> usize {
+            self.node_points.len()
+        }
+
+        fn resolve_fallback_tokens(
+            &self,
+            tokens: &[InlineToken],
+            _token_start_index: usize,
+            _token_end_index: usize,
+        ) -> Vec<InlineToken> {
+            tokens.to_vec()
+        }
+
+        fn resolve_internal_tokens(
+            &self,
+            _higher_priority_tokens: &[InlineToken],
+            start_index: usize,
+            end_index: usize,
+        ) -> Vec<InlineToken> {
+            vec![InlineToken::new(
+                "text",
+                yozora_ast::TEXT_TYPE,
+                (start_index, end_index),
+            )]
+        }
+    }
+
+    #[test]
+    fn typed_hook_preserves_reference_brackets() {
+        let node_points = create_node_point_generator("![foo][bar]")
+            .pop()
+            .expect("expected node points");
+        let api = DummyMatchApi { node_points };
+        let hook = ImageReferenceMatchHook::new(&api);
+        let mut finder = hook.find_delimiter();
+        let opener = finder
+            .next((0, api.get_block_end_index()))
+            .expect("expected opener");
+        let closer = finder
+            .next((opener.end_index, api.get_block_end_index()))
+            .expect("expected closer");
+
+        assert_eq!(closer.brackets.len(), 1);
+        assert_eq!(closer.brackets[0].label.as_deref(), Some("bar"));
+        assert_eq!(closer.brackets[0].identifier.as_deref(), Some("bar"));
     }
 }

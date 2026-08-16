@@ -4,9 +4,8 @@ use yozora_character::calc_escaped_string_from_node_points;
 use yozora_core_tokenizer::NodeInterval;
 use yozora_core_tokenizer::*;
 
+use crate::types::{TextDelimiter, TEXT_TOKENIZER_NAME};
 use crate::{parse, r#match};
-
-pub const TEXT_TOKENIZER_NAME: &str = "@yozora/tokenizer-text";
 
 #[derive(Debug, Clone)]
 pub struct TextTokenizer {
@@ -47,22 +46,52 @@ impl Tokenizer for TextTokenizer {
     }
 }
 
-struct TextMatchHook;
+pub struct TextDelimiterGenerator;
 
-impl<'a> MatchInlineHook<'a> for TextMatchHook {
-    fn find_delimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
-        Box::new(gen_find_delimiter(|start_index, end_index| {
-            Some(r#match::find_text_delimiter(start_index, end_index))
-        }))
+impl TextDelimiterGenerator {
+    pub fn next(&mut self, range_index: (usize, usize)) -> Option<TextDelimiter> {
+        Some(r#match::find_text_delimiter(range_index.0, range_index.1))
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TextMatchHook;
+
+impl TextMatchHook {
+    pub fn new() -> Self {
+        Self
     }
 
-    fn process_single_delimiter(&self, delimiter: &TokenDelimiter) -> Vec<InlineToken> {
+    pub fn find_delimiter(&self) -> TextDelimiterGenerator {
+        TextDelimiterGenerator
+    }
+
+    pub fn process_single_delimiter(&self, delimiter: &TextDelimiter) -> Vec<InlineToken> {
         r#match::process_single_delimiter(delimiter)
     }
 }
 
-struct TextParseHook<'a> {
+impl<'a> MatchInlineHook<'a> for TextMatchHook {
+    fn find_delimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
+        let mut finder = TextMatchHook::find_delimiter(self);
+        Box::new(gen_find_delimiter(move |start_index, end_index| {
+            finder.next((start_index, end_index))
+        }))
+    }
+
+    fn process_single_delimiter(&self, delimiter: &TokenDelimiter) -> Vec<InlineToken> {
+        TextMatchHook::process_single_delimiter(self, delimiter)
+    }
+}
+
+pub struct TextParseHook<'a> {
     api: &'a dyn ParseInlinePhaseApi,
+}
+
+impl<'a> TextParseHook<'a> {
+    pub fn new(api: &'a dyn ParseInlinePhaseApi) -> Self {
+        Self { api }
+    }
 }
 
 impl ParseInlineHook for TextParseHook<'_> {
@@ -134,11 +163,11 @@ impl InlineTokenizer for TextTokenizer {
         &'a self,
         _api: &'a dyn MatchInlinePhaseApi,
     ) -> Box<dyn MatchInlineHook<'a> + 'a> {
-        Box::new(TextMatchHook)
+        Box::new(TextMatchHook::new())
     }
 
     fn parse<'a>(&'a self, api: &'a dyn ParseInlinePhaseApi) -> Box<dyn ParseInlineHook + 'a> {
-        Box::new(TextParseHook { api })
+        Box::new(TextParseHook::new(api))
     }
 }
 

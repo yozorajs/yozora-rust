@@ -20,7 +20,11 @@ pub use types::match_inline::{
     ResultOfFindDelimiters, ResultOfIsDelimiterPair, ResultOfProcessDelimiterPair,
     ResultOfProcessSingleDelimiter,
 };
-pub use types::parse_block::{ParseBlockHook, ParseBlockHookCreator, ParseBlockPhaseApi};
+pub use types::parse_block::{
+    ParseBlockError, ParseBlockGenerator, ParseBlockGeneratorResult, ParseBlockGeneratorResume,
+    ParseBlockHook, ParseBlockHookCreator, ParseBlockHookResult, ParseBlockPhaseApi,
+    ParseBlockResult, ParseBlockTokensRequest,
+};
 pub use types::parse_inline::{ParseInlineHook, ParseInlineHookCreator, ParseInlinePhaseApi};
 pub use types::phrasing_content::PhrasingContentLine;
 pub use types::token::{

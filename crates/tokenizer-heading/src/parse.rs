@@ -8,7 +8,7 @@ use yozora_core_tokenizer::{
     merge_and_strip_content_lines, BlockToken, ParseBlockPhaseApi, PhrasingContentLine,
 };
 
-use crate::r#match::HeadingTokenData;
+use crate::types::HeadingTokenData;
 
 pub(crate) fn parse_heading_tokens(
     tokens: &[BlockToken],

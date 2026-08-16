@@ -4,7 +4,7 @@ use yozora_character::{
 };
 use yozora_core_tokenizer::*;
 
-use crate::parse::EmphasisTokenData;
+use crate::types::EmphasisTokenData;
 
 pub(crate) fn find_delimiter(
     api: &dyn MatchInlinePhaseApi,

@@ -1,3 +1,6 @@
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use yozora_ast::Node;
 use yozora_core_tokenizer::*;
 
@@ -8,9 +11,8 @@ use yozora_character::NodePoint;
 #[cfg(test)]
 use yozora_core_tokenizer::NodeInterval;
 
+use crate::types::{HtmlInlineDelimiter, HTML_INLINE_TOKENIZER_NAME};
 use crate::{parse, r#match};
-
-pub const HTML_INLINE_TOKENIZER_NAME: &str = "@yozora/tokenizer-html-inline";
 
 #[derive(Debug, Clone)]
 pub struct HtmlInlineTokenizer {
@@ -51,28 +53,109 @@ impl Tokenizer for HtmlInlineTokenizer {
     }
 }
 
-struct HtmlInlineMatchHook<'a> {
+pub struct HtmlInlineDelimiterGenerator<'a> {
     api: &'a dyn MatchInlinePhaseApi,
+    closer_cache: r#match::HtmlInlineCloserCache,
+    last_end_index: Option<usize>,
+    last_delimiter: Option<HtmlInlineDelimiter>,
+}
+
+impl<'a> HtmlInlineDelimiterGenerator<'a> {
+    fn new(api: &'a dyn MatchInlinePhaseApi) -> Self {
+        Self {
+            api,
+            closer_cache: r#match::HtmlInlineCloserCache::default(),
+            last_end_index: None,
+            last_delimiter: None,
+        }
+    }
+
+    pub fn next(&mut self, range_index: (usize, usize)) -> Option<HtmlInlineDelimiter> {
+        let (start_index, end_index) = range_index;
+
+        if self.last_end_index == Some(end_index) {
+            match self.last_delimiter.as_ref() {
+                Some(delimiter) if delimiter.delimiter().start_index >= start_index => {
+                    return Some(delimiter.clone());
+                }
+                None => return None,
+                _ => {}
+            }
+        }
+
+        self.last_end_index = Some(end_index);
+        self.last_delimiter = r#match::find_html_inline_delimiter(
+            self.api.get_node_points(),
+            start_index,
+            end_index,
+            &mut self.closer_cache,
+        );
+        self.last_delimiter.clone()
+    }
+}
+
+pub struct HtmlInlineMatchHook<'a> {
+    api: &'a dyn MatchInlinePhaseApi,
+    delimiters: Rc<RefCell<Vec<HtmlInlineDelimiter>>>,
+}
+
+impl<'a> HtmlInlineMatchHook<'a> {
+    pub fn new(api: &'a dyn MatchInlinePhaseApi) -> Self {
+        Self {
+            api,
+            delimiters: Rc::new(RefCell::new(Vec::new())),
+        }
+    }
+
+    pub fn find_delimiter(&self) -> HtmlInlineDelimiterGenerator<'a> {
+        HtmlInlineDelimiterGenerator::new(self.api)
+    }
+
+    pub fn process_single_delimiter(&self, delimiter: &HtmlInlineDelimiter) -> Vec<InlineToken> {
+        r#match::process_single_delimiter(delimiter)
+    }
+
+    fn lookup_delimiter(&self, delimiter: &TokenDelimiter) -> Option<HtmlInlineDelimiter> {
+        self.delimiters
+            .borrow()
+            .iter()
+            .rev()
+            .find(|candidate| candidate.delimiter() == delimiter)
+            .cloned()
+    }
 }
 
 impl<'a> MatchInlineHook<'a> for HtmlInlineMatchHook<'a> {
     fn find_delimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
-        let api = self.api;
+        self.delimiters.borrow_mut().clear();
+        let mut finder = HtmlInlineMatchHook::find_delimiter(self);
+        let delimiters = Rc::clone(&self.delimiters);
 
-        Box::new(gen_find_delimiter(|start_index, end_index| {
-            let delimiter =
-                r#match::find_html_inline_delimiter(api.get_node_points(), start_index, end_index)?;
-            Some(delimiter.delimiter().clone())
+        Box::new(gen_find_delimiter(move |start_index, end_index| {
+            let delimiter = finder.next((start_index, end_index))?;
+            let core_delimiter = delimiter.to_core();
+            delimiters.borrow_mut().push(delimiter);
+            Some(core_delimiter)
         }))
     }
 
     fn process_single_delimiter(&self, delimiter: &TokenDelimiter) -> Vec<InlineToken> {
-        r#match::process_single_delimiter(self.api.get_node_points(), delimiter)
+        let Some(delimiter) = self.lookup_delimiter(delimiter) else {
+            return Vec::new();
+        };
+
+        HtmlInlineMatchHook::process_single_delimiter(self, &delimiter)
     }
 }
 
-struct HtmlInlineParseHook<'a> {
+pub struct HtmlInlineParseHook<'a> {
     api: &'a dyn ParseInlinePhaseApi,
+}
+
+impl<'a> HtmlInlineParseHook<'a> {
+    pub fn new(api: &'a dyn ParseInlinePhaseApi) -> Self {
+        Self { api }
+    }
 }
 
 impl ParseInlineHook for HtmlInlineParseHook<'_> {
@@ -86,11 +169,11 @@ impl InlineTokenizer for HtmlInlineTokenizer {
         &'a self,
         api: &'a dyn MatchInlinePhaseApi,
     ) -> Box<dyn MatchInlineHook<'a> + 'a> {
-        Box::new(HtmlInlineMatchHook { api })
+        Box::new(HtmlInlineMatchHook::new(api))
     }
 
     fn parse<'a>(&'a self, api: &'a dyn ParseInlinePhaseApi) -> Box<dyn ParseInlineHook + 'a> {
-        Box::new(HtmlInlineParseHook { api })
+        Box::new(HtmlInlineParseHook::new(api))
     }
 }
 
@@ -195,6 +278,58 @@ mod tests {
         assert_eq!(delimiter.delimiter_type, DelimiterType::Full);
         assert_eq!(delimiter.start_index, 0);
         assert_eq!(delimiter.end_index, 5);
+    }
+
+    #[test]
+    fn typed_hook_preserves_html_variant() {
+        let node_points = create_node_point_generator("<kbd>x</kbd>")
+            .pop()
+            .expect("expected node points");
+        let api = DummyMatchApi { node_points };
+        let hook = HtmlInlineMatchHook::new(&api);
+        let mut finder = hook.find_delimiter();
+        let delimiter = finder
+            .next((0, api.get_block_end_index()))
+            .expect("expected html delimiter");
+
+        let HtmlInlineDelimiter::Open(delimiter) = delimiter else {
+            panic!("expected open delimiter");
+        };
+        assert_eq!(delimiter.tag_name.start_index, 1);
+        assert_eq!(delimiter.tag_name.end_index, 4);
+    }
+
+    #[test]
+    fn typed_finder_rechecks_closer_when_range_expands() {
+        let node_points = create_node_point_generator("<?x?>")
+            .pop()
+            .expect("expected node points");
+        let api = DummyMatchApi { node_points };
+        let hook = HtmlInlineMatchHook::new(&api);
+        let mut finder = hook.find_delimiter();
+
+        assert!(finder.next((0, api.get_block_end_index() - 1)).is_none());
+        assert!(matches!(
+            finder.next((0, api.get_block_end_index())),
+            Some(HtmlInlineDelimiter::Instruction(_))
+        ));
+    }
+
+    #[test]
+    fn typed_finders_keep_closer_caches_isolated() {
+        let node_points = create_node_point_generator("<?ok?> <?")
+            .pop()
+            .expect("expected node points");
+        let api = DummyMatchApi { node_points };
+        let hook = HtmlInlineMatchHook::new(&api);
+        let mut first_finder = hook.find_delimiter();
+        let mut second_finder = hook.find_delimiter();
+
+        assert!(second_finder.next((7, api.get_block_end_index())).is_none());
+        let delimiter = first_finder
+            .next((0, api.get_block_end_index()))
+            .expect("expected processing instruction");
+        assert_eq!(delimiter.delimiter().end_index, 6);
     }
 
     #[test]

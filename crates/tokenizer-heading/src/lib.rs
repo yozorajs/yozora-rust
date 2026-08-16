@@ -1,9 +1,10 @@
 mod r#match;
 mod parse;
 mod tokenizer;
+mod types;
 
-pub use r#match::HeadingTokenData;
-pub use tokenizer::{HeadingTokenizer, HEADING_TOKENIZER_NAME};
+pub use tokenizer::{HeadingMatchHook, HeadingParseHook, HeadingTokenizer};
+pub use types::{HeadingTokenData, HEADING_TOKENIZER_NAME};
 
 pub type HeadingToken = yozora_core_tokenizer::TypedBlockToken<HeadingTokenData>;
 pub type HeadingHookContext = HeadingTokenizer;
@@ -12,13 +13,15 @@ pub type HeadingTokenizerProps = yozora_core_tokenizer::TokenizerOptions;
 pub fn heading_match<'a>(
     tokenizer: &'a HeadingTokenizer,
     api: &'a dyn yozora_core_tokenizer::MatchBlockPhaseApi,
-) -> Box<dyn yozora_core_tokenizer::MatchBlockHook + 'a> {
-    yozora_core_tokenizer::BlockTokenizer::r#match(tokenizer, api)
+) -> HeadingMatchHook {
+    let _ = (tokenizer, api);
+    HeadingMatchHook::new()
 }
 
 pub fn heading_parse<'a>(
     tokenizer: &'a HeadingTokenizer,
     api: &'a dyn yozora_core_tokenizer::ParseBlockPhaseApi,
-) -> Box<dyn yozora_core_tokenizer::ParseBlockHook + 'a> {
-    yozora_core_tokenizer::BlockTokenizer::parse(tokenizer, api)
+) -> HeadingParseHook<'a> {
+    let _ = tokenizer;
+    HeadingParseHook::new(api)
 }

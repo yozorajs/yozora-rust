@@ -1,9 +1,7 @@
-use yozora_ast::Node;
 use yozora_core_tokenizer::*;
 
+use crate::types::FOOTNOTE_DEFINITION_TOKENIZER_NAME;
 use crate::{parse, r#match};
-
-pub const FOOTNOTE_DEFINITION_TOKENIZER_NAME: &str = "@yozora/tokenizer-footnote-definition";
 
 #[derive(Debug, Clone)]
 pub struct FootnoteDefinitionTokenizer {
@@ -48,9 +46,18 @@ impl Tokenizer for FootnoteDefinitionTokenizer {
     }
 }
 
-struct FootnoteDefinitionMatchHook<'a> {
+pub struct FootnoteDefinitionMatchHook<'a> {
     api: &'a dyn MatchBlockPhaseApi,
     indent: usize,
+}
+
+impl<'a> FootnoteDefinitionMatchHook<'a> {
+    pub fn new(tokenizer: &FootnoteDefinitionTokenizer, api: &'a dyn MatchBlockPhaseApi) -> Self {
+        Self {
+            api,
+            indent: tokenizer.indent,
+        }
+    }
 }
 
 impl MatchBlockHook for FootnoteDefinitionMatchHook<'_> {
@@ -63,7 +70,7 @@ impl MatchBlockHook for FootnoteDefinitionMatchHook<'_> {
         line: &PhrasingContentLine,
         _parent_token: &BlockToken,
     ) -> Option<EatOpenerResult> {
-        r#match::eat_opener(line, self.api)
+        r#match::eat_opener(line)
     }
 
     fn eat_continuation_text(
@@ -81,25 +88,28 @@ impl MatchBlockHook for FootnoteDefinitionMatchHook<'_> {
     }
 }
 
-struct FootnoteDefinitionParseHook<'a> {
+pub struct FootnoteDefinitionParseHook<'a> {
     api: &'a dyn ParseBlockPhaseApi,
 }
 
+impl<'a> FootnoteDefinitionParseHook<'a> {
+    pub fn new(api: &'a dyn ParseBlockPhaseApi) -> Self {
+        Self { api }
+    }
+}
+
 impl ParseBlockHook for FootnoteDefinitionParseHook<'_> {
-    fn parse(&self, tokens: &[BlockToken]) -> Vec<Node> {
-        parse::parse_footnote_definition_tokens(tokens, self.api)
+    fn parse<'a>(&'a self, tokens: &'a [BlockToken]) -> ParseBlockResult<ParseBlockHookResult<'a>> {
+        Ok(parse::parse_footnote_definition_tokens(tokens, self.api))
     }
 }
 
 impl BlockTokenizer for FootnoteDefinitionTokenizer {
     fn r#match<'a>(&'a self, api: &'a dyn MatchBlockPhaseApi) -> Box<dyn MatchBlockHook + 'a> {
-        Box::new(FootnoteDefinitionMatchHook {
-            api,
-            indent: self.indent,
-        })
+        Box::new(FootnoteDefinitionMatchHook::new(self, api))
     }
 
     fn parse<'a>(&'a self, api: &'a dyn ParseBlockPhaseApi) -> Box<dyn ParseBlockHook + 'a> {
-        Box::new(FootnoteDefinitionParseHook { api })
+        Box::new(FootnoteDefinitionParseHook::new(api))
     }
 }

@@ -1,9 +1,7 @@
-use yozora_ast::Node;
 use yozora_core_tokenizer::*;
 
+use crate::types::HTML_BLOCK_TOKENIZER_NAME;
 use crate::{parse, r#match};
-
-pub const HTML_BLOCK_TOKENIZER_NAME: &str = "@yozora/tokenizer-html-block";
 
 #[derive(Debug, Clone)]
 pub struct HtmlBlockTokenizer {
@@ -44,7 +42,14 @@ impl Tokenizer for HtmlBlockTokenizer {
     }
 }
 
-struct HtmlBlockMatchHook;
+#[derive(Debug, Clone, Copy, Default)]
+pub struct HtmlBlockMatchHook;
+
+impl HtmlBlockMatchHook {
+    pub fn new() -> Self {
+        Self
+    }
+}
 
 impl MatchBlockHook for HtmlBlockMatchHook {
     fn is_containing_block(&self) -> bool {
@@ -78,22 +83,28 @@ impl MatchBlockHook for HtmlBlockMatchHook {
     }
 }
 
-struct HtmlBlockParseHook<'a> {
+pub struct HtmlBlockParseHook<'a> {
     api: &'a dyn ParseBlockPhaseApi,
 }
 
+impl<'a> HtmlBlockParseHook<'a> {
+    pub fn new(api: &'a dyn ParseBlockPhaseApi) -> Self {
+        Self { api }
+    }
+}
+
 impl ParseBlockHook for HtmlBlockParseHook<'_> {
-    fn parse(&self, tokens: &[BlockToken]) -> Vec<Node> {
-        parse::parse_html_block_tokens(tokens, self.api)
+    fn parse<'a>(&'a self, tokens: &'a [BlockToken]) -> ParseBlockResult<ParseBlockHookResult<'a>> {
+        Ok(parse::parse_html_block_tokens(tokens, self.api).into())
     }
 }
 
 impl BlockTokenizer for HtmlBlockTokenizer {
     fn r#match<'a>(&'a self, _api: &'a dyn MatchBlockPhaseApi) -> Box<dyn MatchBlockHook + 'a> {
-        Box::new(HtmlBlockMatchHook)
+        Box::new(HtmlBlockMatchHook::new())
     }
 
     fn parse<'a>(&'a self, api: &'a dyn ParseBlockPhaseApi) -> Box<dyn ParseBlockHook + 'a> {
-        Box::new(HtmlBlockParseHook { api })
+        Box::new(HtmlBlockParseHook::new(api))
     }
 }

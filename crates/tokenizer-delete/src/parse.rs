@@ -1,8 +1,7 @@
 use yozora_ast::{DeleteNode, Node};
 use yozora_core_tokenizer::{InlineToken, NodeInterval, ParseInlinePhaseApi};
 
-#[derive(Debug, Clone)]
-pub(crate) struct DeleteTokenData;
+use crate::types::DeleteTokenData;
 
 pub(crate) fn parse_delete_tokens(
     tokens: &[InlineToken],

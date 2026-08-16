@@ -4,10 +4,7 @@ use yozora_core_tokenizer::{
     EatLazyContinuationTextResult, EatOpenerResult, PhrasingContentLine,
 };
 
-#[derive(Debug, Clone)]
-pub struct ParagraphTokenData {
-    pub lines: Vec<PhrasingContentLine>,
-}
+use crate::types::ParagraphTokenData;
 
 pub(crate) fn eat_opener(line: &PhrasingContentLine) -> Option<EatOpenerResult> {
     if line.first_non_whitespace_index >= line.end_index {

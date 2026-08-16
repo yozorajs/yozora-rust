@@ -1,9 +1,7 @@
-use yozora_ast::Node;
 use yozora_core_tokenizer::*;
 
+use crate::types::THEMATIC_BREAK_TOKENIZER_NAME;
 use crate::{parse, r#match};
-
-pub const THEMATIC_BREAK_TOKENIZER_NAME: &str = "@yozora/tokenizer-thematic-break";
 
 #[derive(Debug, Clone)]
 pub struct ThematicBreakTokenizer {
@@ -44,7 +42,14 @@ impl Tokenizer for ThematicBreakTokenizer {
     }
 }
 
-struct ThematicBreakMatchHook;
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ThematicBreakMatchHook;
+
+impl ThematicBreakMatchHook {
+    pub fn new() -> Self {
+        Self
+    }
+}
 
 impl MatchBlockHook for ThematicBreakMatchHook {
     fn is_containing_block(&self) -> bool {
@@ -69,22 +74,28 @@ impl MatchBlockHook for ThematicBreakMatchHook {
     }
 }
 
-struct ThematicBreakParseHook<'a> {
+pub struct ThematicBreakParseHook<'a> {
     api: &'a dyn ParseBlockPhaseApi,
 }
 
+impl<'a> ThematicBreakParseHook<'a> {
+    pub fn new(api: &'a dyn ParseBlockPhaseApi) -> Self {
+        Self { api }
+    }
+}
+
 impl ParseBlockHook for ThematicBreakParseHook<'_> {
-    fn parse(&self, tokens: &[BlockToken]) -> Vec<Node> {
-        parse::parse_thematic_break_tokens(tokens, self.api)
+    fn parse<'a>(&'a self, tokens: &'a [BlockToken]) -> ParseBlockResult<ParseBlockHookResult<'a>> {
+        Ok(parse::parse_thematic_break_tokens(tokens, self.api).into())
     }
 }
 
 impl BlockTokenizer for ThematicBreakTokenizer {
     fn r#match<'a>(&'a self, _api: &'a dyn MatchBlockPhaseApi) -> Box<dyn MatchBlockHook + 'a> {
-        Box::new(ThematicBreakMatchHook)
+        Box::new(ThematicBreakMatchHook::new())
     }
 
     fn parse<'a>(&'a self, api: &'a dyn ParseBlockPhaseApi) -> Box<dyn ParseBlockHook + 'a> {
-        Box::new(ThematicBreakParseHook { api })
+        Box::new(ThematicBreakParseHook::new(api))
     }
 }

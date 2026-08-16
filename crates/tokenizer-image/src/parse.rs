@@ -2,13 +2,8 @@ use yozora_ast::{Image, Node};
 use yozora_character::{calc_escaped_string_from_node_points, AsciiCodePoint};
 use yozora_core_tokenizer::{InlineToken, NodeInterval, ParseInlinePhaseApi};
 
+use crate::types::ImageTokenData;
 use crate::util::calc_image_alt;
-
-#[derive(Debug, Clone)]
-pub struct ImageTokenData {
-    pub destination_content: Option<NodeInterval>,
-    pub title_content: Option<NodeInterval>,
-}
 
 pub(crate) fn parse_image_tokens(
     tokens: &[InlineToken],
@@ -22,8 +17,7 @@ pub(crate) fn parse_image_tokens(
             continue;
         };
 
-        let mut url = String::new();
-        if let Some(destination_content) = data.destination_content {
+        let destination = if let Some(destination_content) = data.destination_content {
             let mut start_index = destination_content.start_index;
             let mut end_index = destination_content.end_index;
 
@@ -34,10 +28,11 @@ pub(crate) fn parse_image_tokens(
                 end_index = end_index.saturating_sub(1);
             }
 
-            let destination =
-                calc_escaped_string_from_node_points(node_points, start_index, end_index, true);
-            url = parse_api.format_url(&destination);
-        }
+            calc_escaped_string_from_node_points(node_points, start_index, end_index, true)
+        } else {
+            String::new()
+        };
+        let url = parse_api.format_url(&destination);
 
         let children = parse_api.parse_inline_tokens(Some(&token.children));
         let alt = calc_image_alt(&children);

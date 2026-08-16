@@ -1,9 +1,10 @@
 mod r#match;
 mod parse;
 mod tokenizer;
+mod types;
 
-pub use r#match::ThematicBreakTokenData;
-pub use tokenizer::{ThematicBreakTokenizer, THEMATIC_BREAK_TOKENIZER_NAME};
+pub use tokenizer::{ThematicBreakMatchHook, ThematicBreakParseHook, ThematicBreakTokenizer};
+pub use types::{ThematicBreakTokenData, THEMATIC_BREAK_TOKENIZER_NAME};
 
 pub type ThematicBreakToken = yozora_core_tokenizer::TypedBlockToken<ThematicBreakTokenData>;
 pub type ThematicBreakHookContext = ThematicBreakTokenizer;
@@ -12,13 +13,15 @@ pub type ThematicBreakTokenizerProps = yozora_core_tokenizer::TokenizerOptions;
 pub fn thematic_break_match<'a>(
     tokenizer: &'a ThematicBreakTokenizer,
     api: &'a dyn yozora_core_tokenizer::MatchBlockPhaseApi,
-) -> Box<dyn yozora_core_tokenizer::MatchBlockHook + 'a> {
-    yozora_core_tokenizer::BlockTokenizer::r#match(tokenizer, api)
+) -> ThematicBreakMatchHook {
+    let _ = (tokenizer, api);
+    ThematicBreakMatchHook::new()
 }
 
 pub fn thematic_break_parse<'a>(
     tokenizer: &'a ThematicBreakTokenizer,
     api: &'a dyn yozora_core_tokenizer::ParseBlockPhaseApi,
-) -> Box<dyn yozora_core_tokenizer::ParseBlockHook + 'a> {
-    yozora_core_tokenizer::BlockTokenizer::parse(tokenizer, api)
+) -> ThematicBreakParseHook<'a> {
+    let _ = tokenizer;
+    ThematicBreakParseHook::new(api)
 }

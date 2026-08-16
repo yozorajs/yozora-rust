@@ -1,9 +1,7 @@
-use yozora_ast::Node;
 use yozora_core_tokenizer::*;
 
+use crate::types::MATH_TOKENIZER_NAME;
 use crate::{parse, r#match};
-
-pub const MATH_TOKENIZER_NAME: &str = "@yozora/tokenizer-math";
 
 #[derive(Debug, Clone)]
 pub struct MathTokenizer {
@@ -44,7 +42,14 @@ impl Tokenizer for MathTokenizer {
     }
 }
 
-struct MathMatchHook;
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MathMatchHook;
+
+impl MathMatchHook {
+    pub fn new() -> Self {
+        Self
+    }
+}
 
 impl MatchBlockHook for MathMatchHook {
     fn is_containing_block(&self) -> bool {
@@ -78,22 +83,28 @@ impl MatchBlockHook for MathMatchHook {
     }
 }
 
-struct MathParseHook<'a> {
+pub struct MathParseHook<'a> {
     api: &'a dyn ParseBlockPhaseApi,
 }
 
+impl<'a> MathParseHook<'a> {
+    pub fn new(api: &'a dyn ParseBlockPhaseApi) -> Self {
+        Self { api }
+    }
+}
+
 impl ParseBlockHook for MathParseHook<'_> {
-    fn parse(&self, tokens: &[BlockToken]) -> Vec<Node> {
-        parse::parse_math_tokens(tokens, self.api)
+    fn parse<'a>(&'a self, tokens: &'a [BlockToken]) -> ParseBlockResult<ParseBlockHookResult<'a>> {
+        Ok(parse::parse_math_tokens(tokens, self.api).into())
     }
 }
 
 impl BlockTokenizer for MathTokenizer {
     fn r#match<'a>(&'a self, _api: &'a dyn MatchBlockPhaseApi) -> Box<dyn MatchBlockHook + 'a> {
-        Box::new(MathMatchHook)
+        Box::new(MathMatchHook::new())
     }
 
     fn parse<'a>(&'a self, api: &'a dyn ParseBlockPhaseApi) -> Box<dyn ParseBlockHook + 'a> {
-        Box::new(MathParseHook { api })
+        Box::new(MathParseHook::new(api))
     }
 }

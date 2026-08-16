@@ -1,10 +1,10 @@
-# yozora v2.4.0 Rust 复刻契约
+# yozora Rust 复刻契约
 
 ## 基准
 
-- 唯一行为与 API 基准：`/Users/wanchenfang/ws/github/yozora/yozora` tag `v2.4.0`
-- 基准 commit：`29818309e38edd9a55359a02ec61585a52fa2bde`
-- 不采用该仓库 `v2.4.0` 之后的提交、当前 HEAD 行为或自行设计的替代语义。
+- 唯一行为、API 与实现结构基准：`/Users/wanchenfang/ws/github/yozora/yozora`
+- 基准 commit：`4bbc3d4f591a87efe7d7f474c1f9f07f0dcbfdc1`
+- 后续同步只前移到用户明确指定的新基准；不得自行设计替代语义。
 
 ## 范围
 
@@ -49,6 +49,9 @@ markup-weaver
 - token dispatch 与上游一致使用 tokenizer name；移除上游不存在的 hash UID、UID map 和冲突语义。
 - parser profile 只负责按上游顺序装配 tokenizer，不复制 core parsing logic。
 - core 在没有 optional tokenizer 时仍可运行；注册、替换、卸载和 fallback 使用统一 contract。
+- block parse hook 与上游一致支持同步 nodes 或 lazy generator；generator 只通过
+  `request_block_tokens` 请求 child parsing，core scheduler 是 frame、active token 与 error
+  propagation 的唯一 owner。
 
 ## 错误与默认行为
 
@@ -75,4 +78,4 @@ markup-weaver
 
 ## Open Questions
 
-无。实现选择均由 `v2.4.0` 源码、测试与 fixture 决定。
+无。实现选择均由上述基准 commit 的源码、测试与 fixture 决定。

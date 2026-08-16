@@ -1,8 +1,10 @@
 mod r#match;
 mod parse;
 mod tokenizer;
+mod types;
 
-pub use tokenizer::{MathTokenizer, MATH_TOKENIZER_NAME};
+pub use tokenizer::{MathMatchHook, MathParseHook, MathTokenizer};
+pub use types::MATH_TOKENIZER_NAME;
 
 pub type MathToken =
     yozora_core_tokenizer::TypedBlockToken<yozora_tokenizer_fenced_block::FencedBlockTokenData>;
@@ -12,13 +14,15 @@ pub type MathTokenizerProps = yozora_core_tokenizer::TokenizerOptions;
 pub fn math_match<'a>(
     tokenizer: &'a MathTokenizer,
     api: &'a dyn yozora_core_tokenizer::MatchBlockPhaseApi,
-) -> Box<dyn yozora_core_tokenizer::MatchBlockHook + 'a> {
-    yozora_core_tokenizer::BlockTokenizer::r#match(tokenizer, api)
+) -> MathMatchHook {
+    let _ = (tokenizer, api);
+    MathMatchHook::new()
 }
 
 pub fn math_parse<'a>(
     tokenizer: &'a MathTokenizer,
     api: &'a dyn yozora_core_tokenizer::ParseBlockPhaseApi,
-) -> Box<dyn yozora_core_tokenizer::ParseBlockHook + 'a> {
-    yozora_core_tokenizer::BlockTokenizer::parse(tokenizer, api)
+) -> MathParseHook<'a> {
+    let _ = tokenizer;
+    MathParseHook::new(api)
 }

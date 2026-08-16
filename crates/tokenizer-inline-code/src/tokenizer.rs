@@ -4,9 +4,8 @@ use yozora_core_tokenizer::*;
 #[cfg(test)]
 use yozora_core_tokenizer::NodeInterval;
 
+use crate::types::{InlineCodeDelimiter, InlineCodeTokenData, INLINE_CODE_TOKENIZER_NAME};
 use crate::{parse, r#match};
-
-pub const INLINE_CODE_TOKENIZER_NAME: &str = "@yozora/tokenizer-inline-code";
 
 #[derive(Debug, Clone)]
 pub struct InlineCodeTokenizer {
@@ -47,33 +46,65 @@ impl Tokenizer for InlineCodeTokenizer {
     }
 }
 
-struct InlineCodeMatchHook<'a> {
+pub struct InlineCodeDelimiterGenerator {
+    finder: r#match::InlineCodeDelimiterFinder,
+}
+
+impl InlineCodeDelimiterGenerator {
+    pub fn next(&mut self, range_index: (usize, usize)) -> Option<InlineCodeDelimiter> {
+        self.finder.find_next_delimiter(range_index.0)
+    }
+}
+
+pub struct InlineCodeMatchHook<'a> {
     api: &'a dyn MatchInlinePhaseApi,
 }
 
-impl<'a> MatchInlineHook<'a> for InlineCodeMatchHook<'a> {
-    fn find_delimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
-        let mut delimiter_finder = r#match::InlineCodeDelimiterFinder::new(self.api);
-
-        Box::new(gen_find_delimiter(move |start_index, _end_index| {
-            delimiter_finder.find_next_delimiter(start_index)
-        }))
+impl<'a> InlineCodeMatchHook<'a> {
+    pub fn new(api: &'a dyn MatchInlinePhaseApi) -> Self {
+        Self { api }
     }
 
-    fn process_single_delimiter(&self, delimiter: &TokenDelimiter) -> Vec<InlineToken> {
+    pub fn find_delimiter(&self) -> InlineCodeDelimiterGenerator {
+        InlineCodeDelimiterGenerator {
+            finder: r#match::InlineCodeDelimiterFinder::new(self.api),
+        }
+    }
+
+    pub fn process_single_delimiter(&self, delimiter: &InlineCodeDelimiter) -> Vec<InlineToken> {
         vec![InlineToken::new(
             "",
             INLINE_CODE_TYPE,
             (delimiter.start_index, delimiter.end_index),
         )
-        .with_data(parse::InlineCodeTokenData {
+        .with_data(InlineCodeTokenData {
             thickness: delimiter.thickness,
         })]
     }
 }
 
-struct InlineCodeParseHook<'a> {
+impl<'a> MatchInlineHook<'a> for InlineCodeMatchHook<'a> {
+    fn find_delimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
+        let mut finder = InlineCodeMatchHook::find_delimiter(self);
+
+        Box::new(gen_find_delimiter(move |start_index, _end_index| {
+            finder.next((start_index, _end_index))
+        }))
+    }
+
+    fn process_single_delimiter(&self, delimiter: &TokenDelimiter) -> Vec<InlineToken> {
+        InlineCodeMatchHook::process_single_delimiter(self, delimiter)
+    }
+}
+
+pub struct InlineCodeParseHook<'a> {
     api: &'a dyn ParseInlinePhaseApi,
+}
+
+impl<'a> InlineCodeParseHook<'a> {
+    pub fn new(api: &'a dyn ParseInlinePhaseApi) -> Self {
+        Self { api }
+    }
 }
 
 impl ParseInlineHook for InlineCodeParseHook<'_> {
@@ -87,11 +118,11 @@ impl InlineTokenizer for InlineCodeTokenizer {
         &'a self,
         api: &'a dyn MatchInlinePhaseApi,
     ) -> Box<dyn MatchInlineHook<'a> + 'a> {
-        Box::new(InlineCodeMatchHook { api })
+        Box::new(InlineCodeMatchHook::new(api))
     }
 
     fn parse<'a>(&'a self, api: &'a dyn ParseInlinePhaseApi) -> Box<dyn ParseInlineHook + 'a> {
-        Box::new(InlineCodeParseHook { api })
+        Box::new(InlineCodeParseHook::new(api))
     }
 }
 
@@ -210,7 +241,7 @@ mod tests {
         let parse_hook = tokenizer.parse(&parse_api);
 
         let token = InlineToken::new(INLINE_CODE_TOKENIZER_NAME, INLINE_CODE_TYPE, (0, 7))
-            .with_data(parse::InlineCodeTokenData { thickness: 1 });
+            .with_data(InlineCodeTokenData { thickness: 1 });
         let nodes = parse_hook.parse(&[token]);
 
         assert_eq!(nodes.len(), 1);

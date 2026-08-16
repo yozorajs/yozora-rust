@@ -1,9 +1,7 @@
-use yozora_ast::Node;
 use yozora_core_tokenizer::*;
 
+use crate::types::DEFINITION_TOKENIZER_NAME;
 use crate::{parse, r#match};
-
-pub const DEFINITION_TOKENIZER_NAME: &str = "@yozora/tokenizer-definition";
 
 #[derive(Debug, Clone)]
 pub struct DefinitionTokenizer {
@@ -44,8 +42,14 @@ impl Tokenizer for DefinitionTokenizer {
     }
 }
 
-struct DefinitionMatchHook<'a> {
+pub struct DefinitionMatchHook<'a> {
     api: &'a dyn MatchBlockPhaseApi,
+}
+
+impl<'a> DefinitionMatchHook<'a> {
+    pub fn new(api: &'a dyn MatchBlockPhaseApi) -> Self {
+        Self { api }
+    }
 }
 
 impl MatchBlockHook for DefinitionMatchHook<'_> {
@@ -75,22 +79,28 @@ impl MatchBlockHook for DefinitionMatchHook<'_> {
     }
 }
 
-struct DefinitionParseHook<'a> {
+pub struct DefinitionParseHook<'a> {
     api: &'a dyn ParseBlockPhaseApi,
 }
 
+impl<'a> DefinitionParseHook<'a> {
+    pub fn new(api: &'a dyn ParseBlockPhaseApi) -> Self {
+        Self { api }
+    }
+}
+
 impl ParseBlockHook for DefinitionParseHook<'_> {
-    fn parse(&self, tokens: &[BlockToken]) -> Vec<Node> {
-        parse::parse_definition_tokens(tokens, self.api)
+    fn parse<'a>(&'a self, tokens: &'a [BlockToken]) -> ParseBlockResult<ParseBlockHookResult<'a>> {
+        Ok(parse::parse_definition_tokens(tokens, self.api).into())
     }
 }
 
 impl BlockTokenizer for DefinitionTokenizer {
     fn r#match<'a>(&'a self, api: &'a dyn MatchBlockPhaseApi) -> Box<dyn MatchBlockHook + 'a> {
-        Box::new(DefinitionMatchHook { api })
+        Box::new(DefinitionMatchHook::new(api))
     }
 
     fn parse<'a>(&'a self, api: &'a dyn ParseBlockPhaseApi) -> Box<dyn ParseBlockHook + 'a> {
-        Box::new(DefinitionParseHook { api })
+        Box::new(DefinitionParseHook::new(api))
     }
 }

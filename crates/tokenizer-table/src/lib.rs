@@ -1,9 +1,10 @@
 mod r#match;
 mod parse;
 mod tokenizer;
+mod types;
 
-pub use r#match::{TableCellTokenData, TableRowTokenData, TableTokenData};
-pub use tokenizer::{TableTokenizer, TABLE_TOKENIZER_NAME};
+pub use tokenizer::{TableMatchHook, TableParseHook, TableTokenizer};
+pub use types::{TableCellTokenData, TableRowTokenData, TableTokenData, TABLE_TOKENIZER_NAME};
 
 pub type TableToken = yozora_core_tokenizer::TypedBlockToken<TableTokenData>;
 pub type TableRowToken = TableRowTokenData;
@@ -14,13 +15,15 @@ pub type TableTokenizerProps = yozora_core_tokenizer::TokenizerOptions;
 pub fn table_match<'a>(
     tokenizer: &'a TableTokenizer,
     api: &'a dyn yozora_core_tokenizer::MatchBlockPhaseApi,
-) -> Box<dyn yozora_core_tokenizer::MatchBlockHook + 'a> {
-    yozora_core_tokenizer::BlockTokenizer::r#match(tokenizer, api)
+) -> TableMatchHook<'a> {
+    let _ = tokenizer;
+    TableMatchHook::new(api)
 }
 
 pub fn table_parse<'a>(
     tokenizer: &'a TableTokenizer,
     api: &'a dyn yozora_core_tokenizer::ParseBlockPhaseApi,
-) -> Box<dyn yozora_core_tokenizer::ParseBlockHook + 'a> {
-    yozora_core_tokenizer::BlockTokenizer::parse(tokenizer, api)
+) -> TableParseHook<'a> {
+    let _ = tokenizer;
+    TableParseHook::new(api)
 }

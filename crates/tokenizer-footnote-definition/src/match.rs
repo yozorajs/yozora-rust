@@ -1,20 +1,15 @@
 use yozora_ast::{Position, FOOTNOTE_DEFINITION_TYPE};
-use yozora_character::{
-    calc_string_from_node_points, is_whitespace_character, AsciiCodePoint, NodePoint,
-    VirtualCodePoint,
-};
+use yozora_character::{calc_string_from_node_points, AsciiCodePoint};
 use yozora_core_tokenizer::{
-    calc_end_point, calc_start_point, resolve_label_to_identifier, BlockToken,
+    calc_end_point, calc_start_point, eat_indentation, resolve_label_to_identifier, BlockToken,
     EatContinuationTextResult, EatOpenerResult, MatchBlockPhaseApi, PhrasingContentLine,
 };
 
-use crate::parse::{FootnoteDefinitionLabel, FootnoteDefinitionTokenData};
+use crate::types::{FootnoteDefinitionLabel, FootnoteDefinitionTokenData};
+use crate::util::eat_footnote_label;
 
-pub(crate) fn eat_opener(
-    line: &PhrasingContentLine,
-    _api: &dyn MatchBlockPhaseApi,
-) -> Option<EatOpenerResult> {
-    if line.count_of_precede_spaces >= 4 {
+pub(crate) fn eat_opener(line: &PhrasingContentLine) -> Option<EatOpenerResult> {
+    if line.indent_width >= 4 {
         return None;
     }
 
@@ -33,14 +28,6 @@ pub(crate) fn eat_opener(
         return None;
     }
 
-    let label = calc_string_from_node_points(
-        node_points,
-        line.first_non_whitespace_index + 2,
-        colon_index - 1,
-        true,
-    );
-    let identifier = resolve_label_to_identifier(&label);
-
     let token = BlockToken::new(
         "",
         FOOTNOTE_DEFINITION_TYPE,
@@ -49,11 +36,11 @@ pub(crate) fn eat_opener(
     .with_data(FootnoteDefinitionTokenData {
         label: FootnoteDefinitionLabel {
             node_points: line.node_points.clone(),
-            start_index: line.first_non_whitespace_index + 2,
-            end_index: colon_index - 1,
+            start_index: line.first_non_whitespace_index,
+            end_index: colon_index,
         },
-        _label: Some(label),
-        _identifier: Some(identifier),
+        _label: None,
+        _identifier: None,
     });
 
     Some(EatOpenerResult {
@@ -74,69 +61,38 @@ pub(crate) fn eat_continuation_text(
         };
     }
 
-    if line.count_of_precede_spaces >= indent {
-        return EatContinuationTextResult::Opening {
-            next_index: line.start_index + indent,
-        };
+    if line.indent_width < indent {
+        return EatContinuationTextResult::NotMatched;
     }
 
-    EatContinuationTextResult::NotMatched
+    let Some(next_index) = eat_indentation(
+        line.node_points.as_ref(),
+        line.start_index,
+        line.first_non_whitespace_index,
+        indent,
+    ) else {
+        return EatContinuationTextResult::NotMatched;
+    };
+
+    EatContinuationTextResult::Opening { next_index }
 }
 
-pub(crate) fn on_close(token: &BlockToken, api: &dyn MatchBlockPhaseApi) {
-    let Some(data) = token.data_as::<FootnoteDefinitionTokenData>() else {
+pub(crate) fn on_close(token: &mut BlockToken, api: &dyn MatchBlockPhaseApi) {
+    let Some(mut data) = token.data_as::<FootnoteDefinitionTokenData>().cloned() else {
         return;
     };
 
-    if let Some(identifier) = &data._identifier {
-        api.register_footnote_definition_identifier(identifier);
-    }
-}
-
-pub fn eat_footnote_label(
-    node_points: &[NodePoint],
-    first_non_whitespace_index: usize,
-    end_index: usize,
-) -> isize {
-    let mut i = first_non_whitespace_index;
-
-    if i + 1 >= end_index
-        || node_points[i].code_point != AsciiCodePoint::OPEN_BRACKET as i32
-        || node_points[i + 1].code_point != AsciiCodePoint::CARET as i32
-    {
-        return -1;
-    }
-
-    let mut is_empty = true;
-    let last_index = std::cmp::min(end_index, i + 1 + 1000);
-    i += 2;
-
-    while i < last_index {
-        let code_point = node_points[i].code_point;
-        match code_point {
-            x if x == AsciiCodePoint::BACKSLASH as i32 => {
-                i += 1;
-            }
-            x if x == AsciiCodePoint::OPEN_BRACKET as i32 => {
-                return -1;
-            }
-            x if x == AsciiCodePoint::CLOSE_BRACKET as i32 => {
-                return if is_empty { -1 } else { (i + 1) as isize };
-            }
-            x if x == VirtualCodePoint::LineEnd as i32 => {
-                return -1;
-            }
-            _ => {
-                if is_empty && !is_whitespace_character(code_point) {
-                    is_empty = false;
-                }
-            }
-        }
-
-        i += 1;
-    }
-
-    -1
+    let label = calc_string_from_node_points(
+        data.label.node_points.as_ref(),
+        data.label.start_index + 2,
+        data.label.end_index - 1,
+        false,
+    );
+    let identifier = resolve_label_to_identifier(&label);
+    api.register_footnote_definition_identifier(&identifier);
+    data._label = Some(label);
+    data._identifier = Some(identifier);
+    token.data = std::sync::Arc::new(data);
 }
 
 fn calc_line_position(line: &PhrasingContentLine, end_index: usize) -> Option<Position> {

@@ -5,11 +5,12 @@ use yozora_ast::Node;
 use yozora_core_tokenizer::*;
 
 #[cfg(test)]
+use crate::types::LinkTokenData;
+#[cfg(test)]
 use yozora_core_tokenizer::NodeInterval;
 
+use crate::types::{LinkDelimiter, LINK_TOKENIZER_NAME};
 use crate::{parse, r#match};
-
-pub const LINK_TOKENIZER_NAME: &str = "@yozora/tokenizer-link";
 
 #[derive(Debug, Clone)]
 pub struct LinkTokenizer {
@@ -50,15 +51,33 @@ impl Tokenizer for LinkTokenizer {
     }
 }
 
-struct LinkMatchHook<'a> {
+pub struct LinkDelimiterGenerator<'a> {
     api: &'a dyn MatchInlinePhaseApi,
     block_start_index: usize,
     block_end_index: usize,
-    delimiters: Rc<RefCell<Vec<r#match::DelimiterEntry>>>,
+}
+
+impl LinkDelimiterGenerator<'_> {
+    pub fn next(&mut self, range_index: (usize, usize)) -> Option<LinkDelimiter> {
+        r#match::find_link_delimiter_entry(
+            self.api.get_node_points(),
+            self.block_start_index,
+            self.block_end_index,
+            range_index.0,
+            range_index.1,
+        )
+    }
+}
+
+pub struct LinkMatchHook<'a> {
+    api: &'a dyn MatchInlinePhaseApi,
+    block_start_index: usize,
+    block_end_index: usize,
+    delimiters: Rc<RefCell<Vec<LinkDelimiter>>>,
 }
 
 impl<'a> LinkMatchHook<'a> {
-    fn new(api: &'a dyn MatchInlinePhaseApi) -> Self {
+    pub fn new(api: &'a dyn MatchInlinePhaseApi) -> Self {
         let block_start_index = api.get_block_start_index();
         let block_end_index = api.get_block_end_index();
         Self {
@@ -69,58 +88,32 @@ impl<'a> LinkMatchHook<'a> {
         }
     }
 
-    fn lookup_data(&self, delimiter: &TokenDelimiter) -> Option<r#match::LinkDelimiterData> {
-        self.delimiters
-            .borrow()
-            .iter()
-            .rev()
-            .find(|entry| {
-                entry.delimiter.start_index == delimiter.start_index
-                    && entry.delimiter.end_index == delimiter.end_index
-                    && entry.delimiter.delimiter_type == delimiter.delimiter_type
-            })
-            .and_then(|entry| entry.data.clone())
-    }
-}
-
-impl<'a> MatchInlineHook<'a> for LinkMatchHook<'a> {
-    fn find_delimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
-        self.delimiters.borrow_mut().clear();
-
-        let api = self.api;
-        let block_start_index = self.block_start_index;
-        let block_end_index = self.block_end_index;
-        let delimiters = Rc::clone(&self.delimiters);
-
-        Box::new(gen_find_delimiter(move |start_index, end_index| {
-            let entry = r#match::find_link_delimiter_entry(
-                api.get_node_points(),
-                block_start_index,
-                block_end_index,
-                start_index,
-                end_index,
-            )?;
-            let delimiter = entry.delimiter.clone();
-            delimiters.borrow_mut().push(entry);
-            Some(delimiter)
-        }))
+    pub fn find_delimiter(&self) -> LinkDelimiterGenerator<'a> {
+        LinkDelimiterGenerator {
+            api: self.api,
+            block_start_index: self.block_start_index,
+            block_end_index: self.block_end_index,
+        }
     }
 
-    fn is_delimiter_pair(
+    pub fn is_delimiter_pair(
         &self,
-        opener_delimiter: &TokenDelimiter,
-        closer_delimiter: &TokenDelimiter,
+        opener_delimiter: &LinkDelimiter,
+        closer_delimiter: &LinkDelimiter,
         internal_tokens: &[InlineToken],
     ) -> IsDelimiterPairResult {
-        // Links may not contain other links, at any level of nesting.
-        if internal_tokens.iter().any(is_link_token) {
+        if contains_link_token(
+            internal_tokens,
+            opener_delimiter.end_index,
+            closer_delimiter.start_index,
+        ) {
             return IsDelimiterPairResult::NotPaired {
                 opener: false,
                 closer: false,
             };
         }
 
-        let status = r#match::check_balanced_brackets_status(
+        let status = check_balanced_brackets_status(
             opener_delimiter.end_index,
             closer_delimiter.start_index,
             internal_tokens,
@@ -144,33 +137,19 @@ impl<'a> MatchInlineHook<'a> for LinkMatchHook<'a> {
         }
     }
 
-    fn process_delimiter_pair(
+    pub fn process_delimiter_pair(
         &self,
-        opener_delimiter: &TokenDelimiter,
-        closer_delimiter: &TokenDelimiter,
+        opener_delimiter: &LinkDelimiter,
+        closer_delimiter: &LinkDelimiter,
         internal_tokens: &[InlineToken],
     ) -> ProcessDelimiterPairResult {
-        let Some(data) = self.lookup_data(closer_delimiter) else {
-            return ProcessDelimiterPairResult {
-                tokens: Vec::new(),
-                remain_opener_delimiter: None,
-                remain_closer_delimiter: None,
-            };
-        };
-
         let children_tokens = self.api.resolve_internal_tokens(
             internal_tokens,
             opener_delimiter.end_index,
             closer_delimiter.start_index,
         );
 
-        let token = r#match::create_link_token(
-            self.api.get_node_points(),
-            opener_delimiter,
-            closer_delimiter,
-            data,
-            children_tokens,
-        );
+        let token = r#match::create_link_token(opener_delimiter, closer_delimiter, children_tokens);
 
         ProcessDelimiterPairResult {
             tokens: vec![token],
@@ -178,10 +157,101 @@ impl<'a> MatchInlineHook<'a> for LinkMatchHook<'a> {
             remain_closer_delimiter: None,
         }
     }
+
+    fn lookup_delimiter(&self, delimiter: &TokenDelimiter) -> Option<LinkDelimiter> {
+        self.delimiters
+            .borrow()
+            .iter()
+            .rev()
+            .find(|candidate| {
+                candidate.start_index == delimiter.start_index
+                    && candidate.end_index == delimiter.end_index
+                    && candidate.delimiter_type == delimiter.delimiter_type
+            })
+            .cloned()
+    }
 }
 
-struct LinkParseHook<'a> {
+impl<'a> MatchInlineHook<'a> for LinkMatchHook<'a> {
+    fn find_delimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
+        self.delimiters.borrow_mut().clear();
+
+        let mut finder = LinkMatchHook::find_delimiter(self);
+        let delimiters = Rc::clone(&self.delimiters);
+
+        Box::new(gen_find_delimiter(move |start_index, end_index| {
+            let delimiter = finder.next((start_index, end_index))?;
+            let core_delimiter = delimiter.to_core();
+            delimiters.borrow_mut().push(delimiter);
+            Some(core_delimiter)
+        }))
+    }
+
+    fn is_delimiter_pair(
+        &self,
+        opener_delimiter: &TokenDelimiter,
+        closer_delimiter: &TokenDelimiter,
+        internal_tokens: &[InlineToken],
+    ) -> IsDelimiterPairResult {
+        let Some(opener_delimiter) = self.lookup_delimiter(opener_delimiter) else {
+            return IsDelimiterPairResult::NotPaired {
+                opener: false,
+                closer: false,
+            };
+        };
+        let Some(closer_delimiter) = self.lookup_delimiter(closer_delimiter) else {
+            return IsDelimiterPairResult::NotPaired {
+                opener: false,
+                closer: false,
+            };
+        };
+
+        LinkMatchHook::is_delimiter_pair(
+            self,
+            &opener_delimiter,
+            &closer_delimiter,
+            internal_tokens,
+        )
+    }
+
+    fn process_delimiter_pair(
+        &self,
+        opener_delimiter: &TokenDelimiter,
+        closer_delimiter: &TokenDelimiter,
+        internal_tokens: &[InlineToken],
+    ) -> ProcessDelimiterPairResult {
+        let Some(opener_delimiter) = self.lookup_delimiter(opener_delimiter) else {
+            return ProcessDelimiterPairResult {
+                tokens: Vec::new(),
+                remain_opener_delimiter: None,
+                remain_closer_delimiter: None,
+            };
+        };
+        let Some(closer_delimiter) = self.lookup_delimiter(closer_delimiter) else {
+            return ProcessDelimiterPairResult {
+                tokens: Vec::new(),
+                remain_opener_delimiter: None,
+                remain_closer_delimiter: None,
+            };
+        };
+
+        LinkMatchHook::process_delimiter_pair(
+            self,
+            &opener_delimiter,
+            &closer_delimiter,
+            internal_tokens,
+        )
+    }
+}
+
+pub struct LinkParseHook<'a> {
     api: &'a dyn ParseInlinePhaseApi,
+}
+
+impl<'a> LinkParseHook<'a> {
+    pub fn new(api: &'a dyn ParseInlinePhaseApi) -> Self {
+        Self { api }
+    }
 }
 
 impl ParseInlineHook for LinkParseHook<'_> {
@@ -199,7 +269,7 @@ impl InlineTokenizer for LinkTokenizer {
     }
 
     fn parse<'b>(&'b self, api: &'b dyn ParseInlinePhaseApi) -> Box<dyn ParseInlineHook + 'b> {
-        Box::new(LinkParseHook { api })
+        Box::new(LinkParseHook::new(api))
     }
 }
 
@@ -340,7 +410,7 @@ mod tests {
     fn match_should_capture_child_tokens_for_link_label() {
         let (token, node_points) = create_single_link_token("[link](/url)");
         token
-            .data_as::<parse::LinkTokenData>()
+            .data_as::<LinkTokenData>()
             .expect("expected link token data");
 
         assert_eq!(token.children.len(), 1);
@@ -353,6 +423,37 @@ mod tests {
                 false,
             ),
             "link"
+        );
+    }
+
+    #[test]
+    fn typed_hook_preserves_destination_and_title() {
+        let node_points = create_node_point_generator("[foo](/uri \"title\")")
+            .pop()
+            .expect("expected node points");
+        let api = DummyMatchApi { node_points };
+        let hook = LinkMatchHook::new(&api);
+        let mut finder = hook.find_delimiter();
+        let opener = finder
+            .next((0, api.get_block_end_index()))
+            .expect("expected opener");
+        let closer = finder
+            .next((opener.end_index, api.get_block_end_index()))
+            .expect("expected closer");
+
+        assert_eq!(
+            closer.destination_content,
+            Some(NodeInterval {
+                start_index: 6,
+                end_index: 10,
+            })
+        );
+        assert_eq!(
+            closer.title_content,
+            Some(NodeInterval {
+                start_index: 11,
+                end_index: 18,
+            })
         );
     }
 

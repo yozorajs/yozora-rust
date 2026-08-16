@@ -2,11 +2,12 @@ use yozora_ast::Node;
 use yozora_core_tokenizer::*;
 
 #[cfg(test)]
+use crate::types::EmphasisTokenData;
+#[cfg(test)]
 use yozora_core_tokenizer::NodeInterval;
 
+use crate::types::{EmphasisDelimiter, EMPHASIS_TOKENIZER_NAME};
 use crate::{parse, r#match};
-
-pub const EMPHASIS_TOKENIZER_NAME: &str = "@yozora/tokenizer-emphasis";
 
 #[derive(Debug, Clone)]
 pub struct EmphasisTokenizer {
@@ -49,31 +50,42 @@ impl Tokenizer for EmphasisTokenizer {
     }
 }
 
-struct EmphasisMatchHook<'a> {
+pub struct EmphasisDelimiterGenerator<'a> {
     api: &'a dyn MatchInlinePhaseApi,
 }
 
-impl<'a> MatchInlineHook<'a> for EmphasisMatchHook<'a> {
-    fn find_delimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
-        let api = self.api;
-        Box::new(gen_find_delimiter(move |start_index, end_index| {
-            r#match::find_delimiter(api, start_index, end_index)
-        }))
+impl EmphasisDelimiterGenerator<'_> {
+    pub fn next(&mut self, range_index: (usize, usize)) -> Option<EmphasisDelimiter> {
+        r#match::find_delimiter(self.api, range_index.0, range_index.1)
+    }
+}
+
+pub struct EmphasisMatchHook<'a> {
+    api: &'a dyn MatchInlinePhaseApi,
+}
+
+impl<'a> EmphasisMatchHook<'a> {
+    pub fn new(api: &'a dyn MatchInlinePhaseApi) -> Self {
+        Self { api }
     }
 
-    fn is_delimiter_pair(
+    pub fn find_delimiter(&self) -> EmphasisDelimiterGenerator<'a> {
+        EmphasisDelimiterGenerator { api: self.api }
+    }
+
+    pub fn is_delimiter_pair(
         &self,
-        opener_delimiter: &TokenDelimiter,
-        closer_delimiter: &TokenDelimiter,
+        opener_delimiter: &EmphasisDelimiter,
+        closer_delimiter: &EmphasisDelimiter,
         _internal_tokens: &[InlineToken],
     ) -> IsDelimiterPairResult {
         r#match::is_delimiter_pair(self.api, opener_delimiter, closer_delimiter)
     }
 
-    fn process_delimiter_pair(
+    pub fn process_delimiter_pair(
         &self,
-        opener_delimiter: &TokenDelimiter,
-        closer_delimiter: &TokenDelimiter,
+        opener_delimiter: &EmphasisDelimiter,
+        closer_delimiter: &EmphasisDelimiter,
         internal_tokens: &[InlineToken],
     ) -> ProcessDelimiterPairResult {
         r#match::process_delimiter_pair(
@@ -85,8 +97,51 @@ impl<'a> MatchInlineHook<'a> for EmphasisMatchHook<'a> {
     }
 }
 
-struct EmphasisParseHook<'a> {
+impl<'a> MatchInlineHook<'a> for EmphasisMatchHook<'a> {
+    fn find_delimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
+        let mut finder = EmphasisMatchHook::find_delimiter(self);
+        Box::new(gen_find_delimiter(move |start_index, end_index| {
+            finder.next((start_index, end_index))
+        }))
+    }
+
+    fn is_delimiter_pair(
+        &self,
+        opener_delimiter: &TokenDelimiter,
+        closer_delimiter: &TokenDelimiter,
+        internal_tokens: &[InlineToken],
+    ) -> IsDelimiterPairResult {
+        EmphasisMatchHook::is_delimiter_pair(
+            self,
+            opener_delimiter,
+            closer_delimiter,
+            internal_tokens,
+        )
+    }
+
+    fn process_delimiter_pair(
+        &self,
+        opener_delimiter: &TokenDelimiter,
+        closer_delimiter: &TokenDelimiter,
+        internal_tokens: &[InlineToken],
+    ) -> ProcessDelimiterPairResult {
+        EmphasisMatchHook::process_delimiter_pair(
+            self,
+            opener_delimiter,
+            closer_delimiter,
+            internal_tokens,
+        )
+    }
+}
+
+pub struct EmphasisParseHook<'a> {
     api: &'a dyn ParseInlinePhaseApi,
+}
+
+impl<'a> EmphasisParseHook<'a> {
+    pub fn new(api: &'a dyn ParseInlinePhaseApi) -> Self {
+        Self { api }
+    }
 }
 
 impl ParseInlineHook for EmphasisParseHook<'_> {
@@ -100,11 +155,11 @@ impl InlineTokenizer for EmphasisTokenizer {
         &'a self,
         api: &'a dyn MatchInlinePhaseApi,
     ) -> Box<dyn MatchInlineHook<'a> + 'a> {
-        Box::new(EmphasisMatchHook { api })
+        Box::new(EmphasisMatchHook::new(api))
     }
 
     fn parse<'a>(&'a self, api: &'a dyn ParseInlinePhaseApi) -> Box<dyn ParseInlineHook + 'a> {
-        Box::new(EmphasisParseHook { api })
+        Box::new(EmphasisParseHook::new(api))
     }
 }
 
@@ -262,7 +317,7 @@ mod tests {
         assert_eq!(token.start_index, 0);
         assert_eq!(token.end_index, 7);
         let data = token
-            .data_as::<parse::EmphasisTokenData>()
+            .data_as::<EmphasisTokenData>()
             .expect("expected emphasis token data");
         assert_eq!(data.thickness, 2);
         assert_eq!(token.children.len(), resolved_tokens.len());
@@ -285,7 +340,7 @@ mod tests {
 
         let token = InlineToken::new(EMPHASIS_TOKENIZER_NAME, EMPHASIS_TYPE, (1, 4))
             .with_children(vec![InlineToken::new("text", TEXT_TYPE, (2, 3))])
-            .with_data(parse::EmphasisTokenData { thickness: 1 });
+            .with_data(EmphasisTokenData { thickness: 1 });
 
         let nodes = parse_hook.parse(&[token]);
         assert_eq!(nodes.len(), 1);

@@ -1,9 +1,10 @@
 mod r#match;
 mod parse;
 mod tokenizer;
+mod types;
 
-pub use r#match::SetextHeadingTokenData;
-pub use tokenizer::{SetextHeadingTokenizer, SETEXT_HEADING_TOKENIZER_NAME};
+pub use tokenizer::{SetextHeadingMatchHook, SetextHeadingParseHook, SetextHeadingTokenizer};
+pub use types::{SetextHeadingTokenData, SETEXT_HEADING_TOKENIZER_NAME};
 
 pub type SetextHeadingToken = yozora_core_tokenizer::TypedBlockToken<SetextHeadingTokenData>;
 pub type SetextHeadingHookContext = SetextHeadingTokenizer;
@@ -12,13 +13,15 @@ pub type SetextHeadingTokenizerProps = yozora_core_tokenizer::TokenizerOptions;
 pub fn setext_heading_match<'a>(
     tokenizer: &'a SetextHeadingTokenizer,
     api: &'a dyn yozora_core_tokenizer::MatchBlockPhaseApi,
-) -> Box<dyn yozora_core_tokenizer::MatchBlockHook + 'a> {
-    yozora_core_tokenizer::BlockTokenizer::r#match(tokenizer, api)
+) -> SetextHeadingMatchHook<'a> {
+    let _ = tokenizer;
+    SetextHeadingMatchHook::new(api)
 }
 
 pub fn setext_heading_parse<'a>(
     tokenizer: &'a SetextHeadingTokenizer,
     api: &'a dyn yozora_core_tokenizer::ParseBlockPhaseApi,
-) -> Box<dyn yozora_core_tokenizer::ParseBlockHook + 'a> {
-    yozora_core_tokenizer::BlockTokenizer::parse(tokenizer, api)
+) -> SetextHeadingParseHook<'a> {
+    let _ = tokenizer;
+    SetextHeadingParseHook::new(api)
 }

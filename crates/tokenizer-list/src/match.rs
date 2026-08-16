@@ -5,17 +5,7 @@ use yozora_character::{
 };
 use yozora_core_tokenizer::*;
 
-#[derive(Debug, Clone)]
-pub struct ListTokenData {
-    pub _is_empty: bool,
-    pub ordered: bool,
-    pub marker: u32,
-    pub order_type: Option<String>,
-    pub order: Option<usize>,
-    pub status: Option<TaskStatus>,
-    pub indent: usize,
-    pub count_of_top_blank_line: i32,
-}
+use crate::types::ListTokenData;
 
 #[derive(Debug, Clone)]
 struct ParsedOpener {
@@ -75,7 +65,7 @@ pub(crate) fn eat_and_interrupt_previous_sibling(
     let data = opener.token.data_as::<ListTokenData>()?;
 
     if empty_item_could_not_interrupted_types.contains(&prev_sibling_token.node_type) {
-        if data.indent == line.end_index.saturating_sub(line.start_index) {
+        if data._is_empty {
             return None;
         }
 
@@ -100,13 +90,29 @@ pub(crate) fn eat_continuation_text(
         return EatContinuationTextResult::NotMatched;
     };
 
-    if line.first_non_whitespace_index < line.end_index
-        && line.count_of_precede_spaces < data.indent
-    {
+    let is_blank = line.first_non_whitespace_index >= line.end_index;
+    if !is_blank && line.indent_width < data.indent {
         return EatContinuationTextResult::NotMatched;
     }
 
-    if line.first_non_whitespace_index >= line.end_index {
+    let next_index = if is_blank {
+        std::cmp::min(
+            line.start_index + data.indent,
+            line.end_index.saturating_sub(1),
+        )
+    } else {
+        let Some(next_index) = eat_indentation(
+            line.node_points.as_ref(),
+            line.start_index,
+            line.first_non_whitespace_index,
+            data.indent,
+        ) else {
+            return EatContinuationTextResult::NotMatched;
+        };
+        next_index
+    };
+
+    if is_blank {
         if data.count_of_top_blank_line >= 0 {
             data.count_of_top_blank_line += 1;
             if data.count_of_top_blank_line > 1 {
@@ -117,11 +123,8 @@ pub(crate) fn eat_continuation_text(
         data.count_of_top_blank_line = -1;
     }
 
-    let indent = data.indent;
     token.data = std::sync::Arc::new(data);
     update_token_end_position(token, line);
-
-    let next_index = std::cmp::min(line.start_index + indent, line.end_index.saturating_sub(1));
 
     EatContinuationTextResult::Opening { next_index }
 }
@@ -130,12 +133,11 @@ fn parse_list_opener(
     line: &PhrasingContentLine,
     enable_task_list_item: bool,
 ) -> Option<ParsedOpener> {
-    if line.count_of_precede_spaces >= 4 {
+    if line.indent_width >= 4 {
         return None;
     }
 
     let node_points = line.node_points.as_ref();
-    let start_index = line.start_index;
     let end_index = line.end_index;
     let first_non_whitespace_index = line.first_non_whitespace_index;
 
@@ -203,30 +205,24 @@ fn parse_list_opener(
 
     let marker = marker? as u32;
 
-    let mut count_of_spaces = 0usize;
+    let marker_width = i - first_non_whitespace_index;
     let mut next_index = i;
-    if next_index < end_index
-        && node_points[next_index].code_point == VirtualCodePoint::Space as i32
-    {
-        next_index += 1;
-    }
-
     while next_index < end_index {
         c = node_points[next_index].code_point;
         if !is_space_character(c) {
             break;
         }
-
-        count_of_spaces += 1;
         next_index += 1;
     }
+    let separator_end_index = next_index;
+    let mut separator_width = calc_indent_width(node_points, i, separator_end_index);
 
-    if count_of_spaces > 4 {
-        next_index -= count_of_spaces - 1;
-        count_of_spaces = 1;
+    if separator_width > 4 {
+        next_index = eat_indentation(node_points, i, separator_end_index, 1)?;
+        separator_width = 1;
     }
 
-    if count_of_spaces == 0
+    if separator_width == 0
         && next_index < end_index
         && node_points[next_index].code_point != VirtualCodePoint::LineEnd as i32
     {
@@ -239,18 +235,15 @@ fn parse_list_opener(
     {
         count_of_top_blank_line = 1;
 
-        // Keep behavior aligned with TS implementation:
-        // nextIndex -= countOfSpaces - 1
-        // which means +1 when count_of_spaces == 0.
-        if count_of_spaces == 0 {
-            next_index += 1;
+        if separator_width > 0 {
+            next_index = eat_indentation(node_points, i, separator_end_index, 1)?;
         } else {
-            next_index -= count_of_spaces - 1;
+            next_index = separator_end_index + 1;
         }
-        count_of_spaces = 1;
+        separator_width = 1;
     }
 
-    let indent = i - start_index + count_of_spaces;
+    let indent = line.indent_width + marker_width + separator_width;
     let is_empty = is_blank_range(node_points, next_index, end_index);
 
     let mut status = None;
@@ -319,9 +312,14 @@ fn eat_task_status(
         };
     }
 
+    i += 3;
+    while i < end_index && is_whitespace_character(node_points[i].code_point) {
+        i += 1;
+    }
+
     TaskStatusMatch {
         status,
-        next_index: i + 4,
+        next_index: i,
     }
 }
 
@@ -359,7 +357,8 @@ mod tests {
     use yozora_character::create_node_point_generator;
     use yozora_core_tokenizer::PhrasingContentLine;
 
-    use super::{eat_opener, ListTokenData};
+    use super::eat_opener;
+    use crate::types::ListTokenData;
 
     #[test]
     fn task_marker_does_not_make_list_item_empty() {

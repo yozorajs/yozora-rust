@@ -1,13 +1,8 @@
-use yozora_ast::{ImageReference, Node, ReferenceType};
+use yozora_ast::{ImageReference, Node};
 use yozora_core_tokenizer::{InlineToken, NodeInterval, ParseInlinePhaseApi};
 use yozora_tokenizer_image::calc_image_alt;
 
-#[derive(Debug, Clone)]
-pub struct ImageReferenceTokenData {
-    pub identifier: String,
-    pub label: String,
-    pub reference_type: ReferenceType,
-}
+use crate::types::ImageReferenceTokenData;
 
 pub(crate) fn parse_image_reference_tokens(
     tokens: &[InlineToken],

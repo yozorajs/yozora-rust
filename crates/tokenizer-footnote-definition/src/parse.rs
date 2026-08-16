@@ -1,46 +1,101 @@
-use std::sync::Arc;
-
 use yozora_ast::{FootnoteDefinition, Node};
-use yozora_character::NodePoint;
-use yozora_core_tokenizer::{BlockToken, ParseBlockPhaseApi};
+use yozora_core_tokenizer::{
+    BlockToken, ParseBlockError, ParseBlockGenerator, ParseBlockGeneratorResult,
+    ParseBlockGeneratorResume, ParseBlockHookResult, ParseBlockPhaseApi, ParseBlockResult,
+};
 
-#[derive(Debug, Clone)]
-pub struct FootnoteDefinitionLabel {
-    pub node_points: Arc<Vec<NodePoint>>,
-    pub start_index: usize,
-    pub end_index: usize,
+use crate::types::FootnoteDefinitionTokenData;
+
+pub(crate) fn parse_footnote_definition_tokens<'a>(
+    tokens: &'a [BlockToken],
+    parse_api: &'a dyn ParseBlockPhaseApi,
+) -> ParseBlockHookResult<'a> {
+    ParseBlockHookResult::Generator(Box::new(FootnoteDefinitionParseGenerator {
+        parse_api,
+        tokens,
+        next_token_index: 0,
+        pending: None,
+        nodes: Vec::with_capacity(tokens.len()),
+        started: false,
+    }))
 }
 
-#[derive(Debug, Clone)]
-pub struct FootnoteDefinitionTokenData {
-    pub label: FootnoteDefinitionLabel,
-    pub _label: Option<String>,
-    pub _identifier: Option<String>,
+struct PendingFootnoteDefinition {
+    token_index: usize,
+    identifier: String,
+    label: String,
 }
 
-pub(crate) fn parse_footnote_definition_tokens(
-    tokens: &[BlockToken],
-    parse_api: &dyn ParseBlockPhaseApi,
-) -> Vec<Node> {
-    let mut nodes = Vec::with_capacity(tokens.len());
+struct FootnoteDefinitionParseGenerator<'a> {
+    parse_api: &'a dyn ParseBlockPhaseApi,
+    tokens: &'a [BlockToken],
+    next_token_index: usize,
+    pending: Option<PendingFootnoteDefinition>,
+    nodes: Vec<Node>,
+    started: bool,
+}
 
-    for token in tokens {
-        let Some(data) = token.data_as::<FootnoteDefinitionTokenData>() else {
-            continue;
-        };
+impl<'a> ParseBlockGenerator<'a> for FootnoteDefinitionParseGenerator<'a> {
+    fn resume(
+        &mut self,
+        state: ParseBlockGeneratorResume,
+    ) -> ParseBlockResult<ParseBlockGeneratorResult<'a>> {
+        if let Some(pending) = self.pending.take() {
+            let children = match state {
+                ParseBlockGeneratorResume::Nodes(nodes) => nodes,
+                ParseBlockGeneratorResume::Error(error) => return Err(error),
+                ParseBlockGeneratorResume::Initial => {
+                    return Err(ParseBlockError::new(
+                        "[parseBlock] footnote definition resumed without child nodes",
+                    ));
+                }
+            };
+            let token = &self.tokens[pending.token_index];
+            self.nodes
+                .push(Node::FootnoteDefinition(FootnoteDefinition {
+                    position: if self.parse_api.should_reserve_position() {
+                        token.position.clone()
+                    } else {
+                        None
+                    },
+                    identifier: pending.identifier,
+                    label: pending.label,
+                    children,
+                }));
+            self.next_token_index = pending.token_index + 1;
+        } else if !self.started {
+            if !matches!(state, ParseBlockGeneratorResume::Initial) {
+                return Err(ParseBlockError::new(
+                    "[parseBlock] footnote definition generator did not start from initial state",
+                ));
+            }
+            self.started = true;
+        } else {
+            return Err(ParseBlockError::new(
+                "[parseBlock] footnote definition generator resumed unexpectedly",
+            ));
+        }
 
-        let children = parse_api.parse_block_tokens(Some(&token.children));
-        nodes.push(Node::FootnoteDefinition(FootnoteDefinition {
-            position: if parse_api.should_reserve_position() {
-                token.position.clone()
-            } else {
-                None
-            },
-            identifier: data._identifier.clone().unwrap_or_default(),
-            label: data._label.clone().unwrap_or_default(),
-            children,
-        }));
+        while self.next_token_index < self.tokens.len() {
+            let token_index = self.next_token_index;
+            let token = &self.tokens[token_index];
+            let Some(data) = token.data_as::<FootnoteDefinitionTokenData>() else {
+                self.next_token_index += 1;
+                continue;
+            };
+
+            self.pending = Some(PendingFootnoteDefinition {
+                token_index,
+                identifier: data._identifier.clone().unwrap_or_default(),
+                label: data._label.clone().unwrap_or_default(),
+            });
+            return Ok(ParseBlockGeneratorResult::Yield(
+                self.parse_api.request_block_tokens(Some(&token.children)),
+            ));
+        }
+
+        Ok(ParseBlockGeneratorResult::Complete(std::mem::take(
+            &mut self.nodes,
+        )))
     }
-
-    nodes
 }

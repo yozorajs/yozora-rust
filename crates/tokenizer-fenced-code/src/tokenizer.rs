@@ -1,9 +1,7 @@
-use yozora_ast::Node;
 use yozora_core_tokenizer::*;
 
+use crate::types::FENCED_CODE_TOKENIZER_NAME;
 use crate::{parse, r#match};
-
-pub const FENCED_CODE_TOKENIZER_NAME: &str = "@yozora/tokenizer-fenced-code";
 
 #[derive(Debug, Clone)]
 pub struct FencedCodeTokenizer {
@@ -44,7 +42,14 @@ impl Tokenizer for FencedCodeTokenizer {
     }
 }
 
-struct FencedCodeMatchHook;
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FencedCodeMatchHook;
+
+impl FencedCodeMatchHook {
+    pub fn new() -> Self {
+        Self
+    }
+}
 
 impl MatchBlockHook for FencedCodeMatchHook {
     fn is_containing_block(&self) -> bool {
@@ -78,22 +83,28 @@ impl MatchBlockHook for FencedCodeMatchHook {
     }
 }
 
-struct FencedCodeParseHook<'a> {
+pub struct FencedCodeParseHook<'a> {
     api: &'a dyn ParseBlockPhaseApi,
 }
 
+impl<'a> FencedCodeParseHook<'a> {
+    pub fn new(api: &'a dyn ParseBlockPhaseApi) -> Self {
+        Self { api }
+    }
+}
+
 impl ParseBlockHook for FencedCodeParseHook<'_> {
-    fn parse(&self, tokens: &[BlockToken]) -> Vec<Node> {
-        parse::parse_fenced_code_tokens(tokens, self.api)
+    fn parse<'a>(&'a self, tokens: &'a [BlockToken]) -> ParseBlockResult<ParseBlockHookResult<'a>> {
+        Ok(parse::parse_fenced_code_tokens(tokens, self.api).into())
     }
 }
 
 impl BlockTokenizer for FencedCodeTokenizer {
     fn r#match<'a>(&'a self, _api: &'a dyn MatchBlockPhaseApi) -> Box<dyn MatchBlockHook + 'a> {
-        Box::new(FencedCodeMatchHook)
+        Box::new(FencedCodeMatchHook::new())
     }
 
     fn parse<'a>(&'a self, api: &'a dyn ParseBlockPhaseApi) -> Box<dyn ParseBlockHook + 'a> {
-        Box::new(FencedCodeParseHook { api })
+        Box::new(FencedCodeParseHook::new(api))
     }
 }

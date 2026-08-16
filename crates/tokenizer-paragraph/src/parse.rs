@@ -1,7 +1,7 @@
 use yozora_ast::{Node, Paragraph};
 use yozora_core_tokenizer::{merge_and_strip_content_lines, BlockToken, ParseBlockPhaseApi};
 
-use crate::r#match::ParagraphTokenData;
+use crate::types::ParagraphTokenData;
 
 pub(crate) fn parse_paragraph_tokens(
     tokens: &[BlockToken],

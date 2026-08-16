@@ -1,10 +1,8 @@
-use yozora_ast::Node;
 use yozora_core_tokenizer::*;
 use yozora_tokenizer_fenced_block::FencedBlockTokenData;
 
+use crate::types::ADMONITION_TOKENIZER_NAME;
 use crate::{parse, r#match};
-
-pub const ADMONITION_TOKENIZER_NAME: &str = "@yozora/tokenizer-admonition";
 
 #[derive(Debug, Clone)]
 pub struct AdmonitionTokenizer {
@@ -45,8 +43,14 @@ impl Tokenizer for AdmonitionTokenizer {
     }
 }
 
-struct AdmonitionMatchHook<'a> {
+pub struct AdmonitionMatchHook<'a> {
     api: &'a dyn MatchBlockPhaseApi,
+}
+
+impl<'a> AdmonitionMatchHook<'a> {
+    pub fn new(api: &'a dyn MatchBlockPhaseApi) -> Self {
+        Self { api }
+    }
 }
 
 impl MatchBlockHook for AdmonitionMatchHook<'_> {
@@ -79,22 +83,28 @@ impl MatchBlockHook for AdmonitionMatchHook<'_> {
     }
 }
 
-struct AdmonitionParseHook<'a> {
+pub struct AdmonitionParseHook<'a> {
     api: &'a dyn ParseBlockPhaseApi,
 }
 
+impl<'a> AdmonitionParseHook<'a> {
+    pub fn new(api: &'a dyn ParseBlockPhaseApi) -> Self {
+        Self { api }
+    }
+}
+
 impl ParseBlockHook for AdmonitionParseHook<'_> {
-    fn parse(&self, tokens: &[BlockToken]) -> Vec<Node> {
-        parse::parse_admonition_tokens(tokens, self.api)
+    fn parse<'a>(&'a self, tokens: &'a [BlockToken]) -> ParseBlockResult<ParseBlockHookResult<'a>> {
+        Ok(parse::parse_admonition_tokens(tokens, self.api))
     }
 }
 
 impl BlockTokenizer for AdmonitionTokenizer {
     fn r#match<'a>(&'a self, api: &'a dyn MatchBlockPhaseApi) -> Box<dyn MatchBlockHook + 'a> {
-        Box::new(AdmonitionMatchHook { api })
+        Box::new(AdmonitionMatchHook::new(api))
     }
 
     fn parse<'a>(&'a self, api: &'a dyn ParseBlockPhaseApi) -> Box<dyn ParseBlockHook + 'a> {
-        Box::new(AdmonitionParseHook { api })
+        Box::new(AdmonitionParseHook::new(api))
     }
 }

@@ -2,16 +2,7 @@ use yozora_ast::{Link, Node, Text};
 use yozora_character::calc_string_from_node_points;
 use yozora_core_tokenizer::{InlineToken, NodeInterval, ParseInlinePhaseApi};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AutolinkContentType {
-    Uri,
-    Email,
-}
-
-#[derive(Debug, Clone)]
-pub struct AutolinkTokenData {
-    pub content_type: AutolinkContentType,
-}
+use crate::types::{AutolinkContentType, AutolinkTokenData};
 
 pub(crate) fn parse_autolink_tokens(
     tokens: &[InlineToken],

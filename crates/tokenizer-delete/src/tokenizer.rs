@@ -2,11 +2,12 @@ use yozora_ast::Node;
 use yozora_core_tokenizer::*;
 
 #[cfg(test)]
+use crate::types::DeleteTokenData;
+#[cfg(test)]
 use yozora_core_tokenizer::NodeInterval;
 
+use crate::types::{DeleteDelimiter, DELETE_TOKENIZER_NAME};
 use crate::{parse, r#match};
-
-pub const DELETE_TOKENIZER_NAME: &str = "@yozora/tokenizer-delete";
 
 #[derive(Debug, Clone)]
 pub struct DeleteTokenizer {
@@ -49,23 +50,33 @@ impl Tokenizer for DeleteTokenizer {
     }
 }
 
-struct DeleteMatchHook<'a> {
+pub struct DeleteDelimiterGenerator<'a> {
     api: &'a dyn MatchInlinePhaseApi,
 }
 
-impl<'a> MatchInlineHook<'a> for DeleteMatchHook<'a> {
-    fn find_delimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
-        let api = self.api;
+impl DeleteDelimiterGenerator<'_> {
+    pub fn next(&mut self, range_index: (usize, usize)) -> Option<DeleteDelimiter> {
+        r#match::find_delete_delimiter(self.api.get_node_points(), range_index.0, range_index.1)
+    }
+}
 
-        Box::new(gen_find_delimiter(|start_index, end_index| {
-            r#match::find_delete_delimiter(api.get_node_points(), start_index, end_index)
-        }))
+pub struct DeleteMatchHook<'a> {
+    api: &'a dyn MatchInlinePhaseApi,
+}
+
+impl<'a> DeleteMatchHook<'a> {
+    pub fn new(api: &'a dyn MatchInlinePhaseApi) -> Self {
+        Self { api }
     }
 
-    fn is_delimiter_pair(
+    pub fn find_delimiter(&self) -> DeleteDelimiterGenerator<'a> {
+        DeleteDelimiterGenerator { api: self.api }
+    }
+
+    pub fn is_delimiter_pair(
         &self,
-        opener_delimiter: &TokenDelimiter,
-        closer_delimiter: &TokenDelimiter,
+        opener_delimiter: &DeleteDelimiter,
+        closer_delimiter: &DeleteDelimiter,
         _internal_tokens: &[InlineToken],
     ) -> IsDelimiterPairResult {
         if opener_delimiter.thickness == closer_delimiter.thickness {
@@ -78,10 +89,10 @@ impl<'a> MatchInlineHook<'a> for DeleteMatchHook<'a> {
         }
     }
 
-    fn process_delimiter_pair(
+    pub fn process_delimiter_pair(
         &self,
-        opener_delimiter: &TokenDelimiter,
-        closer_delimiter: &TokenDelimiter,
+        opener_delimiter: &DeleteDelimiter,
+        closer_delimiter: &DeleteDelimiter,
         internal_tokens: &[InlineToken],
     ) -> ProcessDelimiterPairResult {
         let children = self.api.resolve_internal_tokens(
@@ -102,8 +113,52 @@ impl<'a> MatchInlineHook<'a> for DeleteMatchHook<'a> {
     }
 }
 
-struct DeleteParseHook<'a> {
+impl<'a> MatchInlineHook<'a> for DeleteMatchHook<'a> {
+    fn find_delimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
+        let mut finder = DeleteMatchHook::find_delimiter(self);
+
+        Box::new(gen_find_delimiter(move |start_index, end_index| {
+            finder.next((start_index, end_index))
+        }))
+    }
+
+    fn is_delimiter_pair(
+        &self,
+        opener_delimiter: &TokenDelimiter,
+        closer_delimiter: &TokenDelimiter,
+        internal_tokens: &[InlineToken],
+    ) -> IsDelimiterPairResult {
+        DeleteMatchHook::is_delimiter_pair(
+            self,
+            opener_delimiter,
+            closer_delimiter,
+            internal_tokens,
+        )
+    }
+
+    fn process_delimiter_pair(
+        &self,
+        opener_delimiter: &TokenDelimiter,
+        closer_delimiter: &TokenDelimiter,
+        internal_tokens: &[InlineToken],
+    ) -> ProcessDelimiterPairResult {
+        DeleteMatchHook::process_delimiter_pair(
+            self,
+            opener_delimiter,
+            closer_delimiter,
+            internal_tokens,
+        )
+    }
+}
+
+pub struct DeleteParseHook<'a> {
     api: &'a dyn ParseInlinePhaseApi,
+}
+
+impl<'a> DeleteParseHook<'a> {
+    pub fn new(api: &'a dyn ParseInlinePhaseApi) -> Self {
+        Self { api }
+    }
 }
 
 impl ParseInlineHook for DeleteParseHook<'_> {
@@ -117,11 +172,11 @@ impl InlineTokenizer for DeleteTokenizer {
         &'a self,
         api: &'a dyn MatchInlinePhaseApi,
     ) -> Box<dyn MatchInlineHook<'a> + 'a> {
-        Box::new(DeleteMatchHook { api })
+        Box::new(DeleteMatchHook::new(api))
     }
 
     fn parse<'a>(&'a self, api: &'a dyn ParseInlinePhaseApi) -> Box<dyn ParseInlineHook + 'a> {
-        Box::new(DeleteParseHook { api })
+        Box::new(DeleteParseHook::new(api))
     }
 }
 
@@ -270,7 +325,7 @@ mod tests {
 
         let token = InlineToken::new(DELETE_TOKENIZER_NAME, DELETE_TYPE, (0, 6))
             .with_children(vec![InlineToken::new("text", TEXT_TYPE, (2, 4))])
-            .with_data(parse::DeleteTokenData);
+            .with_data(DeleteTokenData);
 
         let nodes = parse_hook.parse(&[token]);
         assert_eq!(nodes.len(), 1);

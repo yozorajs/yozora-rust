@@ -2,7 +2,7 @@ use yozora_ast::DELETE_TYPE;
 use yozora_character::{is_whitespace_character, AsciiCodePoint, NodePoint};
 use yozora_core_tokenizer::{DelimiterType, InlineToken, TokenDelimiter};
 
-use crate::parse::DeleteTokenData;
+use crate::types::DeleteTokenData;
 
 pub(crate) fn find_delete_delimiter(
     node_points: &[NodePoint],

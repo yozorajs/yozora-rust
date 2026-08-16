@@ -1,11 +1,13 @@
 use yozora_character::{AsciiCodePoint, VirtualCodePoint};
-use yozora_core_tokenizer::{DelimiterType, MatchInlinePhaseApi, TokenDelimiter};
+use yozora_core_tokenizer::{DelimiterType, MatchInlinePhaseApi};
+
+use crate::types::{BreakDelimiter, BreakTokenMarkerType};
 
 pub(crate) fn find_break_delimiter(
     api: &dyn MatchInlinePhaseApi,
     start_index: usize,
     end_index: usize,
-) -> Option<TokenDelimiter> {
+) -> Option<BreakDelimiter> {
     let node_points = api.get_node_points();
     if start_index + 1 >= end_index || end_index > node_points.len() {
         return None;
@@ -17,7 +19,7 @@ pub(crate) fn find_break_delimiter(
         }
 
         let prev = node_points[i - 1].code_point;
-        let marker_start = if prev == AsciiCodePoint::BACKSLASH as i32 {
+        let marker = if prev == AsciiCodePoint::BACKSLASH as i32 {
             let mut x = i.saturating_sub(2) as isize;
             while x >= start_index as isize
                 && node_points[x as usize].code_point == AsciiCodePoint::BACKSLASH as i32
@@ -26,7 +28,7 @@ pub(crate) fn find_break_delimiter(
             }
 
             if ((i as isize - x) & 1) == 0 {
-                Some(i - 1)
+                Some((i - 1, BreakTokenMarkerType::Backslash))
             } else {
                 None
             }
@@ -39,7 +41,7 @@ pub(crate) fn find_break_delimiter(
             }
 
             if i as isize - x > 2 {
-                Some((x + 1) as usize)
+                Some(((x + 1) as usize, BreakTokenMarkerType::MoreThanTwoSpaces))
             } else {
                 None
             }
@@ -47,16 +49,17 @@ pub(crate) fn find_break_delimiter(
             None
         };
 
-        let Some(marker_start) = marker_start else {
+        let Some((marker_start, marker_type)) = marker else {
             continue;
         };
 
-        return Some(TokenDelimiter {
+        return Some(BreakDelimiter {
             delimiter_type: DelimiterType::Full,
             start_index: marker_start,
             end_index: i + 1,
             thickness: i + 1 - marker_start,
             original_thickness: i + 1 - marker_start,
+            marker_type,
         });
     }
 

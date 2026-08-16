@@ -2,10 +2,7 @@ use yozora_ast::{InlineMath, Node};
 use yozora_character::{calc_string_from_node_points, is_space_like};
 use yozora_core_tokenizer::{InlineToken, NodeInterval, ParseInlinePhaseApi};
 
-#[derive(Debug, Clone)]
-pub struct InlineMathTokenData {
-    pub thickness: usize,
-}
+use crate::types::InlineMathTokenData;
 
 pub(crate) fn parse_inline_math_tokens(
     tokens: &[InlineToken],

@@ -8,12 +8,13 @@ use yozora_core_tokenizer::*;
 #[cfg(test)]
 use yozora_core_tokenizer::NodeInterval;
 
+use crate::types::{
+    LinkReferenceDelimiter, LinkReferenceProcessDelimiterPairResult, LINK_REFERENCE_TOKENIZER_NAME,
+};
 use crate::{parse, r#match};
 
-pub const LINK_REFERENCE_TOKENIZER_NAME: &str = "@yozora/tokenizer-link-reference";
-
 type DelimiterKey = (usize, usize, u8);
-type DelimiterMap = Rc<RefCell<HashMap<DelimiterKey, r#match::DelimiterEntry>>>;
+type DelimiterMap = Rc<RefCell<HashMap<DelimiterKey, LinkReferenceDelimiter>>>;
 
 #[derive(Debug, Clone)]
 pub struct LinkReferenceTokenizer {
@@ -54,64 +55,55 @@ impl Tokenizer for LinkReferenceTokenizer {
     }
 }
 
-struct LinkReferenceMatchHook<'a> {
+pub struct LinkReferenceDelimiterGenerator<'a> {
+    api: &'a dyn MatchInlinePhaseApi,
+}
+
+impl LinkReferenceDelimiterGenerator<'_> {
+    pub fn next(&mut self, range_index: (usize, usize)) -> Option<LinkReferenceDelimiter> {
+        r#match::find_link_reference_delimiter_entry(
+            self.api.get_node_points(),
+            range_index.0,
+            range_index.1,
+        )
+    }
+}
+
+pub struct LinkReferenceMatchHook<'a> {
     api: &'a dyn MatchInlinePhaseApi,
     delimiters: DelimiterMap,
 }
 
-impl LinkReferenceMatchHook<'_> {
-    fn register_delimiter(&self, entry: r#match::DelimiterEntry) {
-        let key = delimiter_key(&entry.delimiter);
-        self.delimiters.borrow_mut().insert(key, entry);
+impl<'a> LinkReferenceMatchHook<'a> {
+    pub fn new(api: &'a dyn MatchInlinePhaseApi) -> Self {
+        Self {
+            api,
+            delimiters: Rc::new(RefCell::new(HashMap::new())),
+        }
     }
 
-    fn lookup_brackets(
+    pub fn find_delimiter(&self) -> LinkReferenceDelimiterGenerator<'a> {
+        LinkReferenceDelimiterGenerator { api: self.api }
+    }
+
+    pub fn is_delimiter_pair(
         &self,
-        delimiter: &TokenDelimiter,
-    ) -> Vec<r#match::LinkReferenceDelimiterBracket> {
-        self.delimiters
-            .borrow()
-            .get(&delimiter_key(delimiter))
-            .map(|entry| entry.brackets.clone())
-            .unwrap_or_default()
-    }
-}
-
-impl<'a> MatchInlineHook<'a> for LinkReferenceMatchHook<'a> {
-    fn find_delimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
-        self.delimiters.borrow_mut().clear();
-
-        let api = self.api;
-        let delimiters = Rc::clone(&self.delimiters);
-
-        Box::new(gen_find_delimiter(move |start_index, end_index| {
-            let entry = r#match::find_link_reference_delimiter_entry(
-                api.get_node_points(),
-                start_index,
-                end_index,
-            )?;
-            let delimiter = entry.delimiter.clone();
-            let key = delimiter_key(&delimiter);
-            delimiters.borrow_mut().insert(key, entry);
-            Some(delimiter)
-        }))
-    }
-
-    fn is_delimiter_pair(
-        &self,
-        opener_delimiter: &TokenDelimiter,
-        closer_delimiter: &TokenDelimiter,
+        opener_delimiter: &LinkReferenceDelimiter,
+        closer_delimiter: &LinkReferenceDelimiter,
         internal_tokens: &[InlineToken],
     ) -> IsDelimiterPairResult {
-        // Links may not contain other links, at any level of nesting.
-        if internal_tokens.iter().any(is_link_token) {
+        if contains_link_token(
+            internal_tokens,
+            opener_delimiter.end_index,
+            closer_delimiter.start_index,
+        ) {
             return IsDelimiterPairResult::NotPaired {
                 opener: false,
                 closer: false,
             };
         }
 
-        let status = r#match::check_balanced_brackets_status(
+        let status = check_balanced_brackets_status(
             opener_delimiter.end_index,
             closer_delimiter.start_index,
             internal_tokens,
@@ -124,8 +116,7 @@ impl<'a> MatchInlineHook<'a> for LinkReferenceMatchHook<'a> {
                 closer: true,
             },
             0 => {
-                let brackets = self.lookup_brackets(closer_delimiter);
-                let Some(bracket) = brackets.first() else {
+                let Some(bracket) = closer_delimiter.brackets.first() else {
                     return IsDelimiterPairResult::NotPaired {
                         opener: false,
                         closer: false,
@@ -159,23 +150,16 @@ impl<'a> MatchInlineHook<'a> for LinkReferenceMatchHook<'a> {
         }
     }
 
-    fn process_delimiter_pair(
+    pub fn process_delimiter_pair(
         &self,
-        opener_delimiter: &TokenDelimiter,
-        closer_delimiter: &TokenDelimiter,
+        opener_delimiter: &LinkReferenceDelimiter,
+        closer_delimiter: &LinkReferenceDelimiter,
         internal_tokens: &[InlineToken],
-    ) -> ProcessDelimiterPairResult {
-        let opener_brackets = self.lookup_brackets(opener_delimiter);
-        let mut tokens = r#match::process_single_delimiter(
-            self.api,
-            opener_delimiter,
-            &opener_brackets,
-            self.api.get_node_points(),
-        );
+    ) -> LinkReferenceProcessDelimiterPairResult {
+        let mut tokens = self.process_single_delimiter(opener_delimiter);
 
-        let brackets = self.lookup_brackets(closer_delimiter);
-        let Some((first, remains)) = brackets.split_first() else {
-            return ProcessDelimiterPairResult {
+        let Some((first, remains)) = closer_delimiter.brackets.split_first() else {
+            return LinkReferenceProcessDelimiterPairResult {
                 tokens,
                 remain_opener_delimiter: None,
                 remain_closer_delimiter: None,
@@ -184,7 +168,7 @@ impl<'a> MatchInlineHook<'a> for LinkReferenceMatchHook<'a> {
 
         let (Some(label), Some(identifier)) = (first.label.clone(), first.identifier.clone())
         else {
-            return ProcessDelimiterPairResult {
+            return LinkReferenceProcessDelimiterPairResult {
                 tokens,
                 remain_opener_delimiter: None,
                 remain_closer_delimiter: None,
@@ -198,14 +182,11 @@ impl<'a> MatchInlineHook<'a> for LinkReferenceMatchHook<'a> {
         );
 
         tokens.push(r#match::create_reference_token(
-            self.api.get_node_points(),
             opener_delimiter.end_index.saturating_sub(1),
             first.end_index,
             yozora_ast::ReferenceType::Full,
             label,
             identifier,
-            opener_delimiter.end_index,
-            closer_delimiter.start_index,
             children_tokens,
         ));
 
@@ -215,39 +196,145 @@ impl<'a> MatchInlineHook<'a> for LinkReferenceMatchHook<'a> {
             DelimiterType::Full
         };
 
-        let remain_closer_delimiter = TokenDelimiter {
+        let remain_closer_delimiter = LinkReferenceDelimiter {
             delimiter_type: remain_type,
             start_index: first.end_index,
             end_index: closer_delimiter.end_index,
             thickness: closer_delimiter.end_index.saturating_sub(first.end_index),
             original_thickness: closer_delimiter.end_index.saturating_sub(first.end_index),
+            brackets: remains.to_vec(),
         };
 
-        self.register_delimiter(r#match::DelimiterEntry {
-            delimiter: remain_closer_delimiter.clone(),
-            brackets: remains.to_vec(),
-        });
-
-        ProcessDelimiterPairResult {
+        LinkReferenceProcessDelimiterPairResult {
             tokens,
             remain_opener_delimiter: None,
             remain_closer_delimiter: Some(remain_closer_delimiter),
         }
     }
 
-    fn process_single_delimiter(&self, delimiter: &TokenDelimiter) -> Vec<InlineToken> {
-        let brackets = self.lookup_brackets(delimiter);
-        r#match::process_single_delimiter(
-            self.api,
-            delimiter,
-            &brackets,
-            self.api.get_node_points(),
-        )
+    pub fn process_single_delimiter(&self, delimiter: &LinkReferenceDelimiter) -> Vec<InlineToken> {
+        r#match::process_single_delimiter(self.api, delimiter)
+    }
+
+    fn register_delimiter(&self, delimiter: LinkReferenceDelimiter) {
+        let key = delimiter_key_from_typed(&delimiter);
+        self.delimiters.borrow_mut().insert(key, delimiter);
+    }
+
+    fn lookup_delimiter(&self, delimiter: &TokenDelimiter) -> Option<LinkReferenceDelimiter> {
+        self.delimiters
+            .borrow()
+            .get(&delimiter_key_from_core(delimiter))
+            .cloned()
     }
 }
 
-struct LinkReferenceParseHook<'a> {
+impl<'a> MatchInlineHook<'a> for LinkReferenceMatchHook<'a> {
+    fn find_delimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
+        self.delimiters.borrow_mut().clear();
+
+        let mut finder = LinkReferenceMatchHook::find_delimiter(self);
+        let delimiters = Rc::clone(&self.delimiters);
+
+        Box::new(gen_find_delimiter(move |start_index, end_index| {
+            let delimiter = finder.next((start_index, end_index))?;
+            let core_delimiter = delimiter.to_core();
+            let key = delimiter_key_from_typed(&delimiter);
+            delimiters.borrow_mut().insert(key, delimiter);
+            Some(core_delimiter)
+        }))
+    }
+
+    fn is_delimiter_pair(
+        &self,
+        opener_delimiter: &TokenDelimiter,
+        closer_delimiter: &TokenDelimiter,
+        internal_tokens: &[InlineToken],
+    ) -> IsDelimiterPairResult {
+        let Some(opener_delimiter) = self.lookup_delimiter(opener_delimiter) else {
+            return IsDelimiterPairResult::NotPaired {
+                opener: false,
+                closer: false,
+            };
+        };
+        let Some(closer_delimiter) = self.lookup_delimiter(closer_delimiter) else {
+            return IsDelimiterPairResult::NotPaired {
+                opener: false,
+                closer: false,
+            };
+        };
+
+        LinkReferenceMatchHook::is_delimiter_pair(
+            self,
+            &opener_delimiter,
+            &closer_delimiter,
+            internal_tokens,
+        )
+    }
+
+    fn process_delimiter_pair(
+        &self,
+        opener_delimiter: &TokenDelimiter,
+        closer_delimiter: &TokenDelimiter,
+        internal_tokens: &[InlineToken],
+    ) -> ProcessDelimiterPairResult {
+        let Some(opener_delimiter) = self.lookup_delimiter(opener_delimiter) else {
+            return ProcessDelimiterPairResult {
+                tokens: Vec::new(),
+                remain_opener_delimiter: None,
+                remain_closer_delimiter: None,
+            };
+        };
+        let Some(closer_delimiter) = self.lookup_delimiter(closer_delimiter) else {
+            return ProcessDelimiterPairResult {
+                tokens: Vec::new(),
+                remain_opener_delimiter: None,
+                remain_closer_delimiter: None,
+            };
+        };
+
+        let result = LinkReferenceMatchHook::process_delimiter_pair(
+            self,
+            &opener_delimiter,
+            &closer_delimiter,
+            internal_tokens,
+        );
+
+        let remain_opener_delimiter = result.remain_opener_delimiter.map(|delimiter| {
+            let core_delimiter = delimiter.to_core();
+            self.register_delimiter(delimiter);
+            core_delimiter
+        });
+        let remain_closer_delimiter = result.remain_closer_delimiter.map(|delimiter| {
+            let core_delimiter = delimiter.to_core();
+            self.register_delimiter(delimiter);
+            core_delimiter
+        });
+
+        ProcessDelimiterPairResult {
+            tokens: result.tokens,
+            remain_opener_delimiter,
+            remain_closer_delimiter,
+        }
+    }
+
+    fn process_single_delimiter(&self, delimiter: &TokenDelimiter) -> Vec<InlineToken> {
+        let Some(delimiter) = self.lookup_delimiter(delimiter) else {
+            return Vec::new();
+        };
+
+        LinkReferenceMatchHook::process_single_delimiter(self, &delimiter)
+    }
+}
+
+pub struct LinkReferenceParseHook<'a> {
     api: &'a dyn ParseInlinePhaseApi,
+}
+
+impl<'a> LinkReferenceParseHook<'a> {
+    pub fn new(api: &'a dyn ParseInlinePhaseApi) -> Self {
+        Self { api }
+    }
 }
 
 impl ParseInlineHook for LinkReferenceParseHook<'_> {
@@ -261,18 +348,15 @@ impl InlineTokenizer for LinkReferenceTokenizer {
         &'a self,
         api: &'a dyn MatchInlinePhaseApi,
     ) -> Box<dyn MatchInlineHook<'a> + 'a> {
-        Box::new(LinkReferenceMatchHook {
-            api,
-            delimiters: Rc::new(RefCell::new(HashMap::new())),
-        })
+        Box::new(LinkReferenceMatchHook::new(api))
     }
 
     fn parse<'a>(&'a self, api: &'a dyn ParseInlinePhaseApi) -> Box<dyn ParseInlineHook + 'a> {
-        Box::new(LinkReferenceParseHook { api })
+        Box::new(LinkReferenceParseHook::new(api))
     }
 }
 
-fn delimiter_key(delimiter: &TokenDelimiter) -> DelimiterKey {
+fn delimiter_key_from_core(delimiter: &TokenDelimiter) -> DelimiterKey {
     let delimiter_type = match delimiter.delimiter_type {
         DelimiterType::Opener => 0,
         DelimiterType::Closer => 1,
@@ -280,6 +364,10 @@ fn delimiter_key(delimiter: &TokenDelimiter) -> DelimiterKey {
         DelimiterType::Full => 3,
     };
     (delimiter.start_index, delimiter.end_index, delimiter_type)
+}
+
+fn delimiter_key_from_typed(delimiter: &LinkReferenceDelimiter) -> DelimiterKey {
+    delimiter_key_from_core(&delimiter.to_core())
 }
 
 #[cfg(test)]
@@ -422,6 +510,24 @@ mod tests {
     fn should_skip_unknown_definition() {
         let result = collect_single_token("[foo][bar]", &[]);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn typed_hook_preserves_reference_brackets() {
+        let node_points = create_node_point_generator("[foo][]")
+            .pop()
+            .expect("expected node points");
+        let api = DummyMatchApi::from(&["foo"], node_points);
+        let hook = LinkReferenceMatchHook::new(&api);
+        let mut finder = hook.find_delimiter();
+        let delimiter = finder
+            .next((0, api.get_block_end_index()))
+            .expect("expected link reference delimiter");
+
+        assert_eq!(delimiter.delimiter_type, DelimiterType::Full);
+        assert_eq!(delimiter.brackets.len(), 2);
+        assert_eq!(delimiter.brackets[0].identifier.as_deref(), Some("foo"));
+        assert_eq!(delimiter.brackets[1].identifier, None);
     }
 
     #[test]

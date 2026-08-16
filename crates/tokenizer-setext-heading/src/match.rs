@@ -5,18 +5,14 @@ use yozora_core_tokenizer::{
     PhrasingContentLine, RemainingSibling,
 };
 
-#[derive(Debug, Clone)]
-pub struct SetextHeadingTokenData {
-    pub marker: i32,
-    pub lines: Vec<PhrasingContentLine>,
-}
+use crate::types::SetextHeadingTokenData;
 
 pub(crate) fn eat_and_interrupt_previous_sibling(
     line: &PhrasingContentLine,
     _prev_sibling_token: &BlockToken,
     phrasing_lines: Option<Vec<PhrasingContentLine>>,
 ) -> Option<EatAndInterruptPreviousSiblingResult> {
-    if line.count_of_precede_spaces >= 4 || line.first_non_whitespace_index >= line.end_index {
+    if line.indent_width >= 4 || line.first_non_whitespace_index >= line.end_index {
         return None;
     }
 

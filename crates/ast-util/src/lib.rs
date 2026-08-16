@@ -1,17 +1,26 @@
+#[path = "ast/clone.rs"]
 pub mod clone;
+#[path = "ast/collect/mod.rs"]
 pub mod collect;
 pub mod definition;
 pub mod excerpt;
 pub mod footnote;
 pub mod matcher;
+#[path = "ast/mutate/mod.rs"]
 pub mod mutate;
+#[path = "ast/mutate_async/mod.rs"]
 pub mod mutate_async;
+#[path = "ast/position.rs"]
 pub mod position;
+#[path = "ast/search.rs"]
 pub mod search;
+#[path = "ast/toc.rs"]
 pub mod toc;
+#[path = "ast/traverse.rs"]
 pub mod traverse;
 pub mod url;
 
+#[path = "ast/util.rs"]
 mod tree;
 
 pub use clone::shallow_clone_ast;

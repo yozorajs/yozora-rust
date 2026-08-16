@@ -1,9 +1,7 @@
-use yozora_ast::Node;
 use yozora_core_tokenizer::*;
 
+use crate::types::TABLE_TOKENIZER_NAME;
 use crate::{parse, r#match};
-
-pub const TABLE_TOKENIZER_NAME: &str = "@yozora/tokenizer-table";
 
 #[derive(Debug, Clone)]
 pub struct TableTokenizer {
@@ -46,8 +44,14 @@ impl Tokenizer for TableTokenizer {
     }
 }
 
-struct TableMatchHook<'a> {
+pub struct TableMatchHook<'a> {
     api: &'a dyn MatchBlockPhaseApi,
+}
+
+impl<'a> TableMatchHook<'a> {
+    pub fn new(api: &'a dyn MatchBlockPhaseApi) -> Self {
+        Self { api }
+    }
 }
 
 impl MatchBlockHook for TableMatchHook<'_> {
@@ -82,22 +86,28 @@ impl MatchBlockHook for TableMatchHook<'_> {
     }
 }
 
-struct TableParseHook<'a> {
+pub struct TableParseHook<'a> {
     api: &'a dyn ParseBlockPhaseApi,
 }
 
+impl<'a> TableParseHook<'a> {
+    pub fn new(api: &'a dyn ParseBlockPhaseApi) -> Self {
+        Self { api }
+    }
+}
+
 impl ParseBlockHook for TableParseHook<'_> {
-    fn parse(&self, tokens: &[BlockToken]) -> Vec<Node> {
-        parse::parse_table_tokens(tokens, self.api)
+    fn parse<'a>(&'a self, tokens: &'a [BlockToken]) -> ParseBlockResult<ParseBlockHookResult<'a>> {
+        Ok(parse::parse_table_tokens(tokens, self.api).into())
     }
 }
 
 impl BlockTokenizer for TableTokenizer {
     fn r#match<'a>(&'a self, api: &'a dyn MatchBlockPhaseApi) -> Box<dyn MatchBlockHook + 'a> {
-        Box::new(TableMatchHook { api })
+        Box::new(TableMatchHook::new(api))
     }
 
     fn parse<'a>(&'a self, api: &'a dyn ParseBlockPhaseApi) -> Box<dyn ParseBlockHook + 'a> {
-        Box::new(TableParseHook { api })
+        Box::new(TableParseHook::new(api))
     }
 }

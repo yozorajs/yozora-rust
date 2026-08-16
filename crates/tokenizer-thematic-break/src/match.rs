@@ -5,14 +5,10 @@ use yozora_core_tokenizer::{
     EatOpenerResult, PhrasingContentLine, RemainingSibling,
 };
 
-#[derive(Debug, Clone)]
-pub struct ThematicBreakTokenData {
-    pub marker: i32,
-    pub continuous: bool,
-}
+use crate::types::ThematicBreakTokenData;
 
 pub(crate) fn eat_opener(line: &PhrasingContentLine) -> Option<EatOpenerResult> {
-    if line.count_of_precede_spaces >= 4 {
+    if line.indent_width >= 4 {
         return None;
     }
 

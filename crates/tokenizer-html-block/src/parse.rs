@@ -2,7 +2,7 @@ use yozora_ast::{Html, Node};
 use yozora_character::calc_string_from_node_points;
 use yozora_core_tokenizer::{merge_content_lines_faithfully, BlockToken, ParseBlockPhaseApi};
 
-use crate::r#match::HtmlBlockTokenData;
+use crate::types::HtmlBlockTokenData;
 
 pub(crate) fn parse_html_block_tokens(
     tokens: &[BlockToken],

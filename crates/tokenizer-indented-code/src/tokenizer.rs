@@ -1,9 +1,7 @@
-use yozora_ast::Node;
 use yozora_core_tokenizer::*;
 
+use crate::types::INDENTED_CODE_TOKENIZER_NAME;
 use crate::{parse, r#match};
-
-pub const INDENTED_CODE_TOKENIZER_NAME: &str = "@yozora/tokenizer-indented-code";
 
 #[derive(Debug, Clone)]
 pub struct IndentedCodeTokenizer {
@@ -44,7 +42,14 @@ impl Tokenizer for IndentedCodeTokenizer {
     }
 }
 
-struct IndentedCodeMatchHook;
+#[derive(Debug, Clone, Copy, Default)]
+pub struct IndentedCodeMatchHook;
+
+impl IndentedCodeMatchHook {
+    pub fn new() -> Self {
+        Self
+    }
+}
 
 impl MatchBlockHook for IndentedCodeMatchHook {
     fn is_containing_block(&self) -> bool {
@@ -69,22 +74,28 @@ impl MatchBlockHook for IndentedCodeMatchHook {
     }
 }
 
-struct IndentedCodeParseHook<'a> {
+pub struct IndentedCodeParseHook<'a> {
     api: &'a dyn ParseBlockPhaseApi,
 }
 
+impl<'a> IndentedCodeParseHook<'a> {
+    pub fn new(api: &'a dyn ParseBlockPhaseApi) -> Self {
+        Self { api }
+    }
+}
+
 impl ParseBlockHook for IndentedCodeParseHook<'_> {
-    fn parse(&self, tokens: &[BlockToken]) -> Vec<Node> {
-        parse::parse_indented_code_tokens(tokens, self.api)
+    fn parse<'a>(&'a self, tokens: &'a [BlockToken]) -> ParseBlockResult<ParseBlockHookResult<'a>> {
+        Ok(parse::parse_indented_code_tokens(tokens, self.api).into())
     }
 }
 
 impl BlockTokenizer for IndentedCodeTokenizer {
     fn r#match<'a>(&'a self, _api: &'a dyn MatchBlockPhaseApi) -> Box<dyn MatchBlockHook + 'a> {
-        Box::new(IndentedCodeMatchHook)
+        Box::new(IndentedCodeMatchHook::new())
     }
 
     fn parse<'a>(&'a self, api: &'a dyn ParseBlockPhaseApi) -> Box<dyn ParseBlockHook + 'a> {
-        Box::new(IndentedCodeParseHook { api })
+        Box::new(IndentedCodeParseHook::new(api))
     }
 }

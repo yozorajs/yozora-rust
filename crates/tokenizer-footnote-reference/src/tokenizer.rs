@@ -8,9 +8,8 @@ use yozora_character::{create_node_point_generator, NodePoint};
 #[cfg(test)]
 use yozora_core_tokenizer::NodeInterval;
 
+use crate::types::{FootnoteReferenceDelimiter, FOOTNOTE_REFERENCE_TOKENIZER_NAME};
 use crate::{parse, r#match};
-
-pub const FOOTNOTE_REFERENCE_TOKENIZER_NAME: &str = "@yozora/tokenizer-footnote-reference";
 
 #[derive(Debug, Clone)]
 pub struct FootnoteReferenceTokenizer {
@@ -51,27 +50,59 @@ impl Tokenizer for FootnoteReferenceTokenizer {
     }
 }
 
-struct FootnoteReferenceMatchHook<'a> {
+pub struct FootnoteReferenceDelimiterGenerator<'a> {
     api: &'a dyn MatchInlinePhaseApi,
 }
 
-impl<'a> MatchInlineHook<'a> for FootnoteReferenceMatchHook<'a> {
-    fn find_delimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
-        let api = self.api;
+impl FootnoteReferenceDelimiterGenerator<'_> {
+    pub fn next(&mut self, range_index: (usize, usize)) -> Option<FootnoteReferenceDelimiter> {
+        r#match::find_delimiter_entry(self.api, range_index.0, range_index.1)
+    }
+}
 
-        Box::new(gen_find_delimiter(|start_index, end_index| {
-            let entry = r#match::find_delimiter_entry(api, start_index, end_index)?;
-            Some(entry.delimiter)
-        }))
+pub struct FootnoteReferenceMatchHook<'a> {
+    api: &'a dyn MatchInlinePhaseApi,
+}
+
+impl<'a> FootnoteReferenceMatchHook<'a> {
+    pub fn new(api: &'a dyn MatchInlinePhaseApi) -> Self {
+        Self { api }
     }
 
-    fn process_single_delimiter(&self, delimiter: &TokenDelimiter) -> Vec<InlineToken> {
+    pub fn find_delimiter(&self) -> FootnoteReferenceDelimiterGenerator<'a> {
+        FootnoteReferenceDelimiterGenerator { api: self.api }
+    }
+
+    pub fn process_single_delimiter(
+        &self,
+        delimiter: &FootnoteReferenceDelimiter,
+    ) -> Vec<InlineToken> {
         r#match::process_single_delimiter(self.api, delimiter)
     }
 }
 
-struct FootnoteReferenceParseHook<'a> {
+impl<'a> MatchInlineHook<'a> for FootnoteReferenceMatchHook<'a> {
+    fn find_delimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
+        let mut finder = FootnoteReferenceMatchHook::find_delimiter(self);
+
+        Box::new(gen_find_delimiter(move |start_index, end_index| {
+            finder.next((start_index, end_index))
+        }))
+    }
+
+    fn process_single_delimiter(&self, delimiter: &TokenDelimiter) -> Vec<InlineToken> {
+        FootnoteReferenceMatchHook::process_single_delimiter(self, delimiter)
+    }
+}
+
+pub struct FootnoteReferenceParseHook<'a> {
     api: &'a dyn ParseInlinePhaseApi,
+}
+
+impl<'a> FootnoteReferenceParseHook<'a> {
+    pub fn new(api: &'a dyn ParseInlinePhaseApi) -> Self {
+        Self { api }
+    }
 }
 
 impl ParseInlineHook for FootnoteReferenceParseHook<'_> {
@@ -85,11 +116,11 @@ impl InlineTokenizer for FootnoteReferenceTokenizer {
         &'a self,
         api: &'a dyn MatchInlinePhaseApi,
     ) -> Box<dyn MatchInlineHook<'a> + 'a> {
-        Box::new(FootnoteReferenceMatchHook { api })
+        Box::new(FootnoteReferenceMatchHook::new(api))
     }
 
     fn parse<'a>(&'a self, api: &'a dyn ParseInlinePhaseApi) -> Box<dyn ParseInlineHook + 'a> {
-        Box::new(FootnoteReferenceParseHook { api })
+        Box::new(FootnoteReferenceParseHook::new(api))
     }
 }
 

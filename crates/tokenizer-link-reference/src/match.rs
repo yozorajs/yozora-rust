@@ -1,30 +1,14 @@
 use yozora_ast::{ReferenceType, LINK_REFERENCE_TYPE};
-use yozora_character::{calc_escaped_string_from_node_points, AsciiCodePoint, NodePoint};
-use yozora_core_tokenizer::{
-    eat_link_label, DelimiterType, InlineToken, MatchInlinePhaseApi, TokenDelimiter,
-};
+use yozora_character::{AsciiCodePoint, NodePoint};
+use yozora_core_tokenizer::{eat_link_label, DelimiterType, InlineToken, MatchInlinePhaseApi};
 
-use crate::parse::LinkReferenceTokenData;
-
-#[derive(Debug, Clone)]
-pub struct LinkReferenceDelimiterBracket {
-    pub start_index: usize,
-    pub end_index: usize,
-    pub label: Option<String>,
-    pub identifier: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct DelimiterEntry {
-    pub delimiter: TokenDelimiter,
-    pub brackets: Vec<LinkReferenceDelimiterBracket>,
-}
+use crate::types::{LinkReferenceDelimiter, LinkReferenceDelimiterBracket, LinkReferenceTokenData};
 
 pub(crate) fn find_link_reference_delimiter_entry(
     node_points: &[NodePoint],
     start_index: usize,
     end_index: usize,
-) -> Option<DelimiterEntry> {
+) -> Option<LinkReferenceDelimiter> {
     let mut i = start_index;
 
     while i < end_index {
@@ -40,10 +24,7 @@ pub(crate) fn find_link_reference_delimiter_entry(
 
             let (next_index, label_and_identifier) = eat_link_label(node_points, i, end_index);
             if next_index < 0 {
-                return Some(DelimiterEntry {
-                    delimiter: create_delimiter(DelimiterType::Opener, i, i + 1),
-                    brackets,
-                });
+                return Some(create_delimiter(DelimiterType::Opener, i, i + 1, brackets));
             }
 
             let next_index = next_index as usize;
@@ -55,7 +36,6 @@ pub(crate) fn find_link_reference_delimiter_entry(
                     identifier: Some(identifier),
                 });
             } else {
-                // Preceding `[]` is useless.
                 i = next_index;
                 continue;
             }
@@ -97,10 +77,7 @@ pub(crate) fn find_link_reference_delimiter_entry(
                 break;
             }
 
-            return Some(DelimiterEntry {
-                delimiter: create_delimiter(delimiter_type, i, delimiter_end),
-                brackets,
-            });
+            return Some(create_delimiter(delimiter_type, i, delimiter_end, brackets));
         }
 
         if code_point == AsciiCodePoint::CLOSE_BRACKET as i32
@@ -110,15 +87,16 @@ pub(crate) fn find_link_reference_delimiter_entry(
             let (next_index, label_and_identifier) = eat_link_label(node_points, i + 1, end_index);
 
             if next_index < 0 {
-                return Some(DelimiterEntry {
-                    delimiter: create_delimiter(DelimiterType::Opener, i + 1, i + 2),
-                    brackets: Vec::new(),
-                });
+                return Some(create_delimiter(
+                    DelimiterType::Opener,
+                    i + 1,
+                    i + 2,
+                    Vec::new(),
+                ));
             }
 
             let next_index = next_index as usize;
             let Some((label, identifier)) = label_and_identifier else {
-                // It's `][]`, which is useless here.
                 i = next_index;
                 continue;
             };
@@ -166,10 +144,7 @@ pub(crate) fn find_link_reference_delimiter_entry(
                 break;
             }
 
-            return Some(DelimiterEntry {
-                delimiter: create_delimiter(delimiter_type, i, delimiter_end),
-                brackets,
-            });
+            return Some(create_delimiter(delimiter_type, i, delimiter_end, brackets));
         }
 
         i += 1;
@@ -180,10 +155,9 @@ pub(crate) fn find_link_reference_delimiter_entry(
 
 pub(crate) fn process_single_delimiter(
     api: &dyn MatchInlinePhaseApi,
-    delimiter: &TokenDelimiter,
-    brackets: &[LinkReferenceDelimiterBracket],
-    node_points: &[NodePoint],
+    delimiter: &LinkReferenceDelimiter,
 ) -> Vec<InlineToken> {
+    let brackets = &delimiter.brackets;
     if brackets.is_empty() {
         return Vec::new();
     }
@@ -216,7 +190,6 @@ pub(crate) fn process_single_delimiter(
             continue;
         };
 
-        // Full reference: `[label0][label1]` where the second bracket resolves.
         if (last_bracket_index + 1) < current_index as isize {
             let previous = &brackets[current_index - 1];
             let children_tokens = api.resolve_internal_tokens(
@@ -226,14 +199,11 @@ pub(crate) fn process_single_delimiter(
             );
 
             tokens.push(create_reference_token(
-                node_points,
                 previous.start_index,
                 bracket.end_index,
                 ReferenceType::Full,
                 label,
                 identifier,
-                previous.start_index + 1,
-                previous.end_index.saturating_sub(1),
                 children_tokens,
             ));
 
@@ -242,7 +212,6 @@ pub(crate) fn process_single_delimiter(
             continue;
         }
 
-        // Shortcut reference: `[label]`.
         if current_index + 1 == brackets.len() {
             let children_tokens = api.resolve_internal_tokens(
                 &[],
@@ -251,20 +220,16 @@ pub(crate) fn process_single_delimiter(
             );
 
             tokens.push(create_reference_token(
-                node_points,
                 bracket.start_index,
                 bracket.end_index,
                 ReferenceType::Shortcut,
                 label,
                 identifier,
-                bracket.start_index + 1,
-                bracket.end_index.saturating_sub(1),
                 children_tokens,
             ));
             break;
         }
 
-        // Collapsed reference: `[label][]`.
         if current_index + 1 < brackets.len() && brackets[current_index + 1].identifier.is_none() {
             let collapsed_tail = &brackets[current_index + 1];
             let children_tokens = api.resolve_internal_tokens(
@@ -274,14 +239,11 @@ pub(crate) fn process_single_delimiter(
             );
 
             tokens.push(create_reference_token(
-                node_points,
                 bracket.start_index,
                 collapsed_tail.end_index,
                 ReferenceType::Collapsed,
                 label,
                 identifier,
-                bracket.start_index + 1,
-                bracket.end_index.saturating_sub(1),
                 children_tokens,
             ));
             break;
@@ -297,103 +259,35 @@ pub(crate) fn process_single_delimiter(
     tokens
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn create_reference_token(
-    node_points: &[NodePoint],
     start_index: usize,
     end_index: usize,
     reference_type: ReferenceType,
     label: String,
     identifier: String,
-    child_start_index: usize,
-    child_end_index: usize,
     children_tokens: Vec<InlineToken>,
 ) -> InlineToken {
-    let child_text = calc_escaped_string_from_node_points(
-        node_points,
-        child_start_index,
-        child_end_index,
-        false,
-    );
-
-    let token_children = children_tokens.clone();
     InlineToken::new("", LINK_REFERENCE_TYPE, (start_index, end_index))
-        .with_children(token_children)
+        .with_children(children_tokens)
         .with_data(LinkReferenceTokenData {
             identifier,
             label,
             reference_type,
-            child_text,
         })
-}
-
-pub(crate) fn check_balanced_brackets_status(
-    start_index: usize,
-    end_index: usize,
-    internal_tokens: &[InlineToken],
-    node_points: &[NodePoint],
-) -> i8 {
-    let mut i = start_index;
-    let mut bracket_count = 0i32;
-
-    let update = |idx: usize, count: &mut i32, i_ref: &mut usize| match node_points[idx].code_point
-    {
-        x if x == AsciiCodePoint::BACKSLASH as i32 => {
-            *i_ref += 1;
-        }
-        x if x == AsciiCodePoint::OPEN_BRACKET as i32 => {
-            *count += 1;
-        }
-        x if x == AsciiCodePoint::CLOSE_BRACKET as i32 => {
-            *count -= 1;
-        }
-        _ => {}
-    };
-
-    for token in internal_tokens {
-        if token.start_index < start_index {
-            continue;
-        }
-        if token.end_index > end_index {
-            break;
-        }
-
-        while i < token.start_index {
-            update(i, &mut bracket_count, &mut i);
-            if bracket_count < 0 {
-                return -1;
-            }
-            i += 1;
-        }
-
-        i = token.end_index;
-    }
-
-    while i < end_index {
-        update(i, &mut bracket_count, &mut i);
-        if bracket_count < 0 {
-            return -1;
-        }
-        i += 1;
-    }
-
-    if bracket_count > 0 {
-        1
-    } else {
-        0
-    }
 }
 
 fn create_delimiter(
     delimiter_type: DelimiterType,
     start_index: usize,
     end_index: usize,
-) -> TokenDelimiter {
-    TokenDelimiter {
+    brackets: Vec<LinkReferenceDelimiterBracket>,
+) -> LinkReferenceDelimiter {
+    LinkReferenceDelimiter {
         delimiter_type,
         start_index,
         end_index,
         thickness: end_index.saturating_sub(start_index),
         original_thickness: end_index.saturating_sub(start_index),
+        brackets,
     }
 }

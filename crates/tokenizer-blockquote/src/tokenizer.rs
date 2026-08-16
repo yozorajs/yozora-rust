@@ -1,9 +1,7 @@
-use yozora_ast::Node;
 use yozora_core_tokenizer::*;
 
+use crate::types::BLOCKQUOTE_TOKENIZER_NAME;
 use crate::{parse, r#match};
-
-pub const BLOCKQUOTE_TOKENIZER_NAME: &str = "@yozora/tokenizer-blockquote";
 
 #[derive(Debug, Clone)]
 pub struct BlockquoteTokenizer {
@@ -46,7 +44,14 @@ impl Tokenizer for BlockquoteTokenizer {
     }
 }
 
-struct BlockquoteMatchHook;
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BlockquoteMatchHook;
+
+impl BlockquoteMatchHook {
+    pub fn new() -> Self {
+        Self
+    }
+}
 
 impl MatchBlockHook for BlockquoteMatchHook {
     fn is_containing_block(&self) -> bool {
@@ -80,22 +85,28 @@ impl MatchBlockHook for BlockquoteMatchHook {
     }
 }
 
-struct BlockquoteParseHook<'a> {
+pub struct BlockquoteParseHook<'a> {
     api: &'a dyn ParseBlockPhaseApi,
 }
 
+impl<'a> BlockquoteParseHook<'a> {
+    pub fn new(api: &'a dyn ParseBlockPhaseApi) -> Self {
+        Self { api }
+    }
+}
+
 impl ParseBlockHook for BlockquoteParseHook<'_> {
-    fn parse(&self, tokens: &[BlockToken]) -> Vec<Node> {
-        parse::parse_blockquote_tokens(tokens, self.api)
+    fn parse<'a>(&'a self, tokens: &'a [BlockToken]) -> ParseBlockResult<ParseBlockHookResult<'a>> {
+        Ok(parse::parse_blockquote_tokens(tokens, self.api))
     }
 }
 
 impl BlockTokenizer for BlockquoteTokenizer {
     fn r#match<'a>(&'a self, _api: &'a dyn MatchBlockPhaseApi) -> Box<dyn MatchBlockHook + 'a> {
-        Box::new(BlockquoteMatchHook)
+        Box::new(BlockquoteMatchHook::new())
     }
 
     fn parse<'a>(&'a self, api: &'a dyn ParseBlockPhaseApi) -> Box<dyn ParseBlockHook + 'a> {
-        Box::new(BlockquoteParseHook { api })
+        Box::new(BlockquoteParseHook::new(api))
     }
 }

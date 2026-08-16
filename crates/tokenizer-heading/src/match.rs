@@ -1,18 +1,14 @@
 use yozora_ast::HEADING_TYPE;
-use yozora_character::{is_space_character, AsciiCodePoint};
+use yozora_character::{is_space_like, AsciiCodePoint};
 use yozora_core_tokenizer::{
     calc_end_point, calc_start_point, BlockToken, EatAndInterruptPreviousSiblingResult,
     EatOpenerResult, PhrasingContentLine, RemainingSibling,
 };
 
-#[derive(Debug, Clone)]
-pub struct HeadingTokenData {
-    pub depth: u8,
-    pub line: PhrasingContentLine,
-}
+use crate::types::HeadingTokenData;
 
 pub(crate) fn eat_opener(line: &PhrasingContentLine) -> Option<EatOpenerResult> {
-    if line.count_of_precede_spaces >= 4 {
+    if line.indent_width >= 4 {
         return None;
     }
 
@@ -35,7 +31,7 @@ pub(crate) fn eat_opener(line: &PhrasingContentLine) -> Option<EatOpenerResult> 
         return None;
     }
 
-    if i + 1 < line.end_index && !is_space_character(line.node_points[i].code_point) {
+    if i < line.end_index && !is_space_like(line.node_points[i].code_point) {
         return None;
     }
 

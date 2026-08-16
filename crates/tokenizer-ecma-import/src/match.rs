@@ -1,4 +1,6 @@
-use yozora_ast::{EcmaImportNamedImport, ECMA_IMPORT_TYPE};
+use std::collections::HashSet;
+
+use yozora_ast::{Position, ECMA_IMPORT_TYPE};
 use yozora_character::{
     calc_string_from_node_points, calc_trim_boundary_of_code_points, AsciiCodePoint,
 };
@@ -6,17 +8,11 @@ use yozora_core_tokenizer::{
     calc_end_point, calc_start_point, BlockToken, EatOpenerResult, PhrasingContentLine,
 };
 
-use crate::parse::EcmaImportTokenData;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct EcmaImportToken {
-    pub module_name: String,
-    pub default_import: Option<String>,
-    pub named_imports: Vec<EcmaImportNamedImport>,
-}
+use crate::types::EcmaImportTokenData;
+use crate::util::{is_binding_identifier, regex1, regex2, regex3, resolve_name_imports};
 
 pub(crate) fn eat_opener(line: &PhrasingContentLine) -> Option<EatOpenerResult> {
-    if line.count_of_precede_spaces >= 4 || line.first_non_whitespace_index + 8 >= line.end_index {
+    if line.indent_width >= 4 || line.first_non_whitespace_index + 8 >= line.end_index {
         return None;
     }
 
@@ -37,135 +33,66 @@ pub(crate) fn eat_opener(line: &PhrasingContentLine) -> Option<EatOpenerResult> 
         line.first_non_whitespace_index,
         line.end_index,
     );
-    let source = calc_string_from_node_points(node_points, left, right, false);
-    let matched = match_ecma_import_token(&source)?;
+    let text = calc_string_from_node_points(node_points, left, right, false);
+    let position = || {
+        Some(Position {
+            start: calc_start_point(node_points, line.start_index),
+            end: calc_end_point(node_points, line.end_index - 1),
+            indent: None,
+        })
+    };
 
-    let token = BlockToken::new("", ECMA_IMPORT_TYPE, calc_line_position(line)).with_data(
-        EcmaImportTokenData {
-            module_name: matched.module_name,
-            default_import: matched.default_import,
-            named_imports: matched.named_imports,
-        },
-    );
+    let mut token_data = None;
 
+    if let Some(matched) = regex1(&text) {
+        token_data = Some(EcmaImportTokenData {
+            module_name: matched.get(2)?.as_str().to_string(),
+            default_import: None,
+            named_imports: Vec::new(),
+        });
+    } else if let Some(matched) = regex2(&text) {
+        let default_import = matched.get(1)?.as_str();
+        if !is_binding_identifier(default_import) {
+            return None;
+        }
+
+        token_data = Some(EcmaImportTokenData {
+            module_name: matched.get(3)?.as_str().to_string(),
+            default_import: Some(default_import.to_string()),
+            named_imports: Vec::new(),
+        });
+    } else if let Some(matched) = regex3(&text) {
+        let default_import = matched.get(1).map(|value| value.as_str().to_string());
+        let named_imports = resolve_name_imports(matched.get(2)?.as_str());
+
+        let mut local_bindings = HashSet::new();
+        if let Some(default_import) = default_import.as_ref() {
+            if !is_binding_identifier(default_import) {
+                return None;
+            }
+            local_bindings.insert(default_import.as_str());
+        }
+        for item in &named_imports {
+            let local_binding = item.alias.as_ref().unwrap_or(&item.src);
+            if !is_binding_identifier(local_binding)
+                || local_bindings.contains(local_binding.as_str())
+            {
+                return None;
+            }
+            local_bindings.insert(local_binding);
+        }
+
+        token_data = Some(EcmaImportTokenData {
+            module_name: matched.get(4)?.as_str().to_string(),
+            default_import,
+            named_imports,
+        });
+    }
+
+    let token = BlockToken::new("", ECMA_IMPORT_TYPE, position()).with_data(token_data?);
     Some(EatOpenerResult {
         token,
         next_index: line.end_index,
         saturated: true,
     })
-}
-
-pub(crate) fn match_ecma_import_token(input: &str) -> Option<EcmaImportToken> {
-    if input.contains('\n') {
-        return None;
-    }
-
-    let statement = input.trim();
-    let statement = statement.strip_suffix(';').unwrap_or(statement);
-    let rest = statement.strip_prefix("import ")?.trim();
-
-    if let Some(module_name) = parse_quoted_literal(rest) {
-        return Some(EcmaImportToken {
-            module_name,
-            default_import: None,
-            named_imports: Vec::new(),
-        });
-    }
-
-    let (spec, from_part) = rest.split_once(" from ")?;
-    let module_name = parse_quoted_literal(from_part.trim())?;
-
-    let (default_import, named_imports) = parse_import_spec(spec.trim())?;
-    Some(EcmaImportToken {
-        module_name,
-        default_import,
-        named_imports,
-    })
-}
-
-fn calc_line_position(line: &PhrasingContentLine) -> Option<yozora_ast::Position> {
-    if line.start_index >= line.end_index {
-        return None;
-    }
-
-    Some(yozora_ast::Position {
-        start: calc_start_point(line.node_points.as_ref(), line.start_index),
-        end: calc_end_point(line.node_points.as_ref(), line.end_index - 1),
-        indent: None,
-    })
-}
-
-fn parse_quoted_literal(input: &str) -> Option<String> {
-    let trimmed = input.trim();
-    if trimmed.len() < 2 {
-        return None;
-    }
-
-    let quote = trimmed.chars().next()?;
-    if quote != '\'' && quote != '"' {
-        return None;
-    }
-    if !trimmed.ends_with(quote) {
-        return None;
-    }
-
-    Some(trimmed[1..trimmed.len() - 1].to_string())
-}
-
-fn parse_import_spec(input: &str) -> Option<(Option<String>, Vec<EcmaImportNamedImport>)> {
-    if input.starts_with('{') && input.ends_with('}') {
-        let named_imports = parse_named_imports(&input[1..input.len() - 1]);
-        return Some((None, named_imports));
-    }
-
-    if let Some((default_part, named_part)) = input.split_once(',') {
-        let default_import = default_part.trim();
-        if default_import.is_empty() {
-            return None;
-        }
-
-        let named_part = named_part.trim();
-        if !(named_part.starts_with('{') && named_part.ends_with('}')) {
-            return None;
-        }
-
-        let named_imports = parse_named_imports(&named_part[1..named_part.len() - 1]);
-        return Some((Some(default_import.to_string()), named_imports));
-    }
-
-    let default_import = input.trim();
-    if default_import.is_empty() {
-        return None;
-    }
-
-    Some((Some(default_import.to_string()), Vec::new()))
-}
-
-fn parse_named_imports(input: &str) -> Vec<EcmaImportNamedImport> {
-    input
-        .split(',')
-        .filter_map(|chunk| {
-            let item = chunk.trim();
-            if item.is_empty() {
-                return None;
-            }
-
-            if let Some((src, alias)) = item.split_once(" as ") {
-                let src = src.trim();
-                let alias = alias.trim();
-                if src.is_empty() || alias.is_empty() {
-                    return None;
-                }
-                return Some(EcmaImportNamedImport {
-                    src: src.to_string(),
-                    alias: Some(alias.to_string()),
-                });
-            }
-
-            Some(EcmaImportNamedImport {
-                src: item.to_string(),
-                alias: None,
-            })
-        })
-        .collect()
 }

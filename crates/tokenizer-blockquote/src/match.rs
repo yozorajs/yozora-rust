@@ -1,12 +1,13 @@
 use yozora_ast::BLOCKQUOTE_TYPE;
-use yozora_character::{is_space_character, AsciiCodePoint, VirtualCodePoint};
+use yozora_character::{is_space_character, AsciiCodePoint};
 use yozora_core_tokenizer::{
-    calc_end_point, calc_start_point, BlockToken, EatAndInterruptPreviousSiblingResult,
-    EatContinuationTextResult, EatOpenerResult, PhrasingContentLine, RemainingSibling,
+    calc_end_point, calc_start_point, eat_indentation, BlockToken,
+    EatAndInterruptPreviousSiblingResult, EatContinuationTextResult, EatOpenerResult,
+    PhrasingContentLine, RemainingSibling,
 };
 
 pub(crate) fn eat_opener(line: &PhrasingContentLine) -> Option<EatOpenerResult> {
-    if line.count_of_precede_spaces >= 4 {
+    if line.indent_width >= 4 {
         return None;
     }
 
@@ -19,15 +20,7 @@ pub(crate) fn eat_opener(line: &PhrasingContentLine) -> Option<EatOpenerResult> 
         return None;
     }
 
-    let mut next_index = first + 1;
-    if next_index < line.end_index && is_space_character(line.node_points[next_index].code_point) {
-        next_index += 1;
-        if next_index < line.end_index
-            && line.node_points[next_index].code_point == VirtualCodePoint::Space as i32
-        {
-            next_index += 1;
-        }
-    }
+    let next_index = calc_blockquote_marker_end(line.node_points.as_ref(), first, line.end_index);
 
     let token = BlockToken::new(
         "",
@@ -65,7 +58,7 @@ pub(crate) fn eat_continuation_text(
         .map(|point| point.code_point)
         .unwrap_or_default();
 
-    if line.count_of_precede_spaces >= 4
+    if line.indent_width >= 4
         || first >= line.end_index
         || marker != AsciiCodePoint::CLOSE_ANGLE as i32
     {
@@ -77,12 +70,21 @@ pub(crate) fn eat_continuation_text(
         return EatContinuationTextResult::NotMatched;
     }
 
-    let mut next_index = first + 1;
-    if next_index < line.end_index && is_space_character(line.node_points[next_index].code_point) {
-        next_index += 1;
-    }
+    let next_index = calc_blockquote_marker_end(line.node_points.as_ref(), first, line.end_index);
 
     EatContinuationTextResult::Opening { next_index }
+}
+
+fn calc_blockquote_marker_end(
+    node_points: &[yozora_character::NodePoint],
+    marker_index: usize,
+    end_index: usize,
+) -> usize {
+    let mut next_index = marker_index + 1;
+    if next_index < end_index && is_space_character(node_points[next_index].code_point) {
+        next_index = eat_indentation(node_points, next_index, end_index, 1).unwrap_or(next_index);
+    }
+    next_index
 }
 
 fn calc_segment_position(

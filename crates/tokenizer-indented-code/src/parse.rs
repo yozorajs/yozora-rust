@@ -1,13 +1,8 @@
 use yozora_ast::{Code, Node};
 use yozora_character::calc_string_from_node_points;
-use yozora_core_tokenizer::{
-    merge_content_lines_faithfully, BlockToken, ParseBlockPhaseApi, PhrasingContentLine,
-};
+use yozora_core_tokenizer::{merge_content_lines_faithfully, BlockToken, ParseBlockPhaseApi};
 
-#[derive(Debug, Clone)]
-pub struct IndentedCodeTokenData {
-    pub lines: Vec<PhrasingContentLine>,
-}
+use crate::types::IndentedCodeTokenData;
 
 pub(crate) fn parse_indented_code_tokens(
     tokens: &[BlockToken],

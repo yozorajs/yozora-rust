@@ -2,7 +2,7 @@ use yozora_ast::{Node, Table, TableCell, TableRow};
 use yozora_character::{AsciiCodePoint, NodePoint};
 use yozora_core_tokenizer::{merge_and_strip_content_lines, BlockToken, ParseBlockPhaseApi};
 
-use crate::r#match::TableTokenData;
+use crate::types::TableTokenData;
 
 pub(crate) fn parse_table_tokens(
     tokens: &[BlockToken],

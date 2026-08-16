@@ -2,10 +2,7 @@ use yozora_ast::{InlineCode, Node};
 use yozora_character::{calc_string_from_node_points, is_space_like};
 use yozora_core_tokenizer::{InlineToken, NodeInterval, ParseInlinePhaseApi};
 
-#[derive(Debug, Clone)]
-pub struct InlineCodeTokenData {
-    pub thickness: usize,
-}
+use crate::types::InlineCodeTokenData;
 
 pub(crate) fn parse_inline_code_tokens(
     tokens: &[InlineToken],

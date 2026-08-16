@@ -4,9 +4,8 @@ use yozora_core_tokenizer::*;
 #[cfg(test)]
 use yozora_core_tokenizer::NodeInterval;
 
+use crate::types::{BreakDelimiter, BREAK_TOKENIZER_NAME};
 use crate::{parse, r#match};
-
-pub const BREAK_TOKENIZER_NAME: &str = "@yozora/tokenizer-break";
 
 #[derive(Debug, Clone)]
 pub struct BreakTokenizer {
@@ -47,16 +46,46 @@ impl Tokenizer for BreakTokenizer {
     }
 }
 
-struct BreakMatchHook<'a> {
+pub struct BreakDelimiterGenerator<'a> {
     api: &'a dyn MatchInlinePhaseApi,
+}
+
+impl BreakDelimiterGenerator<'_> {
+    pub fn next(&mut self, range_index: (usize, usize)) -> Option<BreakDelimiter> {
+        r#match::find_break_delimiter(self.api, range_index.0, range_index.1)
+    }
+}
+
+pub struct BreakMatchHook<'a> {
+    api: &'a dyn MatchInlinePhaseApi,
+}
+
+impl<'a> BreakMatchHook<'a> {
+    pub fn new(api: &'a dyn MatchInlinePhaseApi) -> Self {
+        Self { api }
+    }
+
+    pub fn find_delimiter(&self) -> BreakDelimiterGenerator<'a> {
+        BreakDelimiterGenerator { api: self.api }
+    }
+
+    pub fn process_single_delimiter(&self, delimiter: &BreakDelimiter) -> Vec<InlineToken> {
+        vec![InlineToken::new(
+            "",
+            BREAK_TYPE,
+            (delimiter.start_index, delimiter.end_index),
+        )]
+    }
 }
 
 impl<'a> MatchInlineHook<'a> for BreakMatchHook<'a> {
     fn find_delimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
-        let api = self.api;
+        let mut finder = BreakMatchHook::find_delimiter(self);
 
-        Box::new(gen_find_delimiter(|start_index, end_index| {
-            r#match::find_break_delimiter(api, start_index, end_index)
+        Box::new(gen_find_delimiter(move |start_index, end_index| {
+            finder
+                .next((start_index, end_index))
+                .map(|delimiter| delimiter.to_core())
         }))
     }
 
@@ -69,8 +98,14 @@ impl<'a> MatchInlineHook<'a> for BreakMatchHook<'a> {
     }
 }
 
-struct BreakParseHook<'a> {
+pub struct BreakParseHook<'a> {
     api: &'a dyn ParseInlinePhaseApi,
+}
+
+impl<'a> BreakParseHook<'a> {
+    pub fn new(api: &'a dyn ParseInlinePhaseApi) -> Self {
+        Self { api }
+    }
 }
 
 impl ParseInlineHook for BreakParseHook<'_> {
@@ -84,11 +119,11 @@ impl InlineTokenizer for BreakTokenizer {
         &'a self,
         api: &'a dyn MatchInlinePhaseApi,
     ) -> Box<dyn MatchInlineHook<'a> + 'a> {
-        Box::new(BreakMatchHook { api })
+        Box::new(BreakMatchHook::new(api))
     }
 
     fn parse<'a>(&'a self, api: &'a dyn ParseInlinePhaseApi) -> Box<dyn ParseInlineHook + 'a> {
-        Box::new(BreakParseHook { api })
+        Box::new(BreakParseHook::new(api))
     }
 }
 
@@ -121,6 +156,23 @@ mod tests {
         let nodes = parse_hook.parse(&tokens);
 
         assert!(matches!(nodes.first(), Some(Node::Break(_))));
+    }
+
+    #[test]
+    fn typed_hook_preserves_marker_type() {
+        let node_points = create_node_point_generator("line\\\nnext")
+            .pop()
+            .expect("expected node points");
+        let api = DummyEngineMatchApi { node_points };
+        let hook = BreakMatchHook::new(&api);
+        let mut finder = hook.find_delimiter();
+        let delimiter = finder
+            .next((0, api.get_block_end_index()))
+            .expect("expected break delimiter");
+        assert_eq!(
+            delimiter.marker_type,
+            crate::types::BreakTokenMarkerType::Backslash
+        );
     }
 
     struct DummyEngineMatchApi {

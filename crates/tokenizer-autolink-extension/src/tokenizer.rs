@@ -11,9 +11,8 @@ use yozora_character::{calc_string_from_node_points, NodePoint};
 #[cfg(test)]
 use yozora_core_tokenizer::NodeInterval;
 
+use crate::types::{AutolinkExtensionDelimiter, AUTOLINK_EXTENSION_TOKENIZER_NAME};
 use crate::{parse, r#match};
-
-pub const AUTOLINK_EXTENSION_TOKENIZER_NAME: &str = "@yozora/tokenizer-autolink-extension";
 
 #[derive(Debug, Clone)]
 pub struct AutolinkExtensionTokenizer {
@@ -54,59 +53,86 @@ impl Tokenizer for AutolinkExtensionTokenizer {
     }
 }
 
-struct AutolinkExtensionMatchHook<'a> {
+pub struct AutolinkExtensionDelimiterGenerator<'a> {
     api: &'a dyn MatchInlinePhaseApi,
-    delimiters: Rc<RefCell<Vec<r#match::DelimiterEntry>>>,
 }
 
-impl AutolinkExtensionMatchHook<'_> {
-    fn lookup_content_type(
+impl AutolinkExtensionDelimiterGenerator<'_> {
+    pub fn next(&mut self, range_index: (usize, usize)) -> Option<AutolinkExtensionDelimiter> {
+        r#match::find_delimiter_entry(
+            self.api.get_node_points(),
+            self.api.get_block_start_index(),
+            range_index.0,
+            range_index.1,
+        )
+    }
+}
+
+pub struct AutolinkExtensionMatchHook<'a> {
+    api: &'a dyn MatchInlinePhaseApi,
+    delimiters: Rc<RefCell<Vec<AutolinkExtensionDelimiter>>>,
+}
+
+impl<'a> AutolinkExtensionMatchHook<'a> {
+    pub fn new(api: &'a dyn MatchInlinePhaseApi) -> Self {
+        Self {
+            api,
+            delimiters: Rc::new(RefCell::new(Vec::new())),
+        }
+    }
+
+    pub fn find_delimiter(&self) -> AutolinkExtensionDelimiterGenerator<'a> {
+        AutolinkExtensionDelimiterGenerator { api: self.api }
+    }
+
+    pub fn process_single_delimiter(
         &self,
-        delimiter: &TokenDelimiter,
-    ) -> Option<parse::AutolinkExtensionContentType> {
+        delimiter: &AutolinkExtensionDelimiter,
+    ) -> Vec<InlineToken> {
+        r#match::process_single_delimiter(self.api, delimiter)
+    }
+
+    fn lookup_delimiter(&self, delimiter: &TokenDelimiter) -> Option<AutolinkExtensionDelimiter> {
         self.delimiters
             .borrow()
             .iter()
             .rev()
-            .find(|entry| {
-                entry.delimiter.start_index == delimiter.start_index
-                    && entry.delimiter.end_index == delimiter.end_index
-                    && entry.delimiter.delimiter_type == delimiter.delimiter_type
-            })
-            .map(|entry| entry.content_type)
+            .find(|candidate| candidate.to_core() == *delimiter)
+            .cloned()
     }
 }
 
 impl<'a> MatchInlineHook<'a> for AutolinkExtensionMatchHook<'a> {
     fn find_delimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
         self.delimiters.borrow_mut().clear();
-        let api = self.api;
+        let mut finder = AutolinkExtensionMatchHook::find_delimiter(self);
         let delimiters = Rc::clone(&self.delimiters);
 
         Box::new(gen_find_delimiter(move |start_index, end_index| {
-            let entry = r#match::find_delimiter_entry(
-                api.get_node_points(),
-                api.get_block_start_index(),
-                start_index,
-                end_index,
-            )?;
-            let delimiter = entry.delimiter.clone();
-            delimiters.borrow_mut().push(entry);
-            Some(delimiter)
+            let delimiter = finder.next((start_index, end_index))?;
+            let core_delimiter = delimiter.to_core();
+            delimiters.borrow_mut().push(delimiter);
+            Some(core_delimiter)
         }))
     }
 
     fn process_single_delimiter(&self, delimiter: &TokenDelimiter) -> Vec<InlineToken> {
-        let Some(content_type) = self.lookup_content_type(delimiter) else {
+        let Some(delimiter) = self.lookup_delimiter(delimiter) else {
             return Vec::new();
         };
 
-        r#match::process_single_delimiter(self.api, delimiter, content_type)
+        AutolinkExtensionMatchHook::process_single_delimiter(self, &delimiter)
     }
 }
 
-struct AutolinkExtensionParseHook<'a> {
+pub struct AutolinkExtensionParseHook<'a> {
     api: &'a dyn ParseInlinePhaseApi,
+}
+
+impl<'a> AutolinkExtensionParseHook<'a> {
+    pub fn new(api: &'a dyn ParseInlinePhaseApi) -> Self {
+        Self { api }
+    }
 }
 
 impl ParseInlineHook for AutolinkExtensionParseHook<'_> {
@@ -120,14 +146,11 @@ impl InlineTokenizer for AutolinkExtensionTokenizer {
         &'a self,
         api: &'a dyn MatchInlinePhaseApi,
     ) -> Box<dyn MatchInlineHook<'a> + 'a> {
-        Box::new(AutolinkExtensionMatchHook {
-            api,
-            delimiters: Rc::new(RefCell::new(Vec::new())),
-        })
+        Box::new(AutolinkExtensionMatchHook::new(api))
     }
 
     fn parse<'a>(&'a self, api: &'a dyn ParseInlinePhaseApi) -> Box<dyn ParseInlineHook + 'a> {
-        Box::new(AutolinkExtensionParseHook { api })
+        Box::new(AutolinkExtensionParseHook::new(api))
     }
 }
 
@@ -255,6 +278,24 @@ mod tests {
     }
 
     #[test]
+    fn typed_hook_preserves_content_type() {
+        let node_points = create_node_point_generator("hello www.example.com")
+            .pop()
+            .expect("expected node points");
+        let api = DummyMatchApi { node_points };
+        let hook = AutolinkExtensionMatchHook::new(&api);
+        let mut finder = hook.find_delimiter();
+        let delimiter = finder
+            .next((0, api.get_block_end_index()))
+            .expect("expected autolink extension delimiter");
+
+        assert_eq!(
+            delimiter.content_type,
+            crate::types::AutolinkExtensionContentType::UriWww
+        );
+    }
+
+    #[test]
     fn engine_parse_should_build_link_node() {
         let tokenizer = AutolinkExtensionTokenizer::default();
         let node_points = create_node_point_generator("www.example.com")
@@ -265,8 +306,8 @@ mod tests {
 
         let token = InlineToken::new(AUTOLINK_EXTENSION_TOKENIZER_NAME, LINK_TYPE, (0, 15))
             .with_children(vec![InlineToken::new("text", TEXT_TYPE, (0, 15))])
-            .with_data(parse::AutolinkExtensionTokenData {
-                content_type: parse::AutolinkExtensionContentType::UriWww,
+            .with_data(crate::types::AutolinkExtensionTokenData {
+                content_type: crate::types::AutolinkExtensionContentType::UriWww,
             });
 
         let nodes = parse_hook.parse(&[token]);

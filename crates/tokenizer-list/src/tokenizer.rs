@@ -1,28 +1,8 @@
-use yozora_ast::{Node, NodeType, PARAGRAPH_TYPE};
+use yozora_ast::NodeType;
 use yozora_core_tokenizer::*;
 
+use crate::types::{ListTokenizerOptions, LIST_TOKENIZER_NAME};
 use crate::{parse, r#match};
-
-pub const LIST_TOKENIZER_NAME: &str = "@yozora/tokenizer-list";
-
-#[derive(Debug, Clone)]
-pub struct ListTokenizerOptions {
-    pub name: Option<String>,
-    pub priority: Option<i32>,
-    pub enable_task_list_item: bool,
-    pub empty_item_could_not_interrupted_types: Vec<NodeType>,
-}
-
-impl Default for ListTokenizerOptions {
-    fn default() -> Self {
-        Self {
-            name: None,
-            priority: None,
-            enable_task_list_item: false,
-            empty_item_could_not_interrupted_types: vec![PARAGRAPH_TYPE],
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct ListTokenizer {
@@ -116,8 +96,8 @@ struct ListParseHook<'a> {
 }
 
 impl ParseBlockHook for ListParseHook<'_> {
-    fn parse(&self, tokens: &[BlockToken]) -> Vec<Node> {
-        parse::parse_list_tokens(tokens, self.api)
+    fn parse<'a>(&'a self, tokens: &'a [BlockToken]) -> ParseBlockResult<ParseBlockHookResult<'a>> {
+        Ok(parse::parse_list_tokens(tokens, self.api))
     }
 }
 

@@ -1,31 +1,22 @@
 use yozora_ast::{Position, CODE_TYPE};
-use yozora_character::{AsciiCodePoint, VirtualCodePoint};
 use yozora_core_tokenizer::{
-    calc_end_point, calc_start_point, BlockToken, EatContinuationTextResult, EatOpenerResult,
-    PhrasingContentLine,
+    calc_end_point, calc_start_point, eat_indentation, BlockToken, EatContinuationTextResult,
+    EatOpenerResult, PhrasingContentLine,
 };
 
-use crate::parse::IndentedCodeTokenData;
+use crate::types::IndentedCodeTokenData;
 
 pub(crate) fn eat_opener(line: &PhrasingContentLine) -> Option<EatOpenerResult> {
-    if line.count_of_precede_spaces < 4 {
+    if line.indent_width < 4 {
         return None;
     }
 
-    let mut first_index = line.start_index + 4;
-    if line.start_index + 3 < line.node_points.len()
-        && line.node_points[line.start_index].code_point == AsciiCodePoint::SPACE as i32
-        && line.node_points[line.start_index + 3].code_point == VirtualCodePoint::Space as i32
-    {
-        let mut i = line.start_index + 1;
-        while i < line.first_non_whitespace_index {
-            if line.node_points[i].code_point == VirtualCodePoint::Space as i32 {
-                break;
-            }
-            i += 1;
-        }
-        first_index = i + 4;
-    }
+    let first_index = eat_indentation(
+        line.node_points.as_ref(),
+        line.start_index,
+        line.first_non_whitespace_index,
+        4,
+    )?;
 
     let token =
         BlockToken::new("", CODE_TYPE, calc_line_position(line)).with_data(IndentedCodeTokenData {
@@ -56,11 +47,23 @@ pub(crate) fn eat_continuation_text(
         return EatContinuationTextResult::NotMatched;
     };
 
-    if line.count_of_precede_spaces < 4 && line.first_non_whitespace_index < line.end_index {
+    if line.indent_width < 4 && line.first_non_whitespace_index < line.end_index {
         return EatContinuationTextResult::NotMatched;
     }
 
-    let first_index = std::cmp::min(line.end_index.saturating_sub(1), line.start_index + 4);
+    let first_index = if line.first_non_whitespace_index < line.end_index {
+        let Some(first_index) = eat_indentation(
+            line.node_points.as_ref(),
+            line.start_index,
+            line.first_non_whitespace_index,
+            4,
+        ) else {
+            return EatContinuationTextResult::NotMatched;
+        };
+        first_index
+    } else {
+        std::cmp::min(line.end_index.saturating_sub(1), line.start_index + 4)
+    };
     let mut lines = data.lines;
     lines.push(PhrasingContentLine {
         node_points: line.node_points.clone(),

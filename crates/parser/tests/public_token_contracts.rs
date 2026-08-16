@@ -181,6 +181,201 @@ fn tokenizer_specific_token_fields_are_public() {
 }
 
 #[test]
+fn block_match_factories_return_concrete_hooks() {
+    fn assert_contract(api: &dyn yozora_core_tokenizer::MatchBlockPhaseApi) {
+        let tokenizer = yozora_tokenizer_admonition::AdmonitionTokenizer::default();
+        let _: yozora_tokenizer_admonition::AdmonitionMatchHook<'_> =
+            yozora_tokenizer_admonition::admonition_match(&tokenizer, api);
+
+        let tokenizer = yozora_tokenizer_blockquote::BlockquoteTokenizer::default();
+        let _: yozora_tokenizer_blockquote::BlockquoteMatchHook =
+            yozora_tokenizer_blockquote::blockquote_match(&tokenizer, api);
+
+        let tokenizer = yozora_tokenizer_definition::DefinitionTokenizer::default();
+        let _: yozora_tokenizer_definition::DefinitionMatchHook<'_> =
+            yozora_tokenizer_definition::definition_match(&tokenizer, api);
+
+        let tokenizer = yozora_tokenizer_ecma_import::EcmaImportTokenizer::default();
+        let _: yozora_tokenizer_ecma_import::EcmaImportMatchHook =
+            yozora_tokenizer_ecma_import::ecma_import_match(&tokenizer, api);
+
+        let tokenizer = yozora_tokenizer_fenced_code::FencedCodeTokenizer::default();
+        let _: yozora_tokenizer_fenced_code::FencedCodeMatchHook =
+            yozora_tokenizer_fenced_code::fenced_code_match(&tokenizer, api);
+
+        let tokenizer =
+            yozora_tokenizer_footnote_definition::FootnoteDefinitionTokenizer::default();
+        let _: yozora_tokenizer_footnote_definition::FootnoteDefinitionMatchHook<'_> =
+            yozora_tokenizer_footnote_definition::footnote_definition_match(&tokenizer, api);
+
+        let tokenizer = yozora_tokenizer_heading::HeadingTokenizer::default();
+        let _: yozora_tokenizer_heading::HeadingMatchHook =
+            yozora_tokenizer_heading::heading_match(&tokenizer, api);
+
+        let tokenizer = yozora_tokenizer_html_block::HtmlBlockTokenizer::default();
+        let _: yozora_tokenizer_html_block::HtmlBlockMatchHook =
+            yozora_tokenizer_html_block::html_block_match(&tokenizer, api);
+
+        let tokenizer = yozora_tokenizer_indented_code::IndentedCodeTokenizer::default();
+        let _: yozora_tokenizer_indented_code::IndentedCodeMatchHook =
+            yozora_tokenizer_indented_code::indented_code_match(&tokenizer, api);
+
+        let tokenizer = yozora_tokenizer_math::MathTokenizer::default();
+        let _: yozora_tokenizer_math::MathMatchHook =
+            yozora_tokenizer_math::math_match(&tokenizer, api);
+
+        let tokenizer = yozora_tokenizer_paragraph::ParagraphTokenizer::default();
+        let _: yozora_tokenizer_paragraph::ParagraphMatchHook =
+            yozora_tokenizer_paragraph::paragraph_match(&tokenizer, api);
+
+        let tokenizer = yozora_tokenizer_setext_heading::SetextHeadingTokenizer::default();
+        let _: yozora_tokenizer_setext_heading::SetextHeadingMatchHook<'_> =
+            yozora_tokenizer_setext_heading::setext_heading_match(&tokenizer, api);
+
+        let tokenizer = yozora_tokenizer_table::TableTokenizer::default();
+        let _: yozora_tokenizer_table::TableMatchHook<'_> =
+            yozora_tokenizer_table::table_match(&tokenizer, api);
+
+        let tokenizer = yozora_tokenizer_thematic_break::ThematicBreakTokenizer::default();
+        let _: yozora_tokenizer_thematic_break::ThematicBreakMatchHook =
+            yozora_tokenizer_thematic_break::thematic_break_match(&tokenizer, api);
+    }
+
+    let _ = assert_contract;
+}
+
+#[test]
+fn inline_parse_factories_return_concrete_hooks() {
+    fn assert_contract(api: &dyn yozora_core_tokenizer::ParseInlinePhaseApi) {
+        let tokenizer = yozora_tokenizer_autolink::AutolinkTokenizer::default();
+        let _: yozora_tokenizer_autolink::AutolinkParseHook<'_> =
+            yozora_tokenizer_autolink::autolink_parse(&tokenizer, api);
+
+        let tokenizer = yozora_tokenizer_autolink_extension::AutolinkExtensionTokenizer::default();
+        let _: yozora_tokenizer_autolink_extension::AutolinkExtensionParseHook<'_> =
+            yozora_tokenizer_autolink_extension::autolink_extension_parse(&tokenizer, api);
+
+        let tokenizer = yozora_tokenizer_break::BreakTokenizer::default();
+        let _: yozora_tokenizer_break::BreakParseHook<'_> =
+            yozora_tokenizer_break::break_parse(&tokenizer, api);
+
+        let tokenizer = yozora_tokenizer_delete::DeleteTokenizer::default();
+        let _: yozora_tokenizer_delete::DeleteParseHook<'_> =
+            yozora_tokenizer_delete::delete_parse(&tokenizer, api);
+
+        let tokenizer = yozora_tokenizer_emphasis::EmphasisTokenizer::default();
+        let _: yozora_tokenizer_emphasis::EmphasisParseHook<'_> =
+            yozora_tokenizer_emphasis::emphasis_parse(&tokenizer, api);
+
+        let tokenizer = yozora_tokenizer_footnote::FootnoteTokenizer::default();
+        let _: yozora_tokenizer_footnote::FootnoteParseHook<'_> =
+            yozora_tokenizer_footnote::footnote_parse(&tokenizer, api);
+
+        let tokenizer = yozora_tokenizer_footnote_reference::FootnoteReferenceTokenizer::default();
+        let _: yozora_tokenizer_footnote_reference::FootnoteReferenceParseHook<'_> =
+            yozora_tokenizer_footnote_reference::footnote_reference_parse(&tokenizer, api);
+
+        let tokenizer = yozora_tokenizer_html_inline::HtmlInlineTokenizer::default();
+        let _: yozora_tokenizer_html_inline::HtmlInlineParseHook<'_> =
+            yozora_tokenizer_html_inline::html_inline_parse(&tokenizer, api);
+
+        let tokenizer = yozora_tokenizer_image::ImageTokenizer::default();
+        let _: yozora_tokenizer_image::ImageParseHook<'_> =
+            yozora_tokenizer_image::image_parse(&tokenizer, api);
+
+        let tokenizer = yozora_tokenizer_image_reference::ImageReferenceTokenizer::default();
+        let _: yozora_tokenizer_image_reference::ImageReferenceParseHook<'_> =
+            yozora_tokenizer_image_reference::image_reference_parse(&tokenizer, api);
+
+        let tokenizer = yozora_tokenizer_inline_code::InlineCodeTokenizer::default();
+        let _: yozora_tokenizer_inline_code::InlineCodeParseHook<'_> =
+            yozora_tokenizer_inline_code::inline_code_parse(&tokenizer, api);
+
+        let tokenizer = yozora_tokenizer_inline_math::InlineMathTokenizer::default();
+        let _: yozora_tokenizer_inline_math::InlineMathParseHook<'_> =
+            yozora_tokenizer_inline_math::inline_math_parse(&tokenizer, api);
+
+        let tokenizer = yozora_tokenizer_link::LinkTokenizer::default();
+        let _: yozora_tokenizer_link::LinkParseHook<'_> =
+            yozora_tokenizer_link::link_parse(&tokenizer, api);
+
+        let tokenizer = yozora_tokenizer_link_reference::LinkReferenceTokenizer::default();
+        let _: yozora_tokenizer_link_reference::LinkReferenceParseHook<'_> =
+            yozora_tokenizer_link_reference::link_reference_parse(&tokenizer, api);
+
+        let tokenizer = yozora_tokenizer_text::TextTokenizer::default();
+        let _: yozora_tokenizer_text::TextParseHook<'_> =
+            yozora_tokenizer_text::text_parse(&tokenizer, api);
+    }
+
+    let _ = assert_contract;
+}
+
+#[test]
+fn block_parse_factories_return_concrete_hooks() {
+    fn assert_contract(api: &dyn yozora_core_tokenizer::ParseBlockPhaseApi) {
+        let tokenizer = yozora_tokenizer_admonition::AdmonitionTokenizer::default();
+        let _: yozora_tokenizer_admonition::AdmonitionParseHook<'_> =
+            yozora_tokenizer_admonition::admonition_parse(&tokenizer, api);
+
+        let tokenizer = yozora_tokenizer_blockquote::BlockquoteTokenizer::default();
+        let _: yozora_tokenizer_blockquote::BlockquoteParseHook<'_> =
+            yozora_tokenizer_blockquote::blockquote_parse(&tokenizer, api);
+
+        let tokenizer = yozora_tokenizer_definition::DefinitionTokenizer::default();
+        let _: yozora_tokenizer_definition::DefinitionParseHook<'_> =
+            yozora_tokenizer_definition::definition_parse(&tokenizer, api);
+
+        let tokenizer = yozora_tokenizer_ecma_import::EcmaImportTokenizer::default();
+        let _: yozora_tokenizer_ecma_import::EcmaImportParseHook<'_> =
+            yozora_tokenizer_ecma_import::ecma_import_parse(&tokenizer, api);
+
+        let tokenizer = yozora_tokenizer_fenced_code::FencedCodeTokenizer::default();
+        let _: yozora_tokenizer_fenced_code::FencedCodeParseHook<'_> =
+            yozora_tokenizer_fenced_code::fenced_code_parse(&tokenizer, api);
+
+        let tokenizer =
+            yozora_tokenizer_footnote_definition::FootnoteDefinitionTokenizer::default();
+        let _: yozora_tokenizer_footnote_definition::FootnoteDefinitionParseHook<'_> =
+            yozora_tokenizer_footnote_definition::footnote_definition_parse(&tokenizer, api);
+
+        let tokenizer = yozora_tokenizer_heading::HeadingTokenizer::default();
+        let _: yozora_tokenizer_heading::HeadingParseHook<'_> =
+            yozora_tokenizer_heading::heading_parse(&tokenizer, api);
+
+        let tokenizer = yozora_tokenizer_html_block::HtmlBlockTokenizer::default();
+        let _: yozora_tokenizer_html_block::HtmlBlockParseHook<'_> =
+            yozora_tokenizer_html_block::html_block_parse(&tokenizer, api);
+
+        let tokenizer = yozora_tokenizer_indented_code::IndentedCodeTokenizer::default();
+        let _: yozora_tokenizer_indented_code::IndentedCodeParseHook<'_> =
+            yozora_tokenizer_indented_code::indented_code_parse(&tokenizer, api);
+
+        let tokenizer = yozora_tokenizer_math::MathTokenizer::default();
+        let _: yozora_tokenizer_math::MathParseHook<'_> =
+            yozora_tokenizer_math::math_parse(&tokenizer, api);
+
+        let tokenizer = yozora_tokenizer_paragraph::ParagraphTokenizer::default();
+        let _: yozora_tokenizer_paragraph::ParagraphParseHook<'_> =
+            yozora_tokenizer_paragraph::paragraph_parse(&tokenizer, api);
+
+        let tokenizer = yozora_tokenizer_setext_heading::SetextHeadingTokenizer::default();
+        let _: yozora_tokenizer_setext_heading::SetextHeadingParseHook<'_> =
+            yozora_tokenizer_setext_heading::setext_heading_parse(&tokenizer, api);
+
+        let tokenizer = yozora_tokenizer_table::TableTokenizer::default();
+        let _: yozora_tokenizer_table::TableParseHook<'_> =
+            yozora_tokenizer_table::table_parse(&tokenizer, api);
+
+        let tokenizer = yozora_tokenizer_thematic_break::ThematicBreakTokenizer::default();
+        let _: yozora_tokenizer_thematic_break::ThematicBreakParseHook<'_> =
+            yozora_tokenizer_thematic_break::thematic_break_parse(&tokenizer, api);
+    }
+
+    let _ = assert_contract;
+}
+
+#[test]
 fn tokenizer_public_readonly_fields_are_visible() {
     let list = yozora_tokenizer_list::ListTokenizer::default();
     assert!(!list.enable_task_list_item);

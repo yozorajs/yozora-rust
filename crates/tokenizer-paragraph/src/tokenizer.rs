@@ -1,9 +1,7 @@
-use yozora_ast::Node;
 use yozora_core_tokenizer::*;
 
+use crate::types::PARAGRAPH_TOKENIZER_NAME;
 use crate::{parse, r#match};
-
-pub const PARAGRAPH_TOKENIZER_NAME: &str = "@yozora/tokenizer-paragraph";
 
 #[derive(Debug, Clone)]
 pub struct ParagraphTokenizer {
@@ -44,7 +42,14 @@ impl Tokenizer for ParagraphTokenizer {
     }
 }
 
-struct ParagraphMatchHook;
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ParagraphMatchHook;
+
+impl ParagraphMatchHook {
+    pub fn new() -> Self {
+        Self
+    }
+}
 
 impl MatchBlockHook for ParagraphMatchHook {
     fn is_containing_block(&self) -> bool {
@@ -78,23 +83,29 @@ impl MatchBlockHook for ParagraphMatchHook {
     }
 }
 
-struct ParagraphParseHook<'a> {
+pub struct ParagraphParseHook<'a> {
     api: &'a dyn ParseBlockPhaseApi,
 }
 
+impl<'a> ParagraphParseHook<'a> {
+    pub fn new(api: &'a dyn ParseBlockPhaseApi) -> Self {
+        Self { api }
+    }
+}
+
 impl ParseBlockHook for ParagraphParseHook<'_> {
-    fn parse(&self, tokens: &[BlockToken]) -> Vec<Node> {
-        parse::parse_paragraph_tokens(tokens, self.api)
+    fn parse<'a>(&'a self, tokens: &'a [BlockToken]) -> ParseBlockResult<ParseBlockHookResult<'a>> {
+        Ok(parse::parse_paragraph_tokens(tokens, self.api).into())
     }
 }
 
 impl BlockTokenizer for ParagraphTokenizer {
     fn r#match<'a>(&'a self, _api: &'a dyn MatchBlockPhaseApi) -> Box<dyn MatchBlockHook + 'a> {
-        Box::new(ParagraphMatchHook)
+        Box::new(ParagraphMatchHook::new())
     }
 
     fn parse<'a>(&'a self, api: &'a dyn ParseBlockPhaseApi) -> Box<dyn ParseBlockHook + 'a> {
-        Box::new(ParagraphParseHook { api })
+        Box::new(ParagraphParseHook::new(api))
     }
 
     fn extract_phrasing_content_lines(
@@ -118,7 +129,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use yozora_ast::{Text, PARAGRAPH_TYPE};
+    use yozora_ast::{Node, Text, PARAGRAPH_TYPE};
     use yozora_character::{calc_string_from_node_points, create_node_point_generator, NodePoint};
 
     struct DummyBlockApi;
@@ -137,10 +148,6 @@ mod tests {
                 position: None,
                 value: calc_string_from_node_points(node_points, 0, node_points.len(), false),
             })]
-        }
-
-        fn parse_block_tokens(&self, _tokens: Option<&[BlockToken]>) -> Vec<Node> {
-            Vec::new()
         }
     }
 
@@ -167,7 +174,10 @@ mod tests {
             .expect("expected block token");
 
         let parse_hook = tokenizer.parse(&api);
-        let nodes = parse_hook.parse(&[token]);
+        let tokens = [token];
+        let ParseBlockHookResult::Nodes(nodes) = parse_hook.parse(&tokens).unwrap() else {
+            panic!("expected synchronous paragraph parse result");
+        };
         assert_eq!(nodes.len(), 1);
         let Node::Paragraph(paragraph) = &nodes[0] else {
             panic!("expected paragraph node");

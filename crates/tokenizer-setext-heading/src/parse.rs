@@ -2,7 +2,7 @@ use yozora_ast::{Heading, Node};
 use yozora_character::AsciiCodePoint;
 use yozora_core_tokenizer::{merge_and_strip_content_lines, BlockToken, ParseBlockPhaseApi};
 
-use crate::r#match::SetextHeadingTokenData;
+use crate::types::SetextHeadingTokenData;
 
 pub(crate) fn parse_setext_heading_tokens(
     tokens: &[BlockToken],

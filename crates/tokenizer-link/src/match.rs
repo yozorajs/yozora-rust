@@ -1,23 +1,9 @@
 use yozora_ast::LINK_TYPE;
-use yozora_character::{calc_escaped_string_from_node_points, AsciiCodePoint, NodePoint};
-use yozora_core_tokenizer::{
-    eat_optional_whitespaces, DelimiterType, InlineToken, NodeInterval, TokenDelimiter,
-};
+use yozora_character::{AsciiCodePoint, NodePoint};
+use yozora_core_tokenizer::{eat_optional_whitespaces, DelimiterType, InlineToken, NodeInterval};
 
-use crate::parse::LinkTokenData;
+use crate::types::{LinkDelimiter, LinkTokenData};
 use crate::util::{eat_link_destination, eat_link_title};
-
-#[derive(Debug, Clone)]
-pub(crate) struct LinkDelimiterData {
-    pub destination_content: Option<NodeInterval>,
-    pub title_content: Option<NodeInterval>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct DelimiterEntry {
-    pub delimiter: TokenDelimiter,
-    pub data: Option<LinkDelimiterData>,
-}
 
 pub(crate) fn find_link_delimiter_entry(
     node_points: &[NodePoint],
@@ -25,7 +11,7 @@ pub(crate) fn find_link_delimiter_entry(
     block_end_index: usize,
     start_index: usize,
     end_index: usize,
-) -> Option<DelimiterEntry> {
+) -> Option<LinkDelimiter> {
     let mut i = start_index;
 
     while i < end_index {
@@ -46,10 +32,13 @@ pub(crate) fn find_link_delimiter_entry(
                 continue;
             }
 
-            return Some(DelimiterEntry {
-                delimiter: create_delimiter(DelimiterType::Opener, i, i + 1),
-                data: None,
-            });
+            return Some(create_delimiter(
+                DelimiterType::Opener,
+                i,
+                i + 1,
+                None,
+                None,
+            ));
         }
 
         if code_point == AsciiCodePoint::CLOSE_BRACKET as i32
@@ -83,20 +72,19 @@ pub(crate) fn find_link_delimiter_entry(
                 continue;
             }
 
-            return Some(DelimiterEntry {
-                delimiter: create_delimiter(DelimiterType::Closer, i, absolute_end),
-                data: Some(LinkDelimiterData {
-                    destination_content: (destination_start_index < destination_end_index)
-                        .then_some(NodeInterval {
-                            start_index: destination_start_index,
-                            end_index: destination_end_index,
-                        }),
-                    title_content: (title_start_index < title_end_index).then_some(NodeInterval {
-                        start_index: title_start_index,
-                        end_index: title_end_index,
-                    }),
+            return Some(create_delimiter(
+                DelimiterType::Closer,
+                i,
+                absolute_end,
+                (destination_start_index < destination_end_index).then_some(NodeInterval {
+                    start_index: destination_start_index,
+                    end_index: destination_end_index,
                 }),
-            });
+                (title_start_index < title_end_index).then_some(NodeInterval {
+                    start_index: title_start_index,
+                    end_index: title_end_index,
+                }),
+            ));
         }
 
         i += 1;
@@ -106,88 +94,20 @@ pub(crate) fn find_link_delimiter_entry(
 }
 
 pub(crate) fn create_link_token(
-    node_points: &[NodePoint],
-    opener_delimiter: &TokenDelimiter,
-    closer_delimiter: &TokenDelimiter,
-    data: LinkDelimiterData,
+    opener_delimiter: &LinkDelimiter,
+    closer_delimiter: &LinkDelimiter,
     children_tokens: Vec<InlineToken>,
 ) -> InlineToken {
-    let label = calc_escaped_string_from_node_points(
-        node_points,
-        opener_delimiter.end_index,
-        closer_delimiter.start_index,
-        false,
-    );
-
-    let token_children = children_tokens.clone();
     InlineToken::new(
         "",
         LINK_TYPE,
         (opener_delimiter.start_index, closer_delimiter.end_index),
     )
-    .with_children(token_children)
+    .with_children(children_tokens)
     .with_data(LinkTokenData {
-        destination_content: data.destination_content,
-        title_content: data.title_content,
-        label,
+        destination_content: closer_delimiter.destination_content,
+        title_content: closer_delimiter.title_content,
     })
-}
-
-pub(crate) fn check_balanced_brackets_status(
-    start_index: usize,
-    end_index: usize,
-    internal_tokens: &[InlineToken],
-    node_points: &[NodePoint],
-) -> i8 {
-    let mut i = start_index;
-    let mut bracket_count = 0i32;
-
-    let update = |idx: usize, count: &mut i32, i_ref: &mut usize| match node_points[idx].code_point
-    {
-        x if x == AsciiCodePoint::BACKSLASH as i32 => {
-            *i_ref += 1;
-        }
-        x if x == AsciiCodePoint::OPEN_BRACKET as i32 => {
-            *count += 1;
-        }
-        x if x == AsciiCodePoint::CLOSE_BRACKET as i32 => {
-            *count -= 1;
-        }
-        _ => {}
-    };
-
-    for token in internal_tokens {
-        if token.start_index < start_index {
-            continue;
-        }
-        if token.end_index > end_index {
-            break;
-        }
-
-        while i < token.start_index {
-            update(i, &mut bracket_count, &mut i);
-            if bracket_count < 0 {
-                return -1;
-            }
-            i += 1;
-        }
-
-        i = token.end_index;
-    }
-
-    while i < end_index {
-        update(i, &mut bracket_count, &mut i);
-        if bracket_count < 0 {
-            return -1;
-        }
-        i += 1;
-    }
-
-    if bracket_count > 0 {
-        1
-    } else {
-        0
-    }
 }
 
 pub(crate) fn is_escaped_node_points(
@@ -217,12 +137,16 @@ fn create_delimiter(
     delimiter_type: DelimiterType,
     start_index: usize,
     end_index: usize,
-) -> TokenDelimiter {
-    TokenDelimiter {
+    destination_content: Option<NodeInterval>,
+    title_content: Option<NodeInterval>,
+) -> LinkDelimiter {
+    LinkDelimiter {
         delimiter_type,
         start_index,
         end_index,
         thickness: end_index.saturating_sub(start_index),
         original_thickness: end_index.saturating_sub(start_index),
+        destination_content,
+        title_content,
     }
 }

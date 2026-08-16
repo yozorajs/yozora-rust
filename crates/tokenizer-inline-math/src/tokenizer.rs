@@ -2,35 +2,19 @@ use yozora_ast::Node;
 use yozora_core_tokenizer::*;
 
 #[cfg(test)]
+use crate::types::InlineMathTokenData;
+#[cfg(test)]
 use yozora_ast::INLINE_MATH_TYPE;
 #[cfg(test)]
 use yozora_character::NodePoint;
 #[cfg(test)]
 use yozora_core_tokenizer::NodeInterval;
 
-use crate::{parse, r#match};
-
-pub const INLINE_MATH_TOKENIZER_NAME: &str = "@yozora/tokenizer-inline-math";
-pub const INLINE_MATH_WITH_BACKTICK_TOKENIZER_NAME: &str =
-    "@yozora/tokenizer-inline-math_with_backtick";
-pub const INLINE_MATH_TOKENIZER_NAME_WITH_BACKTICK: &str = INLINE_MATH_WITH_BACKTICK_TOKENIZER_NAME;
-
-#[derive(Debug, Clone)]
-pub struct InlineMathTokenizerOptions {
-    pub name: Option<String>,
-    pub priority: Option<i32>,
-    pub backtick_required: bool,
-}
-
-impl Default for InlineMathTokenizerOptions {
-    fn default() -> Self {
-        Self {
-            name: None,
-            priority: None,
-            backtick_required: true,
-        }
-    }
-}
+use crate::types::{
+    InlineMathDelimiter, InlineMathTokenizerOptions, INLINE_MATH_TOKENIZER_NAME,
+    INLINE_MATH_WITH_BACKTICK_TOKENIZER_NAME,
+};
+use crate::{match_with_backtick as backtick_match, parse, r#match};
 
 #[derive(Debug, Clone)]
 pub struct InlineMathTokenizer {
@@ -83,38 +67,110 @@ impl Tokenizer for InlineMathTokenizer {
     }
 }
 
-struct InlineMathBacktickMatchHook<'a> {
+pub struct InlineMathBacktickDelimiterGenerator {
+    finder: backtick_match::InlineMathBacktickDelimiterFinder,
+}
+
+impl InlineMathBacktickDelimiterGenerator {
+    pub fn next(&mut self, range_index: (usize, usize)) -> Option<InlineMathDelimiter> {
+        self.finder.find_next_delimiter(range_index.0)
+    }
+}
+
+pub struct InlineMathPlainDelimiterGenerator<'a> {
     api: &'a dyn MatchInlinePhaseApi,
 }
 
-pub(crate) fn match_with_backtick<'a>(
+impl InlineMathPlainDelimiterGenerator<'_> {
+    pub fn next(&mut self, range_index: (usize, usize)) -> Option<InlineMathDelimiter> {
+        r#match::find_delimiter(self.api, range_index.0, range_index.1)
+    }
+}
+
+pub enum InlineMathDelimiterGenerator<'a> {
+    Backtick(InlineMathBacktickDelimiterGenerator),
+    Plain(InlineMathPlainDelimiterGenerator<'a>),
+}
+
+impl InlineMathDelimiterGenerator<'_> {
+    pub fn next(&mut self, range_index: (usize, usize)) -> Option<InlineMathDelimiter> {
+        match self {
+            Self::Backtick(finder) => finder.next(range_index),
+            Self::Plain(finder) => finder.next(range_index),
+        }
+    }
+}
+
+pub struct InlineMathBacktickMatchHook<'a> {
     api: &'a dyn MatchInlinePhaseApi,
-) -> Box<dyn MatchInlineHook<'a> + 'a> {
-    Box::new(InlineMathBacktickMatchHook { api })
+}
+
+impl<'a> InlineMathBacktickMatchHook<'a> {
+    pub fn new(api: &'a dyn MatchInlinePhaseApi) -> Self {
+        Self { api }
+    }
+
+    pub fn find_delimiter(&self) -> InlineMathBacktickDelimiterGenerator {
+        InlineMathBacktickDelimiterGenerator {
+            finder: backtick_match::InlineMathBacktickDelimiterFinder::new(self.api),
+        }
+    }
+
+    pub fn process_single_delimiter(&self, delimiter: &InlineMathDelimiter) -> Vec<InlineToken> {
+        backtick_match::process_single_delimiter(delimiter)
+    }
 }
 
 impl<'a> MatchInlineHook<'a> for InlineMathBacktickMatchHook<'a> {
     fn find_delimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
-        let mut delimiter_finder = r#match::InlineMathBacktickDelimiterFinder::new(self.api);
+        let mut finder = InlineMathBacktickMatchHook::find_delimiter(self);
         Box::new(gen_find_delimiter(move |start_index, _end_index| {
-            delimiter_finder.find_next_delimiter(start_index)
+            finder.next((start_index, _end_index))
         }))
     }
 
     fn process_single_delimiter(&self, delimiter: &TokenDelimiter) -> Vec<InlineToken> {
-        r#match::process_single_delimiter(delimiter)
+        InlineMathBacktickMatchHook::process_single_delimiter(self, delimiter)
     }
 }
 
-struct InlineMathPlainMatchHook<'a> {
+pub struct InlineMathPlainMatchHook<'a> {
     api: &'a dyn MatchInlinePhaseApi,
+}
+
+impl<'a> InlineMathPlainMatchHook<'a> {
+    pub fn new(api: &'a dyn MatchInlinePhaseApi) -> Self {
+        Self { api }
+    }
+
+    pub fn find_delimiter(&self) -> InlineMathPlainDelimiterGenerator<'a> {
+        InlineMathPlainDelimiterGenerator { api: self.api }
+    }
+
+    pub fn is_delimiter_pair(
+        &self,
+        opener_delimiter: &InlineMathDelimiter,
+        closer_delimiter: &InlineMathDelimiter,
+        _internal_tokens: &[InlineToken],
+    ) -> IsDelimiterPairResult {
+        r#match::is_delimiter_pair(opener_delimiter, closer_delimiter)
+    }
+
+    pub fn process_delimiter_pair(
+        &self,
+        opener_delimiter: &InlineMathDelimiter,
+        closer_delimiter: &InlineMathDelimiter,
+        _internal_tokens: &[InlineToken],
+    ) -> ProcessDelimiterPairResult {
+        r#match::process_delimiter_pair(opener_delimiter, closer_delimiter)
+    }
 }
 
 impl<'a> MatchInlineHook<'a> for InlineMathPlainMatchHook<'a> {
     fn find_delimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
-        let api = self.api;
+        let mut finder = InlineMathPlainMatchHook::find_delimiter(self);
         Box::new(gen_find_delimiter(move |start_index, end_index| {
-            r#match::find_delimiter(api, start_index, end_index)
+            finder.next((start_index, end_index))
         }))
     }
 
@@ -122,23 +178,147 @@ impl<'a> MatchInlineHook<'a> for InlineMathPlainMatchHook<'a> {
         &self,
         opener_delimiter: &TokenDelimiter,
         closer_delimiter: &TokenDelimiter,
-        _internal_tokens: &[InlineToken],
+        internal_tokens: &[InlineToken],
     ) -> IsDelimiterPairResult {
-        r#match::is_delimiter_pair(opener_delimiter, closer_delimiter)
+        InlineMathPlainMatchHook::is_delimiter_pair(
+            self,
+            opener_delimiter,
+            closer_delimiter,
+            internal_tokens,
+        )
     }
 
     fn process_delimiter_pair(
         &self,
         opener_delimiter: &TokenDelimiter,
         closer_delimiter: &TokenDelimiter,
-        _internal_tokens: &[InlineToken],
+        internal_tokens: &[InlineToken],
     ) -> ProcessDelimiterPairResult {
-        r#match::process_delimiter_pair(opener_delimiter, closer_delimiter)
+        InlineMathPlainMatchHook::process_delimiter_pair(
+            self,
+            opener_delimiter,
+            closer_delimiter,
+            internal_tokens,
+        )
     }
 }
 
-struct InlineMathParseHook<'a> {
+pub enum InlineMathMatchHook<'a> {
+    Backtick(InlineMathBacktickMatchHook<'a>),
+    Plain(InlineMathPlainMatchHook<'a>),
+}
+
+impl<'a> InlineMathMatchHook<'a> {
+    pub fn new(tokenizer: &InlineMathTokenizer, api: &'a dyn MatchInlinePhaseApi) -> Self {
+        if tokenizer.backtick_required {
+            Self::Backtick(InlineMathBacktickMatchHook::new(api))
+        } else {
+            Self::Plain(InlineMathPlainMatchHook::new(api))
+        }
+    }
+
+    pub fn find_delimiter(&self) -> InlineMathDelimiterGenerator<'a> {
+        match self {
+            Self::Backtick(hook) => InlineMathDelimiterGenerator::Backtick(hook.find_delimiter()),
+            Self::Plain(hook) => InlineMathDelimiterGenerator::Plain(hook.find_delimiter()),
+        }
+    }
+
+    pub fn is_delimiter_pair(
+        &self,
+        opener_delimiter: &InlineMathDelimiter,
+        closer_delimiter: &InlineMathDelimiter,
+        internal_tokens: &[InlineToken],
+    ) -> IsDelimiterPairResult {
+        match self {
+            Self::Backtick(hook) => MatchInlineHook::is_delimiter_pair(
+                hook,
+                opener_delimiter,
+                closer_delimiter,
+                internal_tokens,
+            ),
+            Self::Plain(hook) => {
+                hook.is_delimiter_pair(opener_delimiter, closer_delimiter, internal_tokens)
+            }
+        }
+    }
+
+    pub fn process_delimiter_pair(
+        &self,
+        opener_delimiter: &InlineMathDelimiter,
+        closer_delimiter: &InlineMathDelimiter,
+        internal_tokens: &[InlineToken],
+    ) -> ProcessDelimiterPairResult {
+        match self {
+            Self::Backtick(hook) => MatchInlineHook::process_delimiter_pair(
+                hook,
+                opener_delimiter,
+                closer_delimiter,
+                internal_tokens,
+            ),
+            Self::Plain(hook) => {
+                hook.process_delimiter_pair(opener_delimiter, closer_delimiter, internal_tokens)
+            }
+        }
+    }
+
+    pub fn process_single_delimiter(&self, delimiter: &InlineMathDelimiter) -> Vec<InlineToken> {
+        match self {
+            Self::Backtick(hook) => hook.process_single_delimiter(delimiter),
+            Self::Plain(_) => Vec::new(),
+        }
+    }
+}
+
+impl<'a> MatchInlineHook<'a> for InlineMathMatchHook<'a> {
+    fn find_delimiter(&self) -> Box<dyn FindDelimiterGenerator + 'a> {
+        match self {
+            Self::Backtick(hook) => MatchInlineHook::find_delimiter(hook),
+            Self::Plain(hook) => MatchInlineHook::find_delimiter(hook),
+        }
+    }
+
+    fn is_delimiter_pair(
+        &self,
+        opener_delimiter: &TokenDelimiter,
+        closer_delimiter: &TokenDelimiter,
+        internal_tokens: &[InlineToken],
+    ) -> IsDelimiterPairResult {
+        InlineMathMatchHook::is_delimiter_pair(
+            self,
+            opener_delimiter,
+            closer_delimiter,
+            internal_tokens,
+        )
+    }
+
+    fn process_delimiter_pair(
+        &self,
+        opener_delimiter: &TokenDelimiter,
+        closer_delimiter: &TokenDelimiter,
+        internal_tokens: &[InlineToken],
+    ) -> ProcessDelimiterPairResult {
+        InlineMathMatchHook::process_delimiter_pair(
+            self,
+            opener_delimiter,
+            closer_delimiter,
+            internal_tokens,
+        )
+    }
+
+    fn process_single_delimiter(&self, delimiter: &TokenDelimiter) -> Vec<InlineToken> {
+        InlineMathMatchHook::process_single_delimiter(self, delimiter)
+    }
+}
+
+pub struct InlineMathParseHook<'a> {
     api: &'a dyn ParseInlinePhaseApi,
+}
+
+impl<'a> InlineMathParseHook<'a> {
+    pub fn new(api: &'a dyn ParseInlinePhaseApi) -> Self {
+        Self { api }
+    }
 }
 
 impl ParseInlineHook for InlineMathParseHook<'_> {
@@ -152,15 +332,11 @@ impl InlineTokenizer for InlineMathTokenizer {
         &'a self,
         api: &'a dyn MatchInlinePhaseApi,
     ) -> Box<dyn MatchInlineHook<'a> + 'a> {
-        if self.backtick_required {
-            match_with_backtick(api)
-        } else {
-            Box::new(InlineMathPlainMatchHook { api })
-        }
+        Box::new(InlineMathMatchHook::new(self, api))
     }
 
     fn parse<'a>(&'a self, api: &'a dyn ParseInlinePhaseApi) -> Box<dyn ParseInlineHook + 'a> {
-        Box::new(InlineMathParseHook { api })
+        Box::new(InlineMathParseHook::new(api))
     }
 }
 
@@ -283,7 +459,7 @@ mod tests {
         let parse_hook = tokenizer.parse(&api);
 
         let token = InlineToken::new(INLINE_MATH_TOKENIZER_NAME, INLINE_MATH_TYPE, (0, 3))
-            .with_data(parse::InlineMathTokenData { thickness: 1 });
+            .with_data(InlineMathTokenData { thickness: 1 });
         let nodes = parse_hook.parse(&[token]);
 
         assert_eq!(nodes.len(), 1);

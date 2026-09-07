@@ -5,6 +5,8 @@ use yozora_ast_util::{collect_definitions, collect_footnote_definitions};
 
 use crate::protocol::{DocumentSymbol, FoldingRange, Position, Range};
 
+const MAX_SYMBOL_DEPTH: usize = 32;
+
 struct HeadingSection {
     depth: u8,
     symbol: DocumentSymbol,
@@ -14,9 +16,14 @@ pub fn document_symbols(root: &Root) -> Vec<DocumentSymbol> {
     let mut symbols = Vec::new();
     let mut stack: Vec<HeadingSection> = Vec::new();
     for section in heading_sections(root) {
-        while stack.last().is_some_and(|parent| {
-            parent.depth >= section.depth || parent.symbol.range.end < section.symbol.range.end
-        }) {
+        // Sections already encode heading depth within each block container.
+        // A nested container's heading must not close an enclosing section.
+        // Flatten extreme nesting to fit clients' JSON recursion limits.
+        while stack
+            .last()
+            .is_some_and(|parent| parent.symbol.range.end < section.symbol.range.end)
+            || stack.len() >= MAX_SYMBOL_DEPTH
+        {
             finish_symbol(&mut stack, &mut symbols);
         }
         stack.push(section);
@@ -473,6 +480,46 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn nested_heading_depth_does_not_detach_outer_sections() {
+        for nested in [
+            "> # Nested\n> body\n",
+            "- # Nested\n  body\n",
+            ":::note\n# Nested\nbody\n:::\n",
+            "[^note]:\n    # Nested\n    body\n",
+        ] {
+            let root = parse(&format!("# Top\n\n{nested}\n## Child\nbody\n# Next\n"));
+            let symbols = document_symbols(&root);
+            assert_eq!(symbols.len(), 2, "{nested}");
+            assert_eq!(symbols[0].name, "Top");
+            assert_eq!(symbols[1].name, "Next");
+            let children = &symbols[0].children;
+            assert_eq!(children.len(), 2, "{nested}");
+            assert_eq!(children[0].name, "Nested");
+            assert_eq!(children[1].name, "Child");
+            assert!(children[0].range.end <= children[1].range.start);
+            assert_eq!(children[1].range.end, symbols[0].range.end);
+        }
+    }
+
+    #[test]
+    fn deeply_nested_outlines_fit_client_json_limits_without_losing_headings() {
+        let source: String = (0..100)
+            .map(|depth| format!("{}# Heading {depth}\n", "> ".repeat(depth)))
+            .collect();
+        let symbols = document_symbols(&parse(&source));
+        let encoded = serde_json::to_vec(&symbols).unwrap();
+        serde_json::from_slice::<serde_json::Value>(&encoded)
+            .expect("clients must be able to decode deeply nested outlines");
+        let mut stack: Vec<_> = symbols.iter().collect();
+        let mut count = 0;
+        while let Some(symbol) = stack.pop() {
+            count += 1;
+            stack.extend(symbol.children.iter());
+        }
+        assert_eq!(count, 100);
     }
 
     #[test]

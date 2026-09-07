@@ -32,7 +32,11 @@ vim.lsp.enable('yozora')
   with both incremental edits and full replacements. Positions use UTF-16.
 - `textDocument/documentSymbol`: ATX and setext heading outlines. Clients that
   support hierarchical symbols receive heading sections and selection ranges;
-  other clients receive flat symbols with parent names.
+  other clients receive flat symbols with parent names. Headings inside block
+  containers stay under their enclosing section, regardless of their depth,
+  and do not change the hierarchy of subsequent headings outside the container.
+  Outline nesting is capped at 32 levels for client JSON compatibility; deeper
+  sections are flattened while retaining every heading.
 - `textDocument/foldingRange`: heading sections, code, math, admonitions,
   blockquotes, lists, tables, HTML, and multiline definitions. Heading sections
   end at the next heading of equal or lower depth in the same block container,

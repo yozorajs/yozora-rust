@@ -16,8 +16,8 @@ own SemVer lifecycle independently of the TypeScript reference implementation.
 - `yozora-tokenizer-*`: individual tokenizer crates.
 - `yozora-markup-weaver`: serialize Yozora AST nodes back into Markdown markup.
 - `yozora-lsp`: language server with document sync, heading outlines, folding, hover,
-  reference completion, rename, and document-local navigation.
-  See the [LSP guide](crates/lsp/README.md).
+  reference completion, rename, duplicate-definition diagnostics, and document-local
+  navigation. See the [LSP guide](crates/lsp/README.md).
 
 ## Usage
 

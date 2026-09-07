@@ -72,6 +72,15 @@ vim.lsp.enable('yozora')
   Existing multiline labels are supported; the new name must be a valid single-line
   Markdown label spelling, at most 999 characters, without surrounding whitespace.
   Required escapes are part of the spelling, for example `A\]B`.
+- `textDocument/publishDiagnostics`: warnings for duplicate link and footnote
+  definitions, following the same identifier normalization and declaration scope
+  as navigation. The first definition remains active; later declarations produce
+  `duplicate-link-definition` or `duplicate-footnote-definition`. Locations use
+  the parser's definition ranges. Clients supporting `relatedInformation` receive
+  a location pointing to the active definition; clients supporting `versionSupport`
+  receive the document version. Up to 1,000 warnings are published in source order.
+  Publications are debounced by 150 ms per document, so intermediate edit versions
+  can be skipped during continuous typing.
 
 Queries operate on open buffers, including unsaved documents. Navigation to
 direct URLs, heading anchors, cross-file indexing, and formatting are outside
@@ -81,8 +90,17 @@ references remain ordinary text, following the parser's fallback behavior.
 ## Implementation contracts
 
 The server owns each document's text, version, line index, and cached AST. Edits
-are processed serially and each batch is applied atomically. ASTs are parsed in
-full on the first query after a change, so consecutive edits can share one parse.
+are processed serially and each batch is applied atomically. Opening a document
+or accepting a change schedules diagnostics with a 150 ms delay. Further edits to
+that document reset its deadline. Queries do not wait for the deadline: they parse
+the latest synchronized text on demand. Queries and diagnostics reuse the same AST
+until the next edit invalidates it.
+
+The message loop checks deadlines both while idle and after each incoming message,
+analyzing at most one due document before checking input again. Editing one buffer
+does not reset another buffer's deadline. Full parsing still runs synchronously on
+the server thread; debounce reduces repeated work during edit bursts, while a parse
+already in progress can still delay subsequent messages.
 
 Definition, hover, and reference queries share identifier resolution and the
 first-definition-wins rule. Analysis only reads the AST; the parser has no
@@ -106,6 +124,11 @@ the document size limit are rejected as a whole.
 Versions must increase within an open session. Stale changes are ignored. An
 invalid newer edit leaves the previous text intact but suspends queries with
 `ContentModified` until a full replacement or reopening restores synchronization.
+An invalid newer edit cancels scheduled diagnostics and clears the previous results
+immediately. Restoring synchronization schedules fresh diagnostics. Stale changes
+neither publish diagnostics nor reset an existing deadline. Closing a document
+cancels its scheduled work, releases its state, and immediately publishes an empty
+diagnostic list without a version. Shutdown discards all scheduled work.
 Once a notification identifies an open document and a newer version, an undecodable
 or missing edit batch also suspends synchronization. Invalid document metadata is
 rejected before changing document state.
@@ -114,6 +137,11 @@ The stdio transport uses the existing `serde` and `serde_json` dependencies. It
 supports the advertised LSP subset and the initialize/shutdown/exit lifecycle.
 Stdout carries framed JSON-RPC messages; errors are written to stderr. Frames
 and documents are limited to 16 MiB, and headers to 8 KiB.
+A dedicated blocking reader forwards input through a channel holding at most one
+queued frame. This lets diagnostic timers run even while stdin is idle or a frame
+is incomplete. Document state, analysis, and all stdout writes remain on the server
+thread. The reader has process lifetime and is not joined on exit, so shutdown does
+not depend on the client closing stdin. Input errors propagate to the server loop.
 
 ## Validation
 
@@ -126,3 +154,7 @@ cargo test --workspace
 
 The integration tests launch the binary and communicate over pipes, exercising
 framing, lifecycle, client capabilities, Unicode edits, and live document queries.
+They also check diagnostic publications on open, edit, resynchronization, and close,
+including notifications interleaved with responses, coalesced edits, and incomplete
+input frames. Scheduling tests use explicit timestamps to verify deadlines without
+wall-clock sleeps.

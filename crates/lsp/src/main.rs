@@ -1,5 +1,6 @@
 mod analysis;
 mod completion;
+mod diagnostics;
 mod document;
 mod protocol;
 mod rename;
@@ -30,7 +31,7 @@ fn main() -> ExitCode {
         }
     }
 
-    match server::run(io::stdin().lock(), io::stdout().lock()) {
+    match server::run(io::BufReader::new(io::stdin()), io::stdout().lock()) {
         Ok(status) => status,
         Err(error) => {
             eprintln!("yozora-lsp: {error}");

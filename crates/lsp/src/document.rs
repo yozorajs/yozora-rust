@@ -24,6 +24,10 @@ pub struct Snapshot<'a> {
 }
 
 impl Document {
+    pub fn version(&self) -> i32 {
+        self.version
+    }
+
     pub fn new(version: i32, text: String) -> Result<Self, ResponseError> {
         check_size(text.len())?;
         Ok(Self {
@@ -348,6 +352,7 @@ mod tests {
         assert!(document.invalidate(1).is_err());
         assert!(document.ast.is_some());
         document.invalidate(2).unwrap();
+        assert_eq!(document.version(), 2);
         assert_eq!(document.text, "# Before😀");
         assert!(document.ast.is_none());
         assert_eq!(document.ast(&parser).unwrap_err().code, -32801);

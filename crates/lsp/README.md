@@ -99,6 +99,9 @@ or accepting a change schedules diagnostics with a 150 ms delay. Further edits t
 that document reset its deadline. Queries do not wait for the deadline: they parse
 the latest synchronized text on demand. Queries and diagnostics reuse the same AST
 until the next edit invalidates it.
+The line index keeps sparse UTF-16 checkpoints on long lines, bounding coordinate
+scans for dense reference edits. Rename constructs the proposed source in one pass
+before validating its semantics.
 
 The message loop checks deadlines both while idle and after each incoming message,
 analyzing at most one due document before checking input again. Editing one buffer

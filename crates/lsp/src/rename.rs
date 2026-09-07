@@ -88,10 +88,14 @@ pub fn rename(
     {
         return Err(failed("reference edits overlap"));
     }
-    let mut edited = snapshot.text.to_string();
-    for (range, new_text) in replacements.iter().rev() {
-        edited.replace_range(range.clone(), new_text);
+    let mut edited = String::with_capacity(edited_length);
+    let mut cursor = 0;
+    for (range, new_text) in &replacements {
+        edited.push_str(&snapshot.text[cursor..range.start]);
+        edited.push_str(new_text);
+        cursor = range.end;
     }
+    edited.push_str(&snapshot.text[cursor..]);
 
     // Validate the complete edit before offering it: a new name can turn plain
     // Markdown into a reference, or interfere with table and container syntax.

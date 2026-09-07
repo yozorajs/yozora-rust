@@ -5,6 +5,7 @@ use yozora_parser::YozoraParser;
 use crate::protocol::{ContentChange, Position, ResponseError};
 
 const MAX_DOCUMENT_BYTES: usize = 16 * 1024 * 1024;
+const LINE_CHECKPOINT_BYTES: usize = 128;
 
 /// The server is the only writer. Text, line index and AST belong to one version.
 /// An invalid newer edit suspends queries until a full replacement restores sync.
@@ -193,30 +194,52 @@ pub(super) fn check_size(bytes: usize) -> Result<(), ResponseError> {
 #[derive(Clone)]
 pub struct LineIndex {
     starts: Vec<usize>,
+    checkpoints: Vec<LineCheckpoint>,
+}
+
+#[derive(Clone)]
+struct LineCheckpoint {
+    byte_offset: usize,
+    position: Position,
 }
 
 impl LineIndex {
     fn new(text: &str) -> Self {
-        let bytes = text.as_bytes();
         let mut starts = vec![0];
-        let mut offset = 0;
-        while offset < bytes.len() {
-            match bytes[offset] {
-                b'\r' => {
-                    offset += 1;
-                    if bytes.get(offset) == Some(&b'\n') {
-                        offset += 1;
-                    }
-                    starts.push(offset);
+        let mut checkpoints = Vec::new();
+        let mut characters = text.char_indices().peekable();
+        let mut character = 0;
+        let mut checkpoint_offset = 0;
+        while let Some((offset, current)) = characters.next() {
+            if matches!(current, '\r' | '\n') {
+                let mut next = offset + 1;
+                if current == '\r' && characters.peek().is_some_and(|(_, next)| *next == '\n') {
+                    characters.next();
+                    next += 1;
                 }
-                b'\n' => {
-                    offset += 1;
-                    starts.push(offset);
-                }
-                _ => offset += 1,
+                starts.push(next);
+                character = 0;
+                checkpoint_offset = next;
+                continue;
             }
+            // Bound scans in both directions on long lines, without allocating
+            // an entry per character or any checkpoints for short lines.
+            if offset - checkpoint_offset >= LINE_CHECKPOINT_BYTES {
+                checkpoints.push(LineCheckpoint {
+                    byte_offset: offset,
+                    position: Position {
+                        line: (starts.len() - 1) as u32,
+                        character,
+                    },
+                });
+                checkpoint_offset = offset;
+            }
+            character += current.len_utf16() as u32;
         }
-        Self { starts }
+        Self {
+            starts,
+            checkpoints,
+        }
     }
 
     pub fn byte_offset(&self, text: &str, position: Position) -> Result<usize, ResponseError> {
@@ -226,8 +249,17 @@ impl LineIndex {
             .get(line)
             .ok_or_else(|| ResponseError::invalid_params("line is outside the document"))?;
         let end = self.starts.get(line + 1).copied().unwrap_or(text.len());
-        let content = text[start..end].trim_end_matches(['\r', '\n']);
-        let mut units = 0;
+        let end = start + text[start..end].trim_end_matches(['\r', '\n']).len();
+        let checkpoint = self
+            .checkpoints
+            .partition_point(|checkpoint| checkpoint.position <= position)
+            .checked_sub(1)
+            .map(|index| &self.checkpoints[index])
+            .filter(|checkpoint| checkpoint.position.line == position.line);
+        let (start, mut units) = checkpoint
+            .map(|checkpoint| (checkpoint.byte_offset, checkpoint.position.character))
+            .unwrap_or((start, 0));
+        let content = &text[start..end];
         for (offset, character) in content.char_indices() {
             if units == position.character {
                 return Ok(start + offset);
@@ -250,9 +282,18 @@ impl LineIndex {
             ));
         }
         let line = self.starts.partition_point(|start| *start <= offset) - 1;
+        let checkpoint = self
+            .checkpoints
+            .partition_point(|checkpoint| checkpoint.byte_offset <= offset)
+            .checked_sub(1)
+            .map(|index| &self.checkpoints[index])
+            .filter(|checkpoint| checkpoint.position.line as usize == line);
+        let (start, character) = checkpoint
+            .map(|checkpoint| (checkpoint.byte_offset, checkpoint.position.character))
+            .unwrap_or((self.starts[line], 0));
         Ok(Position {
             line: line as u32,
-            character: text[self.starts[line]..offset].encode_utf16().count() as u32,
+            character: character + text[start..offset].encode_utf16().count() as u32,
         })
     }
 }
@@ -290,6 +331,58 @@ mod tests {
         }
         assert!(lines.byte_offset(text, position(0, 2)).is_err());
         assert!(lines.byte_offset(text, position(4, 0)).is_err());
+    }
+
+    #[test]
+    fn round_trips_long_unicode_lines_and_rejects_split_characters() {
+        let contents = [
+            ("a中😀\t".repeat(100), "\r\n"),
+            ("short".into(), "\r"),
+            ("😀𐀀界".repeat(100), "\n"),
+            ("x".repeat(1_000), "\n"),
+            (String::new(), ""),
+        ];
+        let text: String = contents
+            .iter()
+            .map(|(line, ending)| format!("{line}{ending}"))
+            .collect();
+        let lines = LineIndex::new(&text);
+        let mut line_start = 0;
+        for (line, (content, ending)) in contents.iter().enumerate() {
+            let mut units = 0;
+            for (offset, character) in content.char_indices() {
+                let expected = position(line as u32, units);
+                assert_eq!(
+                    lines.byte_offset(&text, expected).unwrap(),
+                    line_start + offset
+                );
+                assert_eq!(
+                    lines.position(&text, line_start + offset).unwrap(),
+                    expected
+                );
+                if character.len_utf16() == 2 {
+                    assert!(lines
+                        .byte_offset(&text, position(line as u32, units + 1))
+                        .is_err());
+                }
+                for byte in 1..character.len_utf8() {
+                    assert!(lines.position(&text, line_start + offset + byte).is_err());
+                }
+                units += character.len_utf16() as u32;
+            }
+            let end = line_start + content.len();
+            assert_eq!(
+                lines.position(&text, end).unwrap(),
+                position(line as u32, units)
+            );
+            assert_eq!(
+                lines
+                    .byte_offset(&text, position(line as u32, u32::MAX))
+                    .unwrap(),
+                end
+            );
+            line_start = end + ending.len();
+        }
     }
 
     #[test]

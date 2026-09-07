@@ -570,6 +570,18 @@ name = "yozora-invariant"
 version = "0.1.0"
 
 [[package]]
+name = "yozora-lsp"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "yozora-ast",
+ "yozora-ast-util",
+ "yozora-core-parser",
+ "yozora-parser",
+]
+
+[[package]]
 name = "yozora-markup-weaver"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,22 @@
+[package]
+name = "yozora-lsp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+license-file.workspace = true
+readme = "README.md"
+description = "A language server for Yozora Markdown."
+include = ["src/**", "README.md"]
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+yozora-ast = { version = "0.1.0", path = "../ast" }
+yozora-ast-util = { version = "0.1.0", path = "../ast-util" }
+yozora-core-parser = { version = "0.1.0", path = "../core-parser" }
+yozora-parser = { version = "0.1.0", path = "../parser" }
+
+[[bin]]
+name = "yozora-lsp"
+path = "src/main.rs"

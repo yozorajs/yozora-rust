@@ -282,14 +282,12 @@ impl Server {
             "textDocument/completion" => {
                 let params: TextDocumentPositionParams = parse_params(params)?;
                 let document = open_document(&mut self.documents, &params.text_document.uri)?;
-                let (root, line, cursor) = document.line_snapshot(&self.parser, params.position)?;
+                let snapshot = document.snapshot(&self.parser, params.position)?;
                 Ok(json!(completion::complete(
-                    root,
-                    line,
-                    cursor,
-                    params.position.line,
+                    &snapshot,
+                    params.position,
                     &self.parser,
-                )))
+                )?))
             }
             "textDocument/prepareRename" => {
                 let params: TextDocumentPositionParams = parse_params(params)?;

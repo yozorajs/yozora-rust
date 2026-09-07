@@ -5,7 +5,10 @@ use yozora_core_tokenizer::resolve_label_to_identifier;
 use yozora_parser::YozoraParser;
 
 use crate::analysis::{nodes, reference_key, single_line_label, ReferenceKey};
-use crate::protocol::{CompletionItem, CompletionList, Position, Range, TextEdit};
+use crate::document::{check_size, Snapshot};
+use crate::protocol::{CompletionItem, CompletionList, Position, Range, ResponseError, TextEdit};
+
+const MAX_PROBE_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum LabelKind {
@@ -33,18 +36,21 @@ struct Context {
 }
 
 pub fn complete(
-    root: &Root,
-    line: &str,
-    cursor: usize,
-    line_number: u32,
+    snapshot: &Snapshot<'_>,
+    position: Position,
     parser: &YozoraParser,
-) -> CompletionList {
-    let Some(context) = context(root, line, cursor, line_number) else {
-        return CompletionList::default();
+) -> Result<CompletionList, ResponseError> {
+    let root = snapshot.root;
+    let (line, cursor) = snapshot.line(position)?;
+    let Some(context) = context(root, line, cursor, position.line) else {
+        return Ok(CompletionList::default());
     };
     if !is_reference_context(root, &context) {
-        return CompletionList::default();
+        return Ok(CompletionList::default());
     }
+    let Some(probe) = CompletionProbe::new(snapshot, &context) else {
+        return Ok(CompletionList::default());
+    };
 
     let prefix = if context.in_table {
         context.prefix.replace("\\|", "|")
@@ -52,9 +58,40 @@ pub fn complete(
         context.prefix.clone()
     };
     let prefix = resolve_label_to_identifier(&prefix);
+    let definitions = collect_definitions(root);
+    let footnotes = collect_footnote_definitions(root);
+    let options = ParseOptions {
+        should_reserve_position: Some(true),
+        preset_definitions: Some(
+            definitions
+                .iter()
+                .map(|definition| Association {
+                    identifier: definition.identifier.clone(),
+                    label: definition.label.clone(),
+                })
+                .collect(),
+        ),
+        preset_footnote_definitions: Some(
+            footnotes
+                .iter()
+                .map(|definition| Association {
+                    identifier: definition.identifier.clone(),
+                    label: definition.label.clone(),
+                })
+                .collect(),
+        ),
+        ..ParseOptions::default()
+    };
+    let association_bytes: usize = options
+        .preset_definitions
+        .iter()
+        .flatten()
+        .chain(options.preset_footnote_definitions.iter().flatten())
+        .map(|association| association.identifier.len() + association.label.len())
+        .sum();
     let candidates: Vec<_> = match context.kind {
-        LabelKind::Link => collect_definitions(root)
-            .into_iter()
+        LabelKind::Link => definitions
+            .iter()
             .map(|definition| {
                 (
                     definition.identifier.as_str(),
@@ -63,8 +100,8 @@ pub fn complete(
                 )
             })
             .collect(),
-        LabelKind::Footnote => collect_footnote_definitions(root)
-            .into_iter()
+        LabelKind::Footnote => footnotes
+            .iter()
             .map(|definition| {
                 (
                     definition.identifier.as_str(),
@@ -74,78 +111,137 @@ pub fn complete(
             })
             .collect(),
     };
-    let items = candidates
+    let mut items = Vec::new();
+    let mut remaining = MAX_PROBE_BYTES;
+    for (index, (identifier, label, detail)) in candidates
         .into_iter()
         .filter(|(identifier, _, _)| identifier.starts_with(&prefix))
         .take(200)
-        .filter_map(|(identifier, label, detail)| {
-            // A definition may span lines; ASCII whitespace has the same label identity.
-            let label = single_line_label(label);
-            let mut new_text = label_spelling(parser, &context, identifier, &label)?;
-            if !context.has_closing {
-                new_text.push(']');
-            }
-            Some(CompletionItem {
-                label,
-                kind: 18, // CompletionItemKind.Reference
-                detail: detail.to_string(),
-                // The server applies the parser's Unicode folding. Clients need only
-                // retain these matches; an incomplete list is refreshed after typing.
-                filter_text: context.prefix.clone(),
-                text_edit: TextEdit {
-                    range: context.range,
-                    new_text,
-                },
-            })
-        })
-        .collect();
-    CompletionList {
+        .enumerate()
+    {
+        // ASCII whitespace has the same label identity, including multiline labels.
+        let label = single_line_label(label);
+        let mut new_text = if context.in_table {
+            label.replace('|', "\\|")
+        } else {
+            label.clone()
+        };
+        if !context.has_closing {
+            new_text.push(']');
+        }
+        let cost = probe.before.len() + new_text.len() + probe.after.len() + association_bytes;
+        // Always check one candidate, even when a single block exceeds the budget.
+        // Incomplete lists let typing narrow the search to later candidates.
+        if index > 0 && cost > remaining {
+            break;
+        }
+        remaining = remaining.saturating_sub(cost);
+        let key = match context.kind {
+            LabelKind::Link => ReferenceKey::Link(identifier),
+            LabelKind::Footnote => ReferenceKey::Footnote(identifier),
+        };
+        if check_size(snapshot.text.len() - probe.replaced_bytes + new_text.len()).is_err()
+            || !probe.accepts(parser, &options, key, &new_text, context.has_closing)
+        {
+            continue;
+        }
+        items.push(CompletionItem {
+            label,
+            kind: 18, // CompletionItemKind.Reference
+            detail: detail.to_string(),
+            // The server applies the parser's Unicode folding. Clients need only
+            // retain these matches; an incomplete list is refreshed after typing.
+            filter_text: context.prefix.clone(),
+            text_edit: TextEdit {
+                range: context.range,
+                new_text,
+            },
+        });
+    }
+    Ok(CompletionList {
         is_incomplete: true,
         items,
-    }
+    })
 }
 
-fn label_spelling(
-    parser: &YozoraParser,
-    context: &Context,
-    identifier: &str,
-    label: &str,
-) -> Option<String> {
-    let spelling = if context.in_table {
-        label.replace('|', "\\|")
-    } else {
-        label.to_string()
-    };
-    let association = Association {
-        identifier: identifier.to_string(),
-        label: label.to_string(),
-    };
-    let mut options = ParseOptions::default();
-    let (reference, key) = match context.kind {
-        LabelKind::Link => {
-            options.preset_definitions = Some(vec![association]);
-            let marker = if context.image { "!" } else { "" };
-            (
-                format!("{marker}[x][{spelling}]"),
-                ReferenceKey::Link(identifier),
+struct CompletionProbe<'a> {
+    before: &'a str,
+    after: &'a str,
+    replaced_bytes: usize,
+    reference_start: Position,
+    label_start: Position,
+}
+
+impl<'a> CompletionProbe<'a> {
+    fn new(snapshot: &Snapshot<'a>, context: &Context) -> Option<Self> {
+        // Preserve the whole top-level block, including multiline inline content,
+        // table cells and container markers. Other blocks cannot pair delimiters.
+        let block = snapshot
+            .root
+            .children
+            .iter()
+            .filter_map(Node::position)
+            .map(Range::from)
+            .find(|range| range.contains(context.opening))?;
+        let block_start = snapshot
+            .lines
+            .byte_offset(
+                snapshot.text,
+                Position {
+                    line: block.start.line,
+                    character: 0,
+                },
             )
-        }
-        LabelKind::Footnote => {
-            options.preset_footnote_definitions = Some(vec![association]);
-            (format!("[^{spelling}]"), ReferenceKey::Footnote(identifier))
-        }
-    };
-    let source = if context.in_table {
-        format!("| _ |\n| --- |\n| {reference} |")
-    } else {
-        reference
-    };
-    // A valid declaration need not be usable as an inline reference. Probe a
-    // short reference with the same parser, without reparsing the buffer per item.
-    // Table parsing also verifies that escaping preserves the label's identity.
-    let parsed = parser.parse(&source, Some(options));
-    let resolves = nodes(&parsed.children).any(|node| reference_key(node) == Some(key));
-    resolves.then_some(spelling)
+            .ok()?;
+        let block_end = snapshot.lines.byte_offset(snapshot.text, block.end).ok()?;
+        let start = snapshot
+            .lines
+            .byte_offset(snapshot.text, context.range.start)
+            .ok()?;
+        let end = snapshot
+            .lines
+            .byte_offset(snapshot.text, context.range.end)
+            .ok()?;
+        let mut reference_start = context.display_start.unwrap_or(context.opening);
+        reference_start.line -= block.start.line;
+        reference_start.character = reference_start
+            .character
+            .checked_sub(u32::from(context.image))?;
+        let mut label_start = context.range.start;
+        label_start.line -= block.start.line;
+        Some(Self {
+            before: snapshot.text.get(block_start..start)?,
+            after: snapshot.text.get(end..block_end)?,
+            replaced_bytes: end - start,
+            reference_start,
+            label_start,
+        })
+    }
+
+    fn accepts(
+        &self,
+        parser: &YozoraParser,
+        options: &ParseOptions,
+        key: ReferenceKey<'_>,
+        new_text: &str,
+        has_closing: bool,
+    ) -> bool {
+        let source = format!("{}{new_text}{}", self.before, self.after);
+        let parsed = parser.parse(&source, Some(options.clone()));
+        let expected = Range {
+            start: self.reference_start,
+            end: Position {
+                line: self.label_start.line,
+                character: self.label_start.character
+                    + new_text.encode_utf16().count() as u32
+                    + u32::from(has_closing),
+            },
+        };
+        let resolves = nodes(&parsed.children).any(|node| {
+            reference_key(node) == Some(key) && node.position().map(Range::from) == Some(expected)
+        });
+        resolves
+    }
 }
 
 fn context(root: &Root, line: &str, cursor: usize, line_number: u32) -> Option<Context> {
@@ -409,8 +505,8 @@ mod tests {
         };
         let mut document = Document::new(1, marked.replacen('¦', "", 1)).unwrap();
         let parser = YozoraParser::default();
-        let (root, source, cursor) = document.line_snapshot(&parser, position).unwrap();
-        let result = complete(root, source, cursor, line, &parser);
+        let snapshot = document.snapshot(&parser, position).unwrap();
+        let result = complete(&snapshot, position, &parser).unwrap();
         (document, result)
     }
 
@@ -443,8 +539,9 @@ mod tests {
             )
             .unwrap();
         let parser = YozoraParser::default();
-        let (root, line, _) = document.line_snapshot(&parser, position).unwrap();
-        let references = nodes(&root.children)
+        let snapshot = document.snapshot(&parser, position).unwrap();
+        let (line, _) = snapshot.line(position).unwrap();
+        let references = nodes(&snapshot.root.children)
             .filter_map(|node| {
                 let identifier = match node {
                     Node::LinkReference(reference) => &reference.identifier,
@@ -601,6 +698,24 @@ mod tests {
     }
 
     #[test]
+    fn bounds_context_parsing_and_keeps_later_labels_reachable_by_typing() {
+        let definitions = (0..200)
+            .map(|index| format!("[id{index:03}]: /{index}\n"))
+            .collect::<String>();
+        let body = "text ".repeat(3_200);
+        let (_, initial) = request(&format!("{body}[t][¦]\n\n{definitions}"));
+        assert!(!initial.items.is_empty());
+        assert!(initial.items.len() < 200);
+        assert!(initial.is_incomplete);
+        let marked = format!("{body}[t][id199¦]\n\n{definitions}");
+        let (_, narrowed) = request(&marked);
+        assert_eq!(labels(&narrowed), ["id199"]);
+        assert!(accept(&marked, "id199")
+            .1
+            .contains(&("linkReference".into(), "id199".into())));
+    }
+
+    #[test]
     fn confines_completion_to_one_table_cell() {
         let marked = format!("| A | B |\n| --- | --- |\n| [text][gu¦ | later ] |\n\n{DEFINITIONS}");
         let (line, references) = accept(&marked, "Guide");
@@ -654,6 +769,48 @@ mod tests {
             assert!(accept(marked, label)
                 .1
                 .contains(&("linkReference".into(), label.into())));
+        }
+    }
+
+    #[test]
+    fn validates_labels_in_the_surrounding_block_at_the_completed_reference() {
+        for source in [
+            "[text][a¦] later `",
+            "`before [text][a¦]",
+            "[text][a¦]\nlater `",
+            "`before\n[text][a¦]",
+            "![alt][a¦] later `",
+            "# [text][a¦] later `",
+            "> [text][a¦]\n> later `",
+            "- [text][a¦]\n  later `",
+            "[^note]: [text][a¦]\n    later `",
+            ":::note [text][a¦] later `\nbody\n:::",
+            "| C |\n| --- |\n| [text][a¦] later ` |",
+            "> [existing][a`b]\n>\n> [text][a¦] later `",
+        ] {
+            let marked = format!("{source}\n\n[a`b]: /url\n[another]: /safe");
+            let (_, result) = request(&marked);
+            assert_eq!(labels(&result), ["another"], "{source}");
+            assert!(accept(&marked, "another")
+                .1
+                .iter()
+                .any(|(_, identifier)| identifier == "another"));
+        }
+        for source in [
+            "[text][a¦]",
+            "`code` [text][a¦]",
+            "[code `x]`][a¦]",
+            "[text][a¦]\n\nlater `",
+            "| A | B |\n| --- | --- |\n| [text][a¦] | later ` |",
+            "[^a¦] later `",
+        ] {
+            let marked = format!("{source}\n\n[a`b]: /url\n[^a`b]: note");
+            let (_, result) = request(&marked);
+            assert_eq!(labels(&result), ["a`b"], "{source}");
+            assert!(accept(&marked, "a`b")
+                .1
+                .iter()
+                .any(|(_, identifier)| identifier == "a`b"));
         }
     }
 

@@ -66,7 +66,9 @@ vim.lsp.enable('yozora')
   math, HTML, another table cell, or beyond the 999-character label limit is treated
   as following text. Table pipes are escaped while preserving label identity.
   The server checks up to 200 matching definitions per request and omits spellings
-  that cannot form the intended reference. Incomplete lists refresh as the user types.
+  that cannot form the intended reference in the surrounding block. Large blocks
+  or definition sets reduce the number checked. Incomplete lists refresh as the
+  user types.
 - `textDocument/prepareRename` and `textDocument/rename`: rename document-local
   reference labels from an active definition or a resolved reference. Explicit
   references select only their label; implicit `[old]` and `[old][]` references
@@ -113,12 +115,16 @@ Definition, hover, and reference queries share identifier resolution and the
 first-definition-wins rule. Analysis only reads the AST; the parser has no
 dependency on LSP code.
 
-Completion reads the source line and AST through one immutable snapshot of the
+Completion reads the source text and AST through one immutable snapshot of the
 document version. Its lexical context handles unfinished syntax, while AST
 ranges exclude non-reference regions. Label identity is reused from
 `yozora-core-tokenizer`; this adds an internal workspace dependency.
-Candidate spelling is validated with a short reference and a preset association,
-using the same parser. Table candidates also pass through table escaping rules.
+Each candidate is validated by reparsing its containing top-level block with all
+active definition associations. It must produce the intended reference at the
+exact edited range. This preserves multiline delimiter pairing, table escaping,
+and container syntax. Validation has a 1 MiB input budget per request, counting
+both source and association strings; at least one candidate is checked even if
+its block exceeds the budget. The 200-candidate limit still applies.
 
 Rename returns a WorkspaceEdit and leaves server text unchanged until the client
 sends `didChange`. Clients advertising `workspace.workspaceEdit.documentChanges`
@@ -142,8 +148,8 @@ rejected before changing document state.
 
 The stdio transport uses the existing `serde` and `serde_json` dependencies. It
 supports the advertised LSP subset and the initialize/shutdown/exit lifecycle.
-Stdout carries framed JSON-RPC messages; errors are written to stderr. Frames
-and documents are limited to 16 MiB, and headers to 8 KiB.
+Stdout carries framed JSON-RPC messages; errors are written to stderr. Incoming
+frames and documents are limited to 16 MiB, and input headers to 8 KiB.
 A dedicated blocking reader forwards input through a channel holding at most one
 queued frame. This lets diagnostic timers run even while stdin is idle or a frame
 is incomplete. Document state, analysis, and all stdout writes remain on the server

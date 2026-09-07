@@ -479,6 +479,57 @@ fn table_completion_preserves_neighboring_cells_and_resolves_escaped_labels() {
 }
 
 #[test]
+fn completion_rechecks_multiline_context_after_incremental_edits() {
+    let mut client = Client::start();
+    client.initialize(json!({}));
+    let uri = "untitled:completion-context";
+    client.open(
+        uri,
+        "# Intro\r\n\r\n> 😀 [shown][a]\r\n> later `\r\n\r\n[a`b]: /url\r\n[another]: /safe",
+    );
+    let params = json!({
+        "textDocument": { "uri": uri },
+        "position": { "line": 2, "character": 14 }
+    });
+    let initial = client.request("textDocument/completion", params.clone());
+    assert_eq!(initial["result"]["items"].as_array().unwrap().len(), 1);
+    assert_eq!(initial["result"]["items"][0]["label"], "another");
+
+    client.notify("textDocument/didChange", json!({
+        "textDocument": { "uri": uri, "version": 2 },
+        "contentChanges": [{
+            "range": { "start": { "line": 3, "character": 8 }, "end": { "line": 3, "character": 9 } },
+            "text": ""
+        }]
+    }));
+    let refreshed = client.request("textDocument/completion", params);
+    let item = &refreshed["result"]["items"][0];
+    assert_eq!(item["label"], "a`b");
+    assert_eq!(
+        item["textEdit"],
+        json!({
+            "range": { "start": { "line": 2, "character": 13 }, "end": { "line": 2, "character": 14 } },
+            "newText": "a`b"
+        })
+    );
+    client.notify("textDocument/didChange", json!({
+        "textDocument": { "uri": uri, "version": 3 },
+        "contentChanges": [{ "range": item["textEdit"]["range"], "text": item["textEdit"]["newText"] }]
+    }));
+    let target = client.request(
+        "textDocument/definition",
+        json!({
+            "textDocument": { "uri": uri }, "position": { "line": 2, "character": 6 }
+        }),
+    );
+    assert_eq!(
+        target["result"]["range"]["start"],
+        json!({ "line": 5, "character": 0 })
+    );
+    client.shutdown();
+}
+
+#[test]
 fn coalesces_queued_edits_and_serves_a_query_against_the_latest_version() {
     let mut client = Client::start();
     client.initialize(

@@ -24,6 +24,24 @@ pub struct Snapshot<'a> {
     pub version: i32,
 }
 
+impl Snapshot<'_> {
+    /// The source line and UTF-8 cursor offset, excluding the line ending.
+    pub fn line(&self, position: Position) -> Result<(&str, usize), ResponseError> {
+        let cursor = self.lines.byte_offset(self.text, position)?;
+        let start = self.lines.starts[position.line as usize];
+        let end = self
+            .lines
+            .starts
+            .get(position.line as usize + 1)
+            .copied()
+            .unwrap_or(self.text.len());
+        Ok((
+            self.text[start..end].trim_end_matches(['\r', '\n']),
+            cursor - start,
+        ))
+    }
+}
+
 impl Document {
     pub fn version(&self) -> i32 {
         self.version
@@ -129,30 +147,6 @@ impl Document {
                 }),
             )
         }))
-    }
-
-    /// Borrow the source line and AST from one synchronized document version.
-    /// The cursor is a UTF-8 byte offset within the line, excluding its ending.
-    pub fn line_snapshot(
-        &mut self,
-        parser: &YozoraParser,
-        position: Position,
-    ) -> Result<(&Root, &str, usize), ResponseError> {
-        self.ensure_synchronized()?;
-        let cursor = self.lines.byte_offset(&self.text, position)?;
-        self.ast(parser)?;
-        let start = self.lines.starts[position.line as usize];
-        let end = self
-            .lines
-            .starts
-            .get(position.line as usize + 1)
-            .copied()
-            .unwrap_or(self.text.len());
-        Ok((
-            self.ast.as_ref().expect("AST was initialized"),
-            self.text[start..end].trim_end_matches(['\r', '\n']),
-            cursor - start,
-        ))
     }
 
     /// An immutable source/AST view for edits against this exact version.

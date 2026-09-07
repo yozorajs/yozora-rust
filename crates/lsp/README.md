@@ -30,6 +30,10 @@ vim.lsp.enable('yozora')
 
 - `textDocument/didOpen`, `didChange`, and `didClose`: in-memory document sync,
   with both incremental edits and full replacements. Positions use UTF-16.
+- `$/cancelRequest`: cancel document queries that have not started yet.
+  Each cancelled request receives `RequestCancelled`; unknown or completed IDs
+  are ignored. Newer edits, close, and reopen invalidate waiting queries for that
+  document with `ContentModified`.
 - `textDocument/documentSymbol`: ATX and setext heading outlines. Clients that
   support hierarchical symbols receive heading sections and selection ranges;
   other clients receive flat symbols with parent names. Headings inside block
@@ -98,18 +102,23 @@ references remain ordinary text, following the parser's fallback behavior.
 The server owns each document's text, version, line index, and cached AST. Edits
 are processed serially and each batch is applied atomically. Opening a document
 or accepting a change schedules diagnostics with a 150 ms delay. Further edits to
-that document reset its deadline. Queries do not wait for the deadline: they parse
-the latest synchronized text on demand. Queries and diagnostics reuse the same AST
-until the next edit invalidates it.
+that document reset its deadline. Document queries enter a short 5 ms queue so
+already-arriving edits and cancellations can retire obsolete work before parsing.
+They do not wait for the diagnostic deadline. An accepted newer change invalidates
+waiting queries for that URI, including when its edit batch is malformed. Stale
+changes leave waiting queries intact. Reopening also invalidates them when the
+version number is reused. Queries and diagnostics reuse the same AST until the
+next edit invalidates it.
 The line index keeps sparse UTF-16 checkpoints on long lines, bounding coordinate
 scans for dense reference edits. Rename constructs the proposed source in one pass
 before validating its semantics.
 
 The message loop checks deadlines both while idle and after each incoming message,
-analyzing at most one due document before checking input again. Editing one buffer
-does not reset another buffer's deadline. Full parsing still runs synchronously on
-the server thread; debounce reduces repeated work during edit bursts, while a parse
-already in progress can still delay subsequent messages.
+performing at most one due analysis before checking input again. Queries and
+diagnostics share deadline order so query traffic cannot starve diagnostic work.
+Editing one buffer does not reset another buffer's deadline. Full parsing still
+runs synchronously on the server thread; a parse already in progress cannot be
+interrupted and can still delay subsequent messages.
 
 Definition, hover, and reference queries share identifier resolution and the
 first-definition-wins rule. Analysis only reads the AST; the parser has no
@@ -141,7 +150,8 @@ An invalid newer edit cancels scheduled diagnostics and clears the previous resu
 immediately. Restoring synchronization schedules fresh diagnostics. Stale changes
 neither publish diagnostics nor reset an existing deadline. Closing a document
 cancels its scheduled work, releases its state, and immediately publishes an empty
-diagnostic list without a version. Shutdown discards all scheduled work.
+diagnostic list without a version. Shutdown replies to all waiting queries with
+`RequestCancelled` before its own response and discards scheduled diagnostics.
 Once a notification identifies an open document and a newer version, an undecodable
 or missing edit batch also suspends synchronization. Invalid document metadata is
 rejected before changing document state.

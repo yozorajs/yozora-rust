@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{self, BufRead, Write};
 use std::process::ExitCode;
 use std::sync::mpsc::RecvTimeoutError;
@@ -20,6 +20,7 @@ use crate::rename;
 use crate::transport::{read_messages, write_message};
 
 const DIAGNOSTICS_DELAY: Duration = Duration::from_millis(150);
+const QUERY_DELAY: Duration = Duration::from_millis(5);
 
 #[derive(Default, Eq, PartialEq)]
 enum State {
@@ -27,6 +28,14 @@ enum State {
     Uninitialized,
     Running,
     Shutdown,
+}
+
+struct PendingQuery {
+    id: Value,
+    method: String,
+    params: Value,
+    uri: String,
+    deadline: Instant,
 }
 
 #[derive(Default)]
@@ -41,16 +50,17 @@ struct Server {
     diagnostic_related_information: bool,
     diagnostic_version: bool,
     diagnostics_due: HashMap<String, Instant>,
-    // Close and failed newer edits retract diagnostics immediately. The message
-    // loop drains this publication even when the notification returns an error.
-    immediate_diagnostics: Option<Value>,
+    pending_queries: VecDeque<PendingQuery>,
+    // Notifications can invalidate queries and retract diagnostics together.
+    // Drain these messages even when the notification returns an error.
+    outgoing: Vec<Value>,
 }
 
 pub fn run(reader: impl BufRead + Send + 'static, mut writer: impl Write) -> io::Result<ExitCode> {
     let incoming = read_messages(reader)?;
     let mut server = Server::default();
     loop {
-        let message = match server.diagnostics_due.values().min() {
+        let message = match server.next_deadline() {
             Some(deadline) => {
                 incoming.recv_timeout(deadline.saturating_duration_since(Instant::now()))
             }
@@ -68,8 +78,8 @@ pub fn run(reader: impl BufRead + Send + 'static, mut writer: impl Write) -> io:
         // Check timers after every message as well as on idle timeouts, so
         // traffic for one document cannot starve diagnostics for another.
         // At most one analysis runs before returning to incoming messages.
-        match server.take_due_diagnostics(Instant::now()) {
-            Ok(Some(notification)) => write_message(&mut writer, &notification)?,
+        match server.take_due_work(Instant::now()) {
+            Ok(Some(message)) => write_message(&mut writer, &message)?,
             Ok(None) => {}
             Err(error) => eprintln!("yozora-lsp: diagnostics: {}", error.message),
         }
@@ -112,21 +122,32 @@ impl Server {
 
         let method = method.expect("method was validated");
         let params = message.get("params").cloned().unwrap_or(Value::Null);
-        if let Some(id) = id {
-            let response = match self.request(method, params) {
-                Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
-                Err(error) => error.response(id),
-            };
-            write_message(writer, &response)?;
+        let response = if let Some(id) = id {
+            if self.state == State::Running && is_document_query(method) {
+                self.queue_query(id.clone(), method, params, Instant::now())
+                    .err()
+                    .map(|error| error.response(id))
+            } else {
+                Some(match self.request(method, params) {
+                    Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
+                    Err(error) => error.response(id),
+                })
+            }
         } else if method == "exit" {
             return Ok(Some(self.exit_status()));
-        } else if self.state == State::Running {
-            if let Err(error) = self.notification(method, params, Instant::now()) {
-                eprintln!("yozora-lsp: {method}: {}", error.message);
+        } else {
+            if self.state == State::Running {
+                if let Err(error) = self.notification(method, params, Instant::now()) {
+                    eprintln!("yozora-lsp: {method}: {}", error.message);
+                }
             }
-            if let Some(notification) = self.immediate_diagnostics.take() {
-                write_message(writer, &notification)?;
-            }
+            None
+        };
+        for message in self.outgoing.drain(..) {
+            write_message(writer, &message)?;
+        }
+        if let Some(response) = response {
+            write_message(writer, &response)?;
         }
         Ok(None)
     }
@@ -137,6 +158,71 @@ impl Server {
         } else {
             ExitCode::FAILURE
         }
+    }
+
+    fn queue_query(
+        &mut self,
+        id: Value,
+        method: &str,
+        params: Value,
+        now: Instant,
+    ) -> Result<(), ResponseError> {
+        let document: TextDocumentParams = parse_params(params.clone())?;
+        let uri = document.text_document.uri;
+        open_document(&mut self.documents, &uri)?;
+        self.pending_queries.push_back(PendingQuery {
+            id,
+            method: method.to_string(),
+            params,
+            uri,
+            deadline: now + QUERY_DELAY,
+        });
+        Ok(())
+    }
+
+    fn reject_queries(&mut self, reject: impl Fn(&PendingQuery) -> bool, error: ResponseError) {
+        let outgoing = &mut self.outgoing;
+        self.pending_queries.retain(|query| {
+            if reject(query) {
+                outgoing.push(error.response(query.id.clone()));
+                false
+            } else {
+                true
+            }
+        });
+    }
+
+    fn invalidate_queries(&mut self, uri: &str) {
+        self.reject_queries(
+            |query| query.uri == uri,
+            ResponseError::new(-32801, "document changed before the query started"),
+        );
+    }
+
+    fn next_deadline(&self) -> Option<Instant> {
+        self.pending_queries
+            .front()
+            .map(|query| query.deadline)
+            .into_iter()
+            .chain(self.diagnostics_due.values().copied())
+            .min()
+    }
+
+    fn take_due_work(&mut self, now: Instant) -> Result<Option<Value>, ResponseError> {
+        // Serve the oldest deadline across both kinds of work, so a stream of
+        // queries cannot starve diagnostics for another document.
+        let query_deadline = self.pending_queries.front().map(|query| query.deadline);
+        let diagnostic_deadline = self.diagnostics_due.values().min().copied();
+        if query_deadline.is_some_and(|deadline| {
+            deadline <= now && diagnostic_deadline.is_none_or(|other| deadline <= other)
+        }) {
+            let query = self.pending_queries.pop_front().expect("query was checked");
+            return Ok(Some(match self.request(&query.method, query.params) {
+                Ok(result) => json!({ "jsonrpc": "2.0", "id": query.id, "result": result }),
+                Err(error) => error.response(query.id),
+            }));
+        }
+        self.take_due_diagnostics(now)
     }
 
     fn request(&mut self, method: &str, params: Value) -> Result<Value, ResponseError> {
@@ -217,7 +303,11 @@ impl Server {
                 self.state = State::Shutdown;
                 self.documents.clear();
                 self.diagnostics_due.clear();
-                self.immediate_diagnostics = None;
+                self.outgoing.clear();
+                self.reject_queries(
+                    |_| true,
+                    ResponseError::new(-32800, "server is shutting down"),
+                );
                 Ok(Value::Null)
             }
             "textDocument/documentSymbol" => {
@@ -328,6 +418,7 @@ impl Server {
                 let item = params.text_document;
                 validate_uri(&item.uri)?;
                 let document = Document::new(item.version, item.text)?;
+                self.invalidate_queries(&item.uri);
                 self.diagnostics_due
                     .insert(item.uri.clone(), now + DIAGNOSTICS_DELAY);
                 self.documents.insert(item.uri, document);
@@ -343,15 +434,17 @@ impl Server {
                         .invalidate(params.text_document.version)
                         .and(Err(error)),
                 };
-                if document.version() != previous_version {
+                let version = document.version();
+                if version != previous_version {
+                    self.invalidate_queries(&uri);
                     if result.is_ok() {
                         self.diagnostics_due.insert(uri, now + DIAGNOSTICS_DELAY);
                     } else {
                         // Text is now out of sync; retract the previous snapshot.
                         self.diagnostics_due.remove(&uri);
-                        self.immediate_diagnostics = Some(format_diagnostics(
+                        self.outgoing.push(format_diagnostics(
                             &uri,
-                            self.diagnostic_version.then_some(document.version()),
+                            self.diagnostic_version.then_some(version),
                             Vec::new(),
                             false,
                         ));
@@ -363,10 +456,20 @@ impl Server {
                 let params: TextDocumentParams = parse_params(params)?;
                 let uri = params.text_document.uri;
                 if self.documents.remove(&uri).is_some() {
+                    self.invalidate_queries(&uri);
                     self.diagnostics_due.remove(&uri);
-                    self.immediate_diagnostics =
-                        Some(format_diagnostics(&uri, None, Vec::new(), false));
+                    self.outgoing
+                        .push(format_diagnostics(&uri, None, Vec::new(), false));
                 }
+            }
+            "$/cancelRequest" => {
+                let id = params
+                    .get("id")
+                    .ok_or_else(|| ResponseError::invalid_params("cancelRequest requires an id"))?;
+                self.reject_queries(
+                    |query| query.id == *id,
+                    ResponseError::new(-32800, "request cancelled"),
+                );
             }
             // Unknown notifications and optional $/ messages have no response.
             _ => {}
@@ -444,6 +547,20 @@ fn format_hover(info: analysis::HoverInfo, markdown: bool) -> Value {
         ("plaintext", info.text)
     };
     json!({ "contents": { "kind": kind, "value": value }, "range": info.range })
+}
+
+fn is_document_query(method: &str) -> bool {
+    matches!(
+        method,
+        "textDocument/documentSymbol"
+            | "textDocument/foldingRange"
+            | "textDocument/definition"
+            | "textDocument/hover"
+            | "textDocument/references"
+            | "textDocument/completion"
+            | "textDocument/prepareRename"
+            | "textDocument/rename"
+    )
 }
 
 fn parse_params<T: DeserializeOwned>(params: Value) -> Result<T, ResponseError> {
@@ -554,6 +671,160 @@ mod tests {
         server.take_due_diagnostics(now).unwrap().unwrap()["params"].clone()
     }
 
+    fn queue(server: &mut Server, id: Value, uri: &str, now: Instant) {
+        server
+            .queue_query(
+                id,
+                "textDocument/documentSymbol",
+                json!({
+                    "textDocument": { "uri": uri }
+                }),
+                now,
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn cancels_waiting_queries_by_exact_id_and_allows_id_reuse() {
+        let mut server = server();
+        let now = Instant::now();
+        let uri = "untitled:cancel";
+        open(&mut server, uri, "# Current", now);
+        queue(&mut server, json!(1), uri, now);
+        queue(&mut server, json!("1"), uri, now);
+        assert!(server
+            .take_due_work(now + Duration::from_millis(4))
+            .unwrap()
+            .is_none());
+        server
+            .notification("$/cancelRequest", json!({ "id": 1 }), now)
+            .unwrap();
+        assert_eq!(server.outgoing.len(), 1);
+        let cancelled = server.outgoing.pop().unwrap();
+        assert_eq!(cancelled["id"], 1);
+        assert_eq!(cancelled["error"]["code"], -32800);
+        let result = server.take_due_work(now + QUERY_DELAY).unwrap().unwrap();
+        assert_eq!(result["id"], "1");
+        assert_eq!(result["result"][0]["name"], "Current");
+        server
+            .notification("$/cancelRequest", json!({ "id": 1 }), now + QUERY_DELAY)
+            .unwrap();
+        assert!(server.outgoing.is_empty());
+        queue(&mut server, json!(1), uri, now + QUERY_DELAY);
+        let result = server
+            .take_due_work(now + QUERY_DELAY * 2)
+            .unwrap()
+            .unwrap();
+        assert_eq!(result["id"], 1);
+        assert_eq!(result["result"][0]["name"], "Current");
+    }
+
+    #[test]
+    fn newer_edits_close_and_reopen_invalidate_only_that_documents_queries() {
+        for action in ["change", "malformed", "close", "reopen"] {
+            let mut server = server();
+            let now = Instant::now();
+            let uri = "untitled:changing";
+            open(&mut server, uri, "# Before", now);
+            open(&mut server, "untitled:other", "# Other", now);
+            queue(&mut server, json!(1), uri, now);
+            queue(&mut server, json!(2), "untitled:other", now);
+            assert!(replace(&mut server, uri, 1, "# Stale", now).is_err());
+            assert!(server.outgoing.is_empty());
+            assert_eq!(server.pending_queries.len(), 2);
+            match action {
+                "change" => replace(&mut server, uri, 2, "# After", now).unwrap(),
+                "malformed" => assert!(server
+                    .notification(
+                        "textDocument/didChange",
+                        json!({
+                            "textDocument": { "uri": uri, "version": 2 }
+                        }),
+                        now
+                    )
+                    .is_err()),
+                "close" => server
+                    .notification(
+                        "textDocument/didClose",
+                        json!({
+                            "textDocument": { "uri": uri }
+                        }),
+                        now,
+                    )
+                    .unwrap(),
+                "reopen" => open(&mut server, uri, "# Reopened at the same version", now),
+                _ => unreachable!(),
+            }
+            let responses: Vec<_> = server
+                .outgoing
+                .iter()
+                .filter(|message| message.get("id").is_some())
+                .collect();
+            assert_eq!(responses.len(), 1, "{action}");
+            assert_eq!(responses[0]["id"], 1);
+            assert_eq!(responses[0]["error"]["code"], -32801);
+            let remaining = server.take_due_work(now + QUERY_DELAY).unwrap().unwrap();
+            assert_eq!(remaining["id"], 2);
+            assert_eq!(remaining["result"][0]["name"], "Other");
+            assert!(server.pending_queries.is_empty());
+        }
+    }
+
+    #[test]
+    fn query_traffic_preserves_older_diagnostic_deadlines() {
+        let mut server = server();
+        let now = Instant::now();
+        open(&mut server, "untitled:diagnostics", DUPLICATES, now);
+        open(
+            &mut server,
+            "untitled:queries",
+            "# Query",
+            now + Duration::from_millis(10),
+        );
+        queue(
+            &mut server,
+            json!(1),
+            "untitled:queries",
+            now + Duration::from_millis(149),
+        );
+        assert_eq!(server.next_deadline(), Some(now + DIAGNOSTICS_DELAY));
+        let diagnostic = server
+            .take_due_work(now + DIAGNOSTICS_DELAY)
+            .unwrap()
+            .unwrap();
+        assert_eq!(diagnostic["params"]["uri"], "untitled:diagnostics");
+        let query = server
+            .take_due_work(now + Duration::from_millis(154))
+            .unwrap()
+            .unwrap();
+        assert_eq!(query["id"], 1);
+        assert_eq!(query["result"][0]["name"], "Query");
+        assert_eq!(
+            server.next_deadline(),
+            Some(now + Duration::from_millis(160))
+        );
+    }
+
+    #[test]
+    fn shutdown_cancels_every_waiting_query_and_discards_deadlines() {
+        let mut server = server();
+        let now = Instant::now();
+        open(&mut server, "untitled:shutdown", DUPLICATES, now);
+        queue(&mut server, json!(1), "untitled:shutdown", now);
+        queue(&mut server, json!(2), "untitled:shutdown", now);
+        server.request("shutdown", Value::Null).unwrap();
+        assert!(server.next_deadline().is_none());
+        assert!(server
+            .take_due_work(now + Duration::from_secs(1))
+            .unwrap()
+            .is_none());
+        assert_eq!(server.outgoing.len(), 2);
+        for (index, response) in server.outgoing.iter().enumerate() {
+            assert_eq!(response["id"], index + 1);
+            assert_eq!(response["error"]["code"], -32800);
+        }
+    }
+
     #[test]
     fn coalesces_versions_while_queries_use_the_latest_text_without_moving_the_deadline() {
         let mut server = server();
@@ -625,7 +896,7 @@ mod tests {
         open(&mut server, uri, DUPLICATES, now);
         replace(&mut server, uri, 2, DUPLICATES, at(20)).unwrap();
         assert!(replace(&mut server, uri, 1, "# stale", at(100)).is_err());
-        assert!(server.immediate_diagnostics.is_none());
+        assert!(server.outgoing.is_empty());
         assert!(server.take_due_diagnostics(at(169)).unwrap().is_none());
         assert_eq!(published(&mut server, at(170))["version"], 2);
         replace(&mut server, uri, 3, DUPLICATES, at(200)).unwrap();
@@ -638,7 +909,7 @@ mod tests {
         }), at(210));
         assert!(invalid.is_err());
         assert_eq!(
-            server.immediate_diagnostics.take().unwrap()["params"],
+            server.outgoing.pop().unwrap()["params"],
             json!({
                 "uri": uri, "version": 4, "diagnostics": []
             })
@@ -656,7 +927,7 @@ mod tests {
         assert!(server.take_due_diagnostics(at(1000)).unwrap().is_none());
         replace(&mut server, uri, 5, DUPLICATES, at(1100)).unwrap();
         assert!(replace(&mut server, uri, 3, "# stale", at(1150)).is_err());
-        assert!(server.immediate_diagnostics.is_none());
+        assert!(server.outgoing.is_empty());
         assert!(server.take_due_diagnostics(at(1249)).unwrap().is_none());
         let restored = published(&mut server, at(1250));
         assert_eq!(restored["version"], 5);
@@ -678,7 +949,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            server.immediate_diagnostics.take().unwrap()["params"],
+            server.outgoing.pop().unwrap()["params"],
             json!({
                 "uri": "untitled:a", "diagnostics": []
             })
@@ -695,7 +966,7 @@ mod tests {
         replace(&mut server, "untitled:a", 2, DUPLICATES, at(180)).unwrap();
         server.request("shutdown", Value::Null).unwrap();
         assert!(server.take_due_diagnostics(at(500)).unwrap().is_none());
-        assert!(server.immediate_diagnostics.is_none());
+        assert!(server.outgoing.is_empty());
     }
 
     #[test]
@@ -721,7 +992,7 @@ mod tests {
                 .notification("textDocument/didChange", params.clone(), now)
                 .is_err());
             assert_eq!(
-                server.immediate_diagnostics.take().unwrap()["params"],
+                server.outgoing.pop().unwrap()["params"],
                 json!({
                     "uri": uri, "version": 2, "diagnostics": []
                 })
@@ -745,7 +1016,7 @@ mod tests {
             assert!(server
                 .notification("textDocument/didChange", params, recovered_at)
                 .is_err());
-            assert!(server.immediate_diagnostics.is_none());
+            assert!(server.outgoing.is_empty());
             let diagnostics = published(&mut server, recovered_at + DIAGNOSTICS_DELAY);
             assert_eq!(diagnostics["version"], 3);
             assert_eq!(diagnostics["diagnostics"].as_array().unwrap().len(), 1);

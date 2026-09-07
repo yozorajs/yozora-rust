@@ -1307,3 +1307,66 @@ fn rename_rejects_unintended_bindings_without_mutating_the_document() {
     assert_eq!(noop["result"]["changes"][uri], json!([]));
     client.shutdown();
 }
+
+#[test]
+fn queued_queries_receive_one_response_across_cancellation_close_and_shutdown() {
+    let mut client = Client::start();
+    client.initialize(json!({}));
+    client.open("untitled:a", "# Before");
+    client.open("untitled:b", "# Other");
+    client.send(json!({ "jsonrpc": "2.0", "id": "cancel", "method": "textDocument/documentSymbol", "params": document("untitled:a") }));
+    client.notify("$/cancelRequest", json!({ "id": "cancel" }));
+    client.send(json!({ "jsonrpc": "2.0", "id": "close", "method": "textDocument/documentSymbol", "params": document("untitled:a") }));
+    client.notify("textDocument/didClose", document("untitled:a"));
+    client.notify("$/cancelRequest", json!({ "id": "unknown" }));
+    for id in ["unknown", "keep"] {
+        client.send(json!({ "jsonrpc": "2.0", "id": id, "method": "textDocument/documentSymbol", "params": document("untitled:b") }));
+    }
+    let mut responses = std::collections::BTreeMap::new();
+    while responses.len() < 4 {
+        let response = client.receive();
+        if let Some(id) = response["id"].as_str() {
+            assert!(responses.insert(id.to_string(), response).is_none());
+        } else {
+            client.notifications.push_back(response);
+        }
+    }
+    // A query may finish before a cancellation arrives. Both outcomes require
+    // exactly one response; deterministic cancellation timing is tested in Server.
+    for (id, code) in [("cancel", -32800), ("close", -32801)] {
+        if responses[id].get("error").is_some() {
+            assert_eq!(responses[id]["error"]["code"], code);
+        } else {
+            assert_eq!(responses[id]["result"][0]["name"], "Before");
+        }
+    }
+    for id in ["unknown", "keep"] {
+        assert_eq!(responses[id]["result"][0]["name"], "Other");
+    }
+    for id in ["stop1", "stop2"] {
+        client.send(json!({ "jsonrpc": "2.0", "id": id, "method": "textDocument/documentSymbol", "params": document("untitled:b") }));
+    }
+    client.send(json!({ "jsonrpc": "2.0", "id": "shutdown", "method": "shutdown" }));
+    let mut stopped = std::collections::BTreeSet::new();
+    loop {
+        let response = client.receive();
+        let Some(id) = response["id"].as_str() else {
+            client.notifications.push_back(response);
+            continue;
+        };
+        if id == "shutdown" {
+            assert!(response.get("error").is_none());
+            assert_eq!(stopped.len(), 2);
+            break;
+        }
+        assert!(matches!(id, "stop1" | "stop2"));
+        assert!(stopped.insert(id.to_string()));
+        if response.get("error").is_some() {
+            assert_eq!(response["error"]["code"], -32800);
+        } else {
+            assert_eq!(response["result"][0]["name"], "Other");
+        }
+    }
+    client.notify("exit", Value::Null);
+    assert!(client.wait_for_exit().success());
+}

@@ -578,6 +578,7 @@ dependencies = [
  "yozora-ast",
  "yozora-ast-util",
  "yozora-core-parser",
+ "yozora-core-tokenizer",
  "yozora-parser",
 ]
 

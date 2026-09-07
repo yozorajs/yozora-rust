@@ -7,11 +7,13 @@ use serde_json::{json, Value};
 use yozora_parser::YozoraParser;
 
 use crate::analysis;
+use crate::completion;
 use crate::document::Document;
 use crate::protocol::{
-    DefinitionParams, DidChangeParams, DidOpenParams, DocumentSymbol, ResponseError,
-    TextDocumentParams,
+    DidChangeParams, DidOpenParams, DocumentSymbol, ReferencesParams, RenameParams, ResponseError,
+    TextDocumentParams, TextDocumentPositionParams,
 };
+use crate::rename;
 use crate::transport::{read_message, write_message};
 
 #[derive(Default, Eq, PartialEq)]
@@ -29,6 +31,8 @@ struct Server {
     documents: HashMap<String, Document>,
     hierarchical_symbols: bool,
     folding_range_limit: Option<usize>,
+    hover_markdown: bool,
+    versioned_edits: bool,
 }
 
 pub fn run(mut reader: impl BufRead, mut writer: impl Write) -> io::Result<ExitCode> {
@@ -109,6 +113,20 @@ impl Server {
                 .pointer("/capabilities/textDocument/foldingRange/rangeLimit")
                 .and_then(Value::as_u64)
                 .and_then(|limit| usize::try_from(limit).ok());
+            self.hover_markdown = params
+                .pointer("/capabilities/textDocument/hover/contentFormat")
+                .and_then(Value::as_array)
+                .and_then(|formats| {
+                    formats
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .find(|format| matches!(*format, "markdown" | "plaintext"))
+                })
+                == Some("markdown");
+            self.versioned_edits = params
+                .pointer("/capabilities/workspace/workspaceEdit/documentChanges")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             self.state = State::Running;
             return Ok(json!({
                 "capabilities": {
@@ -117,6 +135,10 @@ impl Server {
                     "documentSymbolProvider": true,
                     "foldingRangeProvider": true,
                     "definitionProvider": true,
+                    "hoverProvider": true,
+                    "referencesProvider": true,
+                    "completionProvider": { "triggerCharacters": ["[", "^"], "resolveProvider": false },
+                    "renameProvider": { "prepareProvider": true },
                 },
                 "serverInfo": { "name": "yozora-lsp", "version": env!("CARGO_PKG_VERSION") },
             }));
@@ -163,7 +185,7 @@ impl Server {
                 Ok(json!(ranges))
             }
             "textDocument/definition" => {
-                let params: DefinitionParams = parse_params(params)?;
+                let params: TextDocumentPositionParams = parse_params(params)?;
                 let uri = params.text_document.uri;
                 let document = open_document(&mut self.documents, &uri)?;
                 document.validate_position(params.position)?;
@@ -172,6 +194,69 @@ impl Server {
                         .map(|range| json!({ "uri": uri, "range": range }))
                         .unwrap_or(Value::Null),
                 )
+            }
+            "textDocument/hover" => {
+                let params: TextDocumentPositionParams = parse_params(params)?;
+                let document = open_document(&mut self.documents, &params.text_document.uri)?;
+                document.validate_position(params.position)?;
+                Ok(
+                    analysis::hover(document.ast(&self.parser)?, params.position)
+                        .map(|info| format_hover(info, self.hover_markdown))
+                        .unwrap_or(Value::Null),
+                )
+            }
+            "textDocument/references" => {
+                let ReferencesParams {
+                    position_params: params,
+                    context,
+                } = parse_params(params)?;
+                let uri = params.text_document.uri;
+                let document = open_document(&mut self.documents, &uri)?;
+                document.validate_position(params.position)?;
+                let locations: Vec<_> = analysis::references(
+                    document.ast(&self.parser)?,
+                    params.position,
+                    context.include_declaration,
+                )
+                .into_iter()
+                .map(|range| json!({ "uri": uri, "range": range }))
+                .collect();
+                Ok(json!(locations))
+            }
+            "textDocument/completion" => {
+                let params: TextDocumentPositionParams = parse_params(params)?;
+                let document = open_document(&mut self.documents, &params.text_document.uri)?;
+                let (root, line, cursor) = document.line_snapshot(&self.parser, params.position)?;
+                Ok(json!(completion::complete(
+                    root,
+                    line,
+                    cursor,
+                    params.position.line,
+                    &self.parser,
+                )))
+            }
+            "textDocument/prepareRename" => {
+                let params: TextDocumentPositionParams = parse_params(params)?;
+                let document = open_document(&mut self.documents, &params.text_document.uri)?;
+                let snapshot = document.snapshot(&self.parser, params.position)?;
+                Ok(json!(rename::prepare(&snapshot, params.position)))
+            }
+            "textDocument/rename" => {
+                let RenameParams {
+                    position_params: params,
+                    new_name,
+                } = parse_params(params)?;
+                let uri = params.text_document.uri;
+                let document = open_document(&mut self.documents, &uri)?;
+                let snapshot = document.snapshot(&self.parser, params.position)?;
+                let edits = rename::rename(&snapshot, params.position, &new_name, &self.parser)?;
+                if self.versioned_edits {
+                    Ok(json!({ "documentChanges": [{
+                        "textDocument": { "uri": uri, "version": snapshot.version }, "edits": edits
+                    }] }))
+                } else {
+                    Ok(json!({ "changes": { uri: edits } }))
+                }
             }
             _ => Err(ResponseError::new(-32601, "Method not found")),
         }
@@ -188,8 +273,15 @@ impl Server {
             }
             "textDocument/didChange" => {
                 let params: DidChangeParams = parse_params(params)?;
-                let document = open_document(&mut self.documents, &params.text_document.uri)?;
-                document.change(params.text_document.version, params.content_changes)?;
+                let uri = params.text_document.uri;
+                let document = open_document(&mut self.documents, &uri)?;
+                let result = match parse_params(params.content_changes) {
+                    Ok(changes) => document.change(params.text_document.version, changes),
+                    Err(error) => document
+                        .invalidate(params.text_document.version)
+                        .and(Err(error)),
+                };
+                result?;
             }
             "textDocument/didClose" => {
                 let params: TextDocumentParams = parse_params(params)?;
@@ -200,6 +292,22 @@ impl Server {
         }
         Ok(())
     }
+}
+
+fn format_hover(info: analysis::HoverInfo, markdown: bool) -> Value {
+    let (kind, value) = if markdown {
+        let mut escaped = String::new();
+        for character in info.text.chars() {
+            if character.is_ascii_punctuation() {
+                escaped.push('\\');
+            }
+            escaped.push(character);
+        }
+        ("markdown", escaped)
+    } else {
+        ("plaintext", info.text)
+    };
+    json!({ "contents": { "kind": kind, "value": value }, "range": info.range })
 }
 
 fn parse_params<T: DeserializeOwned>(params: Value) -> Result<T, ResponseError> {

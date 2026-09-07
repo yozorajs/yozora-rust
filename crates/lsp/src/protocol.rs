@@ -96,14 +96,67 @@ pub struct ContentChange {
 #[serde(rename_all = "camelCase")]
 pub struct DidChangeParams {
     pub text_document: VersionedTextDocumentIdentifier,
-    pub content_changes: Vec<ContentChange>,
+    // Retain the URI/version even if decoding the edit batch fails.
+    #[serde(default)]
+    pub content_changes: Value,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DefinitionParams {
+pub struct TextDocumentPositionParams {
     pub text_document: TextDocumentIdentifier,
     pub position: Position,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameParams {
+    #[serde(flatten)]
+    pub position_params: TextDocumentPositionParams,
+    pub new_name: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PrepareRenameResult {
+    pub range: Range,
+    pub placeholder: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReferenceContext {
+    pub include_declaration: bool,
+}
+
+#[derive(Deserialize)]
+pub struct ReferencesParams {
+    #[serde(flatten)]
+    pub position_params: TextDocumentPositionParams,
+    pub context: ReferenceContext,
+}
+
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompletionList {
+    pub is_incomplete: bool,
+    pub items: Vec<CompletionItem>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompletionItem {
+    pub label: String,
+    pub kind: u32,
+    pub detail: String,
+    pub filter_text: String,
+    pub text_edit: TextEdit,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextEdit {
+    pub range: Range,
+    pub new_text: String,
 }
 
 #[derive(Debug)]

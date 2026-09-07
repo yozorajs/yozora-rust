@@ -16,6 +16,13 @@ pub struct Document {
     ast: Option<Root>,
 }
 
+pub struct Snapshot<'a> {
+    pub root: &'a Root,
+    pub text: &'a str,
+    pub lines: &'a LineIndex,
+    pub version: i32,
+}
+
 impl Document {
     pub fn new(version: i32, text: String) -> Result<Self, ResponseError> {
         check_size(text.len())?;
@@ -33,11 +40,7 @@ impl Document {
         version: i32,
         changes: Vec<ContentChange>,
     ) -> Result<(), ResponseError> {
-        if version <= self.version {
-            return Err(ResponseError::invalid_params(
-                "document version must increase",
-            ));
-        }
+        self.check_version(version)?;
 
         let result = self.apply_changes(changes);
         self.version = version;
@@ -53,6 +56,26 @@ impl Document {
                 self.synchronized = false;
                 Err(error)
             }
+        }
+    }
+
+    /// A malformed batch with a known newer version also makes the text unknown.
+    /// Keep the last text for recovery, but suspend queries and discard its AST.
+    pub fn invalidate(&mut self, version: i32) -> Result<(), ResponseError> {
+        self.check_version(version)?;
+        self.version = version;
+        self.ast = None;
+        self.synchronized = false;
+        Ok(())
+    }
+
+    fn check_version(&self, version: i32) -> Result<(), ResponseError> {
+        if version <= self.version {
+            Err(ResponseError::invalid_params(
+                "document version must increase",
+            ))
+        } else {
+            Ok(())
         }
     }
 
@@ -103,6 +126,46 @@ impl Document {
         }))
     }
 
+    /// Borrow the source line and AST from one synchronized document version.
+    /// The cursor is a UTF-8 byte offset within the line, excluding its ending.
+    pub fn line_snapshot(
+        &mut self,
+        parser: &YozoraParser,
+        position: Position,
+    ) -> Result<(&Root, &str, usize), ResponseError> {
+        self.ensure_synchronized()?;
+        let cursor = self.lines.byte_offset(&self.text, position)?;
+        self.ast(parser)?;
+        let start = self.lines.starts[position.line as usize];
+        let end = self
+            .lines
+            .starts
+            .get(position.line as usize + 1)
+            .copied()
+            .unwrap_or(self.text.len());
+        Ok((
+            self.ast.as_ref().expect("AST was initialized"),
+            self.text[start..end].trim_end_matches(['\r', '\n']),
+            cursor - start,
+        ))
+    }
+
+    /// An immutable source/AST view for edits against this exact version.
+    pub fn snapshot(
+        &mut self,
+        parser: &YozoraParser,
+        position: Position,
+    ) -> Result<Snapshot<'_>, ResponseError> {
+        self.validate_position(position)?;
+        self.ast(parser)?;
+        Ok(Snapshot {
+            root: self.ast.as_ref().expect("AST was initialized"),
+            text: &self.text,
+            lines: &self.lines,
+            version: self.version,
+        })
+    }
+
     fn ensure_synchronized(&self) -> Result<(), ResponseError> {
         if self.synchronized {
             Ok(())
@@ -115,7 +178,7 @@ impl Document {
     }
 }
 
-fn check_size(bytes: usize) -> Result<(), ResponseError> {
+pub(super) fn check_size(bytes: usize) -> Result<(), ResponseError> {
     if bytes > MAX_DOCUMENT_BYTES {
         Err(ResponseError::invalid_params("document exceeds 16 MiB"))
     } else {
@@ -124,7 +187,7 @@ fn check_size(bytes: usize) -> Result<(), ResponseError> {
 }
 
 #[derive(Clone)]
-struct LineIndex {
+pub struct LineIndex {
     starts: Vec<usize>,
 }
 
@@ -152,7 +215,7 @@ impl LineIndex {
         Self { starts }
     }
 
-    fn byte_offset(&self, text: &str, position: Position) -> Result<usize, ResponseError> {
+    pub fn byte_offset(&self, text: &str, position: Position) -> Result<usize, ResponseError> {
         let line = position.line as usize;
         let start = *self
             .starts
@@ -174,6 +237,19 @@ impl LineIndex {
         }
         // LSP positions beyond the line's content are clamped to its end.
         Ok(start + content.len())
+    }
+
+    pub fn position(&self, text: &str, offset: usize) -> Result<Position, ResponseError> {
+        if !text.is_char_boundary(offset) {
+            return Err(ResponseError::invalid_params(
+                "offset splits a UTF-8 character",
+            ));
+        }
+        let line = self.starts.partition_point(|start| *start <= offset) - 1;
+        Ok(Position {
+            line: line as u32,
+            character: text[self.starts[line]..offset].encode_utf16().count() as u32,
+        })
     }
 }
 
@@ -261,6 +337,30 @@ mod tests {
                 }],
             )
             .unwrap();
+        assert!(document.ast(&parser).is_ok());
+    }
+
+    #[test]
+    fn invalidates_only_newer_versions_when_a_batch_cannot_be_decoded() {
+        let parser = YozoraParser::default();
+        let mut document = Document::new(1, "# Before😀".into()).unwrap();
+        document.ast(&parser).unwrap();
+        assert!(document.invalidate(1).is_err());
+        assert!(document.ast.is_some());
+        document.invalidate(2).unwrap();
+        assert_eq!(document.text, "# Before😀");
+        assert!(document.ast.is_none());
+        assert_eq!(document.ast(&parser).unwrap_err().code, -32801);
+        document
+            .change(
+                3,
+                vec![ContentChange {
+                    range: None,
+                    text: "# Recovered".into(),
+                }],
+            )
+            .unwrap();
+        assert_eq!(document.text, "# Recovered");
         assert!(document.ast(&parser).is_ok());
     }
 }

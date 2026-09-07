@@ -15,6 +15,7 @@ serde_json.workspace = true
 yozora-ast = { version = "0.1.0", path = "../ast" }
 yozora-ast-util = { version = "0.1.0", path = "../ast-util" }
 yozora-core-parser = { version = "0.1.0", path = "../core-parser" }
+yozora-core-tokenizer = { version = "0.1.0", path = "../core-tokenizer" }
 yozora-parser = { version = "0.1.0", path = "../parser" }
 
 [[bin]]

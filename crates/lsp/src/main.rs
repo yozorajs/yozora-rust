@@ -1,6 +1,8 @@
 mod analysis;
+mod completion;
 mod document;
 mod protocol;
+mod rename;
 mod server;
 mod transport;
 

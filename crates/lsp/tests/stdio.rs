@@ -147,6 +147,45 @@ fn document(uri: &str) -> Value {
 }
 
 #[test]
+fn table_completion_preserves_neighboring_cells_and_resolves_escaped_labels() {
+    let mut client = Client::start();
+    client.initialize(json!({}));
+    let uri = "untitled:table-completion";
+    client.open(
+        uri,
+        "| A | B |\n| --- | --- |\n| 😀 [shown][a | later ] |\n\n[a|b]: /url\n",
+    );
+    let response = client.request(
+        "textDocument/completion",
+        json!({
+            "textDocument": { "uri": uri }, "position": { "line": 2, "character": 14 }
+        }),
+    );
+    let items = response["result"]["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["label"], "a|b");
+    assert_eq!(
+        items[0]["textEdit"],
+        json!({
+            "range": { "start": { "line": 2, "character": 13 }, "end": { "line": 2, "character": 14 } },
+            "newText": "a\\|b]"
+        })
+    );
+    client.notify("textDocument/didChange", json!({
+        "textDocument": { "uri": uri, "version": 2 },
+        "contentChanges": [{ "range": items[0]["textEdit"]["range"], "text": items[0]["textEdit"]["newText"] }]
+    }));
+    let definition = client.request(
+        "textDocument/definition",
+        json!({
+            "textDocument": { "uri": uri }, "position": { "line": 2, "character": 7 }
+        }),
+    );
+    assert_eq!(definition["result"]["range"]["start"]["line"], 4);
+    client.shutdown();
+}
+
+#[test]
 fn edits_open_documents_and_updates_symbols_folds_and_definitions() {
     let mut client = Client::start();
     let result = client.initialize(json!({
@@ -162,9 +201,21 @@ fn edits_open_documents_and_updates_symbols_folds_and_definitions() {
         "documentSymbolProvider",
         "foldingRangeProvider",
         "definitionProvider",
+        "hoverProvider",
+        "referencesProvider",
     ] {
         assert_eq!(result["capabilities"][capability], true);
     }
+    assert_eq!(
+        result["capabilities"]["completionProvider"],
+        json!({
+            "triggerCharacters": ["[", "^"], "resolveProvider": false
+        })
+    );
+    assert_eq!(
+        result["capabilities"]["renameProvider"],
+        json!({ "prepareProvider": true })
+    );
     let uri = "file:///workspace/note.md";
     client.open(uri, "# 中文😀\r\nintro\r\n## Child\r\n[guide][REF] and [^n]\r\n\r\n[ref]: /docs\r\n[^n]: note\r\n");
     client.open("untitled:other", "# Other");
@@ -336,6 +387,24 @@ fn rejects_stale_versions_and_recovers_after_invalid_utf16_edits() {
         client.request("textDocument/documentSymbol", document(uri))["error"]["code"],
         -32801
     );
+    for method in [
+        "textDocument/hover",
+        "textDocument/references",
+        "textDocument/completion",
+        "textDocument/prepareRename",
+        "textDocument/rename",
+    ] {
+        let response = client.request(
+            method,
+            json!({
+                "textDocument": { "uri": uri },
+                "position": { "line": 0, "character": 0 },
+                "newName": "new",
+                "context": { "includeDeclaration": true }
+            }),
+        );
+        assert_eq!(response["error"]["code"], -32801);
+    }
     client.notify(
         "textDocument/didChange",
         json!({
@@ -394,4 +463,418 @@ fn exits_with_failure_without_a_shutdown_request() {
     let mut client = Client::start();
     client.notify("exit", Value::Null);
     assert_eq!(client.wait_for_exit().code(), Some(1));
+}
+
+#[test]
+fn hover_and_references_follow_edits_and_stay_within_the_requested_document() {
+    let mut client = Client::start();
+    client.initialize(json!({}));
+    let uri = "untitled:references";
+    client.open(uri, "😀 [one][ID] ![two][id]\n\n[id]: /old \"Old\"\n");
+    client.open("untitled:other", "[other][id]\n\n[id]: /other\n");
+    let at_reference = json!({
+        "textDocument": { "uri": uri },
+        "position": { "line": 0, "character": 4 }
+    });
+    let info = client.request("textDocument/hover", at_reference.clone());
+    assert_eq!(
+        info["result"]["contents"],
+        json!({ "kind": "plaintext", "value": "/old\n\nOld" })
+    );
+    assert_eq!(
+        info["result"]["range"],
+        json!({
+            "start": { "line": 0, "character": 3 }, "end": { "line": 0, "character": 12 }
+        })
+    );
+    for (position, include_declaration, expected_count) in [
+        (json!({ "line": 0, "character": 4 }), false, 2),
+        (json!({ "line": 2, "character": 2 }), true, 3),
+    ] {
+        let response = client.request(
+            "textDocument/references",
+            json!({
+                "textDocument": { "uri": uri }, "position": position,
+                "context": { "includeDeclaration": include_declaration }
+            }),
+        );
+        let locations = response["result"].as_array().unwrap();
+        assert_eq!(locations.len(), expected_count);
+        assert!(locations.iter().all(|location| location["uri"] == uri));
+        assert_eq!(
+            locations[0]["range"]["start"],
+            json!({ "line": 0, "character": 3 })
+        );
+        assert_eq!(
+            locations[1]["range"]["start"],
+            json!({ "line": 0, "character": 13 })
+        );
+    }
+
+    client.notify("textDocument/didChange", json!({
+        "textDocument": { "uri": uri, "version": 2 },
+        "contentChanges": [
+            { "range": { "start": { "line": 2, "character": 6 }, "end": { "line": 2, "character": 10 } }, "text": "/new" },
+            { "range": { "start": { "line": 2, "character": 12 }, "end": { "line": 2, "character": 15 } }, "text": "New" },
+            { "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 0 } }, "text": "[more][id]\n" }
+        ]
+    }));
+    let info = client.request(
+        "textDocument/hover",
+        json!({
+            "textDocument": { "uri": uri }, "position": { "line": 1, "character": 4 }
+        }),
+    );
+    assert_eq!(info["result"]["contents"]["value"], "/new\n\nNew");
+    let response = client.request(
+        "textDocument/references",
+        json!({
+            "textDocument": { "uri": uri }, "position": { "line": 3, "character": 2 },
+            "context": { "includeDeclaration": false }
+        }),
+    );
+    let starts: Vec<_> = response["result"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|location| location["range"]["start"].clone())
+        .collect();
+    assert_eq!(
+        starts,
+        [
+            json!({ "line": 0, "character": 0 }),
+            json!({ "line": 1, "character": 3 }),
+            json!({ "line": 1, "character": 13 }),
+        ]
+    );
+    let other = client.request(
+        "textDocument/hover",
+        json!({
+            "textDocument": { "uri": "untitled:other" }, "position": { "line": 0, "character": 2 }
+        }),
+    );
+    assert_eq!(other["result"]["contents"]["value"], "/other");
+
+    assert_eq!(
+        client.request("textDocument/references", at_reference.clone())["error"]["code"],
+        -32602
+    );
+    client.notify("textDocument/didClose", document(uri));
+    for method in [
+        "textDocument/hover",
+        "textDocument/references",
+        "textDocument/completion",
+    ] {
+        let mut params = at_reference.clone();
+        params["context"] = json!({ "includeDeclaration": true });
+        assert_eq!(client.request(method, params)["error"]["code"], -32602);
+    }
+    client.shutdown();
+}
+
+#[test]
+fn hover_respects_content_format_preference_and_preserves_literal_markdown() {
+    for (formats, kind, expected) in [
+        (
+            json!(["markdown", "plaintext"]),
+            "markdown",
+            "\\/target\n\n\\*literal\\* \\[text\\]",
+        ),
+        (
+            json!(["plaintext", "markdown"]),
+            "plaintext",
+            "/target\n\n*literal* [text]",
+        ),
+    ] {
+        let mut client = Client::start();
+        client.initialize(json!({ "textDocument": { "hover": { "contentFormat": formats } } }));
+        let uri = "untitled:hover-format";
+        client.open(uri, "[link](/target \"*literal* [text]\")\n");
+        let response = client.request(
+            "textDocument/hover",
+            json!({
+                "textDocument": { "uri": uri }, "position": { "line": 0, "character": 3 }
+            }),
+        );
+        assert_eq!(
+            response["result"]["contents"],
+            json!({ "kind": kind, "value": expected })
+        );
+        client.shutdown();
+    }
+}
+
+#[test]
+fn completion_edits_resolve_references_and_refresh_with_document_changes() {
+    let mut client = Client::start();
+    client.initialize(json!({}));
+    let uri = "untitled:completion";
+    client.open(
+        uri,
+        "😀 [text][Gu\n\n[Guide]: /first\n[guide]: /ignored\n[^Guide]: note\n",
+    );
+    let response = client.request(
+        "textDocument/completion",
+        json!({
+            "textDocument": { "uri": uri }, "position": { "line": 0, "character": 12 },
+            "context": { "triggerKind": 1 }
+        }),
+    );
+    assert_eq!(response["result"]["isIncomplete"], true);
+    let items = response["result"]["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["label"], "Guide");
+    assert_eq!(items[0]["detail"], "/first");
+    assert_eq!(items[0]["filterText"], "Gu");
+    assert_eq!(
+        items[0]["textEdit"],
+        json!({
+            "range": { "start": { "line": 0, "character": 10 }, "end": { "line": 0, "character": 12 } },
+            "newText": "Guide]"
+        })
+    );
+    client.notify("textDocument/didChange", json!({
+        "textDocument": { "uri": uri, "version": 2 },
+        "contentChanges": [{ "range": items[0]["textEdit"]["range"], "text": items[0]["textEdit"]["newText"] }]
+    }));
+    let target = client.request(
+        "textDocument/definition",
+        json!({
+            "textDocument": { "uri": uri }, "position": { "line": 0, "character": 11 }
+        }),
+    );
+    assert_eq!(target["result"]["range"]["start"]["line"], 2);
+
+    client.notify(
+        "textDocument/didChange",
+        json!({
+            "textDocument": { "uri": uri, "version": 3 },
+            "contentChanges": [{ "text": "😀 [text][N\n\n[New]: /new\n[^Note]: body\n" }]
+        }),
+    );
+    let response = client.request(
+        "textDocument/completion",
+        json!({
+            "textDocument": { "uri": uri }, "position": { "line": 0, "character": 11 }
+        }),
+    );
+    assert_eq!(response["result"]["items"].as_array().unwrap().len(), 1);
+    assert_eq!(response["result"]["items"][0]["label"], "New");
+    assert_eq!(response["result"]["items"][0]["detail"], "/new");
+    let invalid = client.request(
+        "textDocument/completion",
+        json!({
+            "textDocument": { "uri": uri }, "position": { "line": 0, "character": 1 }
+        }),
+    );
+    assert_eq!(invalid["error"]["code"], -32602);
+
+    client.notify(
+        "textDocument/didChange",
+        json!({
+            "textDocument": { "uri": uri, "version": 4 },
+            "contentChanges": [{ "text": "[^N]\n\n[New]: /new\n[^Note]: body\n" }]
+        }),
+    );
+    let response = client.request(
+        "textDocument/completion",
+        json!({
+            "textDocument": { "uri": uri }, "position": { "line": 0, "character": 3 },
+            "context": { "triggerKind": 2, "triggerCharacter": "^" }
+        }),
+    );
+    let items = response["result"]["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["label"], "Note");
+    assert_eq!(items[0]["textEdit"]["newText"], "Note");
+    client.notify("textDocument/didChange", json!({
+        "textDocument": { "uri": uri, "version": 5 },
+        "contentChanges": [{ "range": items[0]["textEdit"]["range"], "text": items[0]["textEdit"]["newText"] }]
+    }));
+    let target = client.request(
+        "textDocument/definition",
+        json!({
+            "textDocument": { "uri": uri }, "position": { "line": 0, "character": 3 }
+        }),
+    );
+    assert_eq!(target["result"]["range"]["start"]["line"], 3);
+    client.shutdown();
+}
+
+#[test]
+fn completion_uses_cr_line_positions_and_skips_unclosed_code_blocks() {
+    let mut client = Client::start();
+    client.initialize(json!({}));
+    let uri = "untitled:completion-context";
+    client.open(uri, "[Guide]: /first\r\r😀 [x][gu");
+    let response = client.request(
+        "textDocument/completion",
+        json!({
+            "textDocument": { "uri": uri }, "position": { "line": 2, "character": 9 }
+        }),
+    );
+    assert_eq!(
+        response["result"]["items"][0]["textEdit"],
+        json!({
+            "range": { "start": { "line": 2, "character": 7 }, "end": { "line": 2, "character": 9 } },
+            "newText": "Guide]"
+        })
+    );
+    client.notify(
+        "textDocument/didChange",
+        json!({
+            "textDocument": { "uri": uri, "version": 2 },
+            "contentChanges": [{ "text": "[Guide]: /first\n\n```md\n[text][gu" }]
+        }),
+    );
+    let response = client.request(
+        "textDocument/completion",
+        json!({
+            "textDocument": { "uri": uri }, "position": { "line": 3, "character": 9 }
+        }),
+    );
+    assert_eq!(
+        response["result"],
+        json!({ "isIncomplete": false, "items": [] })
+    );
+    client.shutdown();
+}
+
+#[test]
+fn rename_returns_versioned_edits_and_waits_for_client_document_changes() {
+    let mut client = Client::start();
+    client.initialize(json!({ "workspace": { "workspaceEdit": { "documentChanges": true } } }));
+    let uri = "untitled:rename";
+    client.open(
+        uri,
+        "😀 [Shown][old] [old][] ![old]\n\n[old]: /target \"Title\"\n",
+    );
+    let params =
+        json!({ "textDocument": { "uri": uri }, "position": { "line": 0, "character": 12 } });
+    let prepared = client.request("textDocument/prepareRename", params.clone());
+    assert_eq!(
+        prepared["result"],
+        json!({
+            "range": { "start": { "line": 0, "character": 11 }, "end": { "line": 0, "character": 14 } },
+            "placeholder": "old"
+        })
+    );
+    let mut rename_params = params.clone();
+    rename_params["newName"] = json!("new");
+    let response = client.request("textDocument/rename", rename_params.clone());
+    let changes = response["result"]["documentChanges"].as_array().unwrap();
+    assert_eq!(changes.len(), 1);
+    assert_eq!(
+        changes[0]["textDocument"],
+        json!({ "uri": uri, "version": 1 })
+    );
+    let edits = changes[0]["edits"].as_array().unwrap();
+    assert_eq!(edits.len(), 4);
+    assert_eq!(edits[0]["newText"], "new");
+    assert_eq!(
+        edits[1]["range"],
+        json!({
+            "start": { "line": 0, "character": 22 }, "end": { "line": 0, "character": 22 }
+        })
+    );
+    assert_eq!(edits[2]["newText"], "[new]");
+    assert_eq!(
+        client.request("textDocument/prepareRename", params.clone())["result"]["placeholder"],
+        "old"
+    );
+
+    let content_changes: Vec<_> = edits
+        .iter()
+        .rev()
+        .map(|edit| json!({ "range": edit["range"], "text": edit["newText"] }))
+        .collect();
+    client.notify(
+        "textDocument/didChange",
+        json!({
+            "textDocument": { "uri": uri, "version": 2 }, "contentChanges": content_changes
+        }),
+    );
+    assert_eq!(
+        client.request("textDocument/prepareRename", params.clone())["result"]["placeholder"],
+        "new"
+    );
+    let mut references_params = params.clone();
+    references_params["context"] = json!({ "includeDeclaration": true });
+    let references = client.request("textDocument/references", references_params);
+    assert_eq!(references["result"].as_array().unwrap().len(), 4);
+    assert_eq!(
+        client.request("textDocument/hover", params)["result"]["contents"]["value"],
+        "/target\n\nTitle"
+    );
+    rename_params["newName"] = json!("next");
+    let next = client.request("textDocument/rename", rename_params);
+    assert_eq!(
+        next["result"]["documentChanges"][0]["textDocument"]["version"],
+        2
+    );
+    client.shutdown();
+}
+
+#[test]
+fn rename_supports_legacy_workspace_edits_and_separate_footnote_namespaces() {
+    let mut client = Client::start();
+    client.initialize(json!({}));
+    let uri = "untitled:rename-legacy";
+    client.open(
+        uri,
+        "[^old] [text][old]\n\n[^old]: note\n\n[old]: /url\n[new]: /other\n",
+    );
+    let response = client.request("textDocument/rename", json!({
+        "textDocument": { "uri": uri }, "position": { "line": 0, "character": 3 }, "newName": "new"
+    }));
+    assert!(response["result"].get("documentChanges").is_none());
+    let edits = response["result"]["changes"][uri].as_array().unwrap();
+    assert_eq!(edits.len(), 2);
+    assert_eq!(
+        edits[0]["range"],
+        json!({
+            "start": { "line": 0, "character": 2 }, "end": { "line": 0, "character": 5 }
+        })
+    );
+    let conflict = client.request("textDocument/rename", json!({
+        "textDocument": { "uri": uri }, "position": { "line": 0, "character": 15 }, "newName": "NEW"
+    }));
+    assert_eq!(conflict["error"]["code"], -32803);
+    let invalid = client.request(
+        "textDocument/rename",
+        json!({
+            "textDocument": { "uri": uri }, "position": { "line": 0, "character": 3 }, "newName": ""
+        }),
+    );
+    assert_eq!(invalid["error"]["code"], -32602);
+    let body = client.request(
+        "textDocument/prepareRename",
+        json!({
+            "textDocument": { "uri": uri }, "position": { "line": 2, "character": 9 }
+        }),
+    );
+    assert_eq!(body["result"], Value::Null);
+    client.shutdown();
+}
+
+#[test]
+fn rename_rejects_unintended_bindings_without_mutating_the_document() {
+    let mut client = Client::start();
+    client.initialize(json!({}));
+    let uri = "untitled:rename-conflict";
+    client.open(uri, "[old] [new]\n\n[old]: /url\n");
+    let params =
+        json!({ "textDocument": { "uri": uri }, "position": { "line": 0, "character": 2 } });
+    let mut rename_params = params.clone();
+    rename_params["newName"] = json!("new");
+    let rejected = client.request("textDocument/rename", rename_params.clone());
+    assert_eq!(rejected["error"]["code"], -32803);
+    assert_eq!(
+        client.request("textDocument/prepareRename", params)["result"]["placeholder"],
+        "old"
+    );
+    rename_params["newName"] = json!("old");
+    let noop = client.request("textDocument/rename", rename_params);
+    assert_eq!(noop["result"]["changes"][uri], json!([]));
+    client.shutdown();
 }

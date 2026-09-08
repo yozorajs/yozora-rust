@@ -2,8 +2,11 @@ mod analysis;
 mod completion;
 mod diagnostics;
 mod document;
+mod files;
+mod links;
 mod protocol;
 mod rename;
+mod resource_completion;
 mod server;
 mod transport;
 

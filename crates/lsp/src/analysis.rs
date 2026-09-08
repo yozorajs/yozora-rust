@@ -1,6 +1,6 @@
 use std::cmp::Reverse;
 
-use yozora_ast::{Definition, FootnoteDefinition, Node, Root};
+use yozora_ast::{Definition, FootnoteDefinition, Heading, Node, Root};
 use yozora_ast_util::{collect_definitions, collect_footnote_definitions};
 
 use crate::protocol::{DocumentSymbol, FoldingRange, Position, Range};
@@ -73,19 +73,7 @@ fn heading_sections(root: &Root) -> Vec<HeadingSection> {
                     let symbol = &mut sections[index].symbol;
                     symbol.range.end = boundary.max(symbol.selection_range.end);
                 }
-                let selection_range = match (
-                    heading.children.first().and_then(Node::position),
-                    heading.children.last().and_then(Node::position),
-                ) {
-                    (Some(first), Some(last)) => Range {
-                        start: Position::from(first.start).max(range.start),
-                        end: Position::from(last.end).min(range.end),
-                    },
-                    _ => Range {
-                        start: range.start,
-                        end: range.start,
-                    },
-                };
+                let selection_range = heading_selection_range(heading, range);
                 active.push(sections.len());
                 sections.push(HeadingSection {
                     depth: heading.depth,
@@ -121,6 +109,22 @@ fn heading_name(nodes: &[Node]) -> String {
         "(empty heading)".to_string()
     } else {
         name
+    }
+}
+
+pub(super) fn heading_selection_range(heading: &Heading, range: Range) -> Range {
+    match (
+        heading.children.first().and_then(Node::position),
+        heading.children.last().and_then(Node::position),
+    ) {
+        (Some(first), Some(last)) => Range {
+            start: Position::from(first.start).max(range.start),
+            end: Position::from(last.end).min(range.end),
+        },
+        _ => Range {
+            start: range.start,
+            end: range.start,
+        },
     }
 }
 
@@ -201,7 +205,8 @@ pub fn folding_ranges(root: &Root) -> Vec<FoldingRange> {
 }
 
 pub fn definition(root: &Root, position: Position) -> Option<Range> {
-    let source = node_at(root, position, |node| reference_key(node).is_some())?;
+    let source = resource_or_symbol_at(root, position)?;
+    reference_key(source)?;
     let (_, target) = resolve_symbol(root, source)?;
     target.range()
 }
@@ -231,9 +236,7 @@ pub struct HoverInfo {
 }
 
 pub fn hover(root: &Root, position: Position) -> Option<HoverInfo> {
-    let source = node_at(root, position, |node| {
-        matches!(node, Node::Link(_) | Node::Image(_)) || symbol_key(node).is_some()
-    })?;
+    let source = resource_or_symbol_at(root, position)?;
     let text = match source {
         Node::Link(link) => resource_hover(&link.url, link.title.as_deref()),
         Node::Image(image) => resource_hover(&image.url, image.title.as_deref()),
@@ -338,6 +341,14 @@ pub(super) fn resolve_symbol<'a>(
         _ => {}
     }
     Some((key, target))
+}
+
+pub(super) fn resource_or_symbol_at(root: &Root, position: Position) -> Option<&Node> {
+    // Select the innermost node before deciding between a reference declaration
+    // and a direct resource, so outer references cannot intercept inner images.
+    node_at(root, position, |node| {
+        matches!(node, Node::Link(_) | Node::Image(_)) || symbol_key(node).is_some()
+    })
 }
 
 fn node_at(root: &Root, position: Position, is_target: impl Fn(&Node) -> bool) -> Option<&Node> {

@@ -1,5 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::io::{self, BufRead, Write};
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::mpsc::RecvTimeoutError;
 use std::time::{Duration, Instant};
@@ -12,11 +13,15 @@ use crate::analysis;
 use crate::completion;
 use crate::diagnostics;
 use crate::document::Document;
+use crate::files::{self, FileScope, Target, Workspace};
+use crate::links;
 use crate::protocol::{
-    DidChangeParams, DidOpenParams, DocumentSymbol, ReferencesParams, RenameParams, ResponseError,
+    DidChangeParams, DidChangeWorkspaceFoldersParams, DidOpenParams, DocumentSymbol,
+    InitializeParams, Position, Range, ReferencesParams, RenameParams, ResponseError,
     TextDocumentParams, TextDocumentPositionParams,
 };
 use crate::rename;
+use crate::resource_completion;
 use crate::transport::{read_messages, write_message};
 
 const DIAGNOSTICS_DELAY: Duration = Duration::from_millis(150);
@@ -43,6 +48,8 @@ struct Server {
     state: State,
     parser: YozoraParser,
     documents: HashMap<String, Document>,
+    workspace: Workspace,
+    heading_id_prefix: String,
     hierarchical_symbols: bool,
     folding_range_limit: Option<usize>,
     hover_markdown: bool,
@@ -235,6 +242,25 @@ impl Server {
                     "initialize requires client capabilities",
                 ));
             }
+            let initialization: InitializeParams = parse_params(params.clone())?;
+            let folders: Vec<_> = initialization.workspace_folders.map_or_else(
+                || initialization.root_uri.into_iter().collect(),
+                |folders| folders.into_iter().map(|folder| folder.uri).collect(),
+            );
+            for uri in &folders {
+                validate_uri(uri)?;
+            }
+            let prefix = initialization
+                .initialization_options
+                .unwrap_or_default()
+                .heading_id_prefix;
+            if prefix.len() > 256 || prefix.chars().any(char::is_control) {
+                return Err(ResponseError::invalid_params(
+                    "headingIdPrefix must be at most 256 UTF-8 bytes without control characters",
+                ));
+            }
+            self.workspace = Workspace::new(folders);
+            self.heading_id_prefix = prefix;
             self.hierarchical_symbols = params
                 .pointer(
                     "/capabilities/textDocument/documentSymbol/hierarchicalDocumentSymbolSupport",
@@ -275,9 +301,11 @@ impl Server {
                     "documentSymbolProvider": true,
                     "foldingRangeProvider": true,
                     "definitionProvider": true,
+                    "documentLinkProvider": { "resolveProvider": false },
+                    "workspace": { "workspaceFolders": { "supported": true, "changeNotifications": true } },
                     "hoverProvider": true,
                     "referencesProvider": true,
-                    "completionProvider": { "triggerCharacters": ["[", "^"], "resolveProvider": false },
+                    "completionProvider": { "triggerCharacters": ["[", "^", "(", "/", "#"], "resolveProvider": false },
                     "renameProvider": { "prepareProvider": true },
                 },
                 "serverInfo": { "name": "yozora-lsp", "version": env!("CARGO_PKG_VERSION") },
@@ -332,14 +360,39 @@ impl Server {
             }
             "textDocument/definition" => {
                 let params: TextDocumentPositionParams = parse_params(params)?;
+                self.definition(&params.text_document.uri, params.position)
+            }
+            "textDocument/documentLink" => {
+                let params: TextDocumentParams = parse_params(params)?;
                 let uri = params.text_document.uri;
+                let scope = self.workspace.scope(&uri);
+                let open_uris = self.open_file_uris(&scope, &uri);
                 let document = open_document(&mut self.documents, &uri)?;
-                document.validate_position(params.position)?;
-                Ok(
-                    analysis::definition(document.ast(&self.parser)?, params.position)
-                        .map(|range| json!({ "uri": uri, "range": range }))
-                        .unwrap_or(Value::Null),
-                )
+                Ok(json!(links::document_links(
+                    document.ast(&self.parser)?,
+                    |destination| {
+                        match files::resolve(&uri, destination, &scope)? {
+                            Target::External(uri) => Some(uri),
+                            Target::Local {
+                                file,
+                                query,
+                                fragment,
+                            } => {
+                                let target_uri = match file {
+                                    None => uri.clone(),
+                                    Some(file) => match open_file_uri(&open_uris, &file) {
+                                        Some(uri) => uri.to_string(),
+                                        None if files::is_file(&file.path) => {
+                                            files::path_uri(&file.path)?
+                                        }
+                                        None => return None,
+                                    },
+                                };
+                                files::link_uri(&target_uri, query.as_deref(), fragment.as_deref())
+                            }
+                        }
+                    }
+                )))
             }
             "textDocument/hover" => {
                 let params: TextDocumentPositionParams = parse_params(params)?;
@@ -371,13 +424,7 @@ impl Server {
             }
             "textDocument/completion" => {
                 let params: TextDocumentPositionParams = parse_params(params)?;
-                let document = open_document(&mut self.documents, &params.text_document.uri)?;
-                let snapshot = document.snapshot(&self.parser, params.position)?;
-                Ok(json!(completion::complete(
-                    &snapshot,
-                    params.position,
-                    &self.parser,
-                )?))
+                self.complete(&params.text_document.uri, params.position)
             }
             "textDocument/prepareRename" => {
                 let params: TextDocumentPositionParams = parse_params(params)?;
@@ -406,6 +453,123 @@ impl Server {
         }
     }
 
+    fn definition(&mut self, uri: &str, position: Position) -> Result<Value, ResponseError> {
+        let document = open_document(&mut self.documents, uri)?;
+        document.validate_position(position)?;
+        let root = document.ast(&self.parser)?;
+        if let Some(range) = analysis::definition(root, position) {
+            return Ok(json!({ "uri": uri, "range": range }));
+        }
+        let Some(destination) = links::destination_at(root, position).map(str::to_string) else {
+            return Ok(Value::Null);
+        };
+        let scope = self.workspace.scope(uri);
+        let Some(Target::Local { file, fragment, .. }) = files::resolve(uri, &destination, &scope)
+        else {
+            return Ok(Value::Null);
+        };
+        let fragment = fragment.as_deref().filter(|value| !value.is_empty());
+        let target_uri;
+        let mut disk_document;
+        let document = if let Some(file) = file {
+            if let Some(open_uri) = open_file_uri(&self.open_file_uris(&scope, uri), &file) {
+                target_uri = open_uri.to_string();
+                open_document(&mut self.documents, &target_uri)?
+            } else {
+                let Some(file_uri) = files::path_uri(&file.path) else {
+                    return Ok(Value::Null);
+                };
+                target_uri = file_uri;
+                if fragment.is_none() {
+                    return Ok(if files::is_file(&file.path) {
+                        json!({ "uri": target_uri, "range": document_start() })
+                    } else {
+                        Value::Null
+                    });
+                }
+                let Some(text) = files::read_markdown(&file.path) else {
+                    return Ok(Value::Null);
+                };
+                disk_document = Document::new(0, text)?;
+                &mut disk_document
+            }
+        } else {
+            target_uri = uri.to_string();
+            open_document(&mut self.documents, uri)?
+        };
+        // Never fall back to disk when an open target has lost synchronization.
+        document.validate_position(Position::default())?;
+        let range = match fragment {
+            Some(fragment) => links::heading(
+                document.ast(&self.parser)?,
+                fragment,
+                &self.heading_id_prefix,
+            ),
+            None => Some(document_start()),
+        };
+        Ok(range
+            .map(|range| json!({ "uri": target_uri, "range": range }))
+            .unwrap_or(Value::Null))
+    }
+
+    fn complete(&mut self, uri: &str, position: Position) -> Result<Value, ResponseError> {
+        let document = open_document(&mut self.documents, uri)?;
+        let snapshot = document.snapshot(&self.parser, position)?;
+        let Some(context) = resource_completion::Context::new(&snapshot, position, &self.parser)?
+        else {
+            return Ok(json!(completion::complete(
+                &snapshot,
+                position,
+                &self.parser
+            )?));
+        };
+        let scope = self.workspace.scope(uri);
+        let open_uris = self.open_file_uris(&scope, uri);
+        let candidates = match context.target() {
+            Some(resource_completion::Target::Path(prefix)) => context.paths(
+                files::path_candidates(uri, prefix, &scope, open_uris.keys().map(PathBuf::as_path)),
+            ),
+            Some(resource_completion::Target::Anchor { resource, .. }) => {
+                match files::resolve(uri, resource, &scope) {
+                    Some(Target::Local { file: None, .. }) => {
+                        let document = open_document(&mut self.documents, uri)?;
+                        context.anchors(document.ast(&self.parser)?, &self.heading_id_prefix)
+                    }
+                    Some(Target::Local {
+                        file: Some(file), ..
+                    }) => {
+                        if let Some(uri) = open_file_uri(&open_uris, &file) {
+                            let document = open_document(&mut self.documents, uri)?;
+                            context.anchors(document.ast(&self.parser)?, &self.heading_id_prefix)
+                        } else if let Some(text) = files::read_markdown(&file.path) {
+                            let mut document = Document::new(0, text)?;
+                            context.anchors(document.ast(&self.parser)?, &self.heading_id_prefix)
+                        } else {
+                            Vec::new()
+                        }
+                    }
+                    _ => Vec::new(),
+                }
+            }
+            None => Vec::new(),
+        };
+        Ok(json!(context.complete(candidates, &self.parser)))
+    }
+
+    fn open_file_uris(&self, scope: &FileScope, source_uri: &str) -> HashMap<PathBuf, Vec<String>> {
+        let mut uris: Vec<_> = self.documents.keys().collect();
+        // Preserve all aliases. Prefer the source only when no exact target
+        // URI or lexical path selects a more specific buffer.
+        uris.sort_by_key(|uri| (uri.as_str() != source_uri, *uri));
+        let mut result: HashMap<PathBuf, Vec<String>> = HashMap::new();
+        for uri in uris {
+            if let Some(path) = files::file_uri_path(uri).and_then(|path| scope.resolve(&path)) {
+                result.entry(path).or_default().push(uri.clone());
+            }
+        }
+        result
+    }
+
     fn notification(
         &mut self,
         method: &str,
@@ -413,6 +577,25 @@ impl Server {
         now: Instant,
     ) -> Result<(), ResponseError> {
         match method {
+            "workspace/didChangeWorkspaceFolders" => {
+                let params: DidChangeWorkspaceFoldersParams = parse_params(params)?;
+                let added: Vec<_> = params
+                    .event
+                    .added
+                    .into_iter()
+                    .map(|folder| folder.uri)
+                    .collect();
+                let removed: Vec<_> = params
+                    .event
+                    .removed
+                    .into_iter()
+                    .map(|folder| folder.uri)
+                    .collect();
+                for uri in added.iter().chain(&removed) {
+                    validate_uri(uri)?;
+                }
+                self.workspace.change(&removed, added);
+            }
             "textDocument/didOpen" => {
                 let params: DidOpenParams = parse_params(params)?;
                 let item = params.text_document;
@@ -501,6 +684,33 @@ impl Server {
     }
 }
 
+fn open_file_uri<'a>(
+    open_uris: &'a HashMap<PathBuf, Vec<String>>,
+    file: &files::LocalFile,
+) -> Option<&'a str> {
+    let aliases = open_uris.get(&file.path)?;
+    // Buffer identity is the requested URI, then its normalized lexical path.
+    // Canonical aliases are a fallback, never an override of a matching buffer.
+    aliases
+        .iter()
+        .find(|uri| *uri == &file.uri)
+        .or_else(|| {
+            let lexical = files::file_uri_path(&file.uri)?;
+            aliases
+                .iter()
+                .find(|uri| files::file_uri_path(uri).as_ref() == Some(&lexical))
+        })
+        .or_else(|| aliases.first())
+        .map(String::as_str)
+}
+
+fn document_start() -> Range {
+    Range {
+        start: Position::default(),
+        end: Position::default(),
+    }
+}
+
 fn format_diagnostics(
     uri: &str,
     version: Option<i32>,
@@ -555,6 +765,7 @@ fn is_document_query(method: &str) -> bool {
         "textDocument/documentSymbol"
             | "textDocument/foldingRange"
             | "textDocument/definition"
+            | "textDocument/documentLink"
             | "textDocument/hover"
             | "textDocument/references"
             | "textDocument/completion"
@@ -682,6 +893,764 @@ mod tests {
                 now,
             )
             .unwrap();
+    }
+
+    fn navigate(server: &mut Server, uri: &str, line: u32) -> Result<Value, ResponseError> {
+        server.request(
+            "textDocument/definition",
+            json!({
+                "textDocument": { "uri": uri }, "position": { "line": line, "character": 2 }
+            }),
+        )
+    }
+
+    fn complete_marked(
+        server: &mut Server,
+        uri: &str,
+        marked: &str,
+    ) -> Result<Value, ResponseError> {
+        let cursor = marked.find('¦').unwrap();
+        open(server, uri, &marked.replacen('¦', "", 1), Instant::now());
+        let snapshot = server
+            .documents
+            .get_mut(uri)
+            .unwrap()
+            .snapshot(&server.parser, Position::default())?;
+        let position = snapshot.lines.position(snapshot.text, cursor)?;
+        server.complete(uri, position)
+    }
+
+    fn completion_labels(result: &Value) -> Vec<&str> {
+        result["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["label"].as_str().unwrap())
+            .collect()
+    }
+
+    fn assert_open_alias_selection(
+        directory: &crate::files::tests::TestDir,
+        alias_uri: &str,
+        alias_destination: &str,
+    ) {
+        let uri = directory.uri("source.md");
+        let target_uri = directory.uri("guide.md");
+        let mut server = server();
+        let now = Instant::now();
+        open(&mut server, &target_uri, "# Current", now);
+        open(&mut server, alias_uri, "\n# Alias", now);
+        for (destination, expected_uri, heading, line) in [
+            ("guide.md", target_uri.as_str(), "current", 0),
+            (alias_destination, alias_uri, "alias", 1),
+        ] {
+            let result = complete_marked(
+                &mut server,
+                &uri,
+                &format!("[go]({destination}#{heading}¦)"),
+            )
+            .unwrap();
+            assert_eq!(completion_labels(&result), [heading], "{destination}");
+            let definition = navigate(&mut server, &uri, 0).unwrap();
+            assert_eq!(definition["uri"], expected_uri, "{destination}");
+            assert_eq!(definition["range"]["start"]["line"], line);
+            let links = server
+                .request(
+                    "textDocument/documentLink",
+                    json!({ "textDocument": { "uri": uri } }),
+                )
+                .unwrap();
+            assert_eq!(links[0]["target"], format!("{expected_uri}#{heading}"));
+        }
+
+        open(
+            &mut server,
+            &target_uri,
+            &format!("# Current\n\n[go]({alias_destination}#alias)"),
+            now,
+        );
+        assert_eq!(
+            navigate(&mut server, &target_uri, 2).unwrap()["uri"],
+            alias_uri
+        );
+        open(
+            &mut server,
+            alias_uri,
+            "\n# Alias\n\n[go](guide.md#current)",
+            now,
+        );
+        assert_eq!(
+            navigate(&mut server, alias_uri, 3).unwrap()["uri"],
+            target_uri
+        );
+
+        server
+            .notification(
+                "textDocument/didChange",
+                json!({ "textDocument": { "uri": alias_uri, "version": 2 } }),
+                now,
+            )
+            .unwrap_err();
+        let result = complete_marked(&mut server, &uri, "[go](guide.md#cur¦rent)").unwrap();
+        assert_eq!(completion_labels(&result), ["current"]);
+        assert_eq!(navigate(&mut server, &uri, 0).unwrap()["uri"], target_uri);
+        assert_eq!(
+            complete_marked(
+                &mut server,
+                &uri,
+                &format!("[go]({alias_destination}#al¦ias)")
+            )
+            .unwrap_err()
+            .code,
+            -32801
+        );
+        assert_eq!(navigate(&mut server, &uri, 0).unwrap_err().code, -32801);
+
+        server
+            .notification(
+                "textDocument/didClose",
+                json!({ "textDocument": { "uri": alias_uri } }),
+                now,
+            )
+            .unwrap();
+        let result = complete_marked(
+            &mut server,
+            &uri,
+            &format!("[go]({alias_destination}#cur¦rent)"),
+        )
+        .unwrap();
+        assert_eq!(completion_labels(&result), ["current"]);
+        assert_eq!(navigate(&mut server, &uri, 0).unwrap()["uri"], target_uri);
+    }
+
+    #[test]
+    fn navigation_and_completion_prefer_the_requested_open_uri_spelling() {
+        let directory = crate::files::tests::TestDir::new();
+        std::fs::write(directory.0.join("guide.md"), "# Disk").unwrap();
+        let alias = directory
+            .uri("guide.md")
+            .replacen("file://", "FILE://localhost", 1)
+            .replace("/guide.md", "/./%67uide.md");
+        assert_open_alias_selection(&directory, &alias, &alias);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn navigation_and_completion_prefer_the_requested_open_symlink_path() {
+        let directory = crate::files::tests::TestDir::new();
+        std::fs::write(directory.0.join("guide.md"), "# Disk").unwrap();
+        std::os::unix::fs::symlink(directory.0.join("guide.md"), directory.0.join("alias.md"))
+            .unwrap();
+        let alias = directory
+            .uri("alias.md")
+            .replacen("file://", "file://localhost", 1);
+        assert_open_alias_selection(&directory, &alias, "alias.md");
+    }
+
+    #[test]
+    fn completion_does_not_reinterpret_uri_schemes_or_authorities_as_paths() {
+        let directory = crate::files::tests::TestDir::new();
+        for name in ["http", "file", "mailto", "command", "localhost"] {
+            std::fs::create_dir(directory.0.join(name)).unwrap();
+        }
+        let uri = directory.uri("source.md");
+        let mut server = server();
+        for marked in [
+            "[go](htt¦ps://example.test/guide.md)",
+            "[go](¦https://example.test/guide.md)",
+            "[go](htt¦ps&#58;//example.test/guide.md)",
+            "![alt](ma¦ilto:reader@example.test)",
+            "[ref]: co¦mmand:run",
+            "[go](fi¦le:///guide.md)",
+            "[go](file://local¦host/guide.md)",
+            "[go](//local¦host/guide.md)",
+        ] {
+            let result = complete_marked(&mut server, &uri, marked).unwrap();
+            assert!(completion_labels(&result).is_empty(), "{marked}: {result}");
+        }
+    }
+
+    #[test]
+    fn completion_inside_encoded_path_separators_does_not_replace_other_components() {
+        let directory = crate::files::tests::TestDir::new();
+        std::fs::create_dir(directory.0.join("part")).unwrap();
+        std::fs::write(directory.0.join("part/file.md"), "# Intro").unwrap();
+        std::fs::write(directory.0.join("part other.md"), "# Other").unwrap();
+        let uri = directory.uri("source.md");
+        let mut server = server();
+        for marked in [
+            "[go](part%¦2Ffile.md)",
+            "[go](part%2¦Ffile.md)",
+            "[go](part%2¦ffile.md)",
+            "[go](part&#37;2¦Ffile.md)",
+        ] {
+            let result = complete_marked(&mut server, &uri, marked).unwrap();
+            assert_eq!(
+                navigate(&mut server, &uri, 0).unwrap()["uri"],
+                directory.uri("part/file.md"),
+                "{marked}"
+            );
+            assert!(completion_labels(&result).is_empty(), "{marked}: {result}");
+        }
+    }
+
+    #[test]
+    fn definition_selects_inner_direct_images_before_outer_reference_declarations() {
+        let directory = crate::files::tests::TestDir::new();
+        std::fs::write(directory.0.join("icon.svg"), "<svg/>").unwrap();
+        let uri = directory.uri("source.md");
+        let mut server = server();
+        let result = complete_marked(
+            &mut server,
+            &uri,
+            "[![alt](ic¦on.svg)][ref]\n\n[ref]: outer.md",
+        )
+        .unwrap();
+        assert_eq!(completion_labels(&result), ["icon.svg"]);
+        let inner = json!({
+            "textDocument": { "uri": uri }, "position": { "line": 0, "character": 10 }
+        });
+        let hover = server.request("textDocument/hover", inner.clone()).unwrap();
+        assert_eq!(hover["contents"]["value"], "icon.svg");
+        assert_eq!(
+            server
+                .request("textDocument/definition", inner.clone())
+                .unwrap(),
+            json!({ "uri": directory.uri("icon.svg"), "range": document_start() })
+        );
+        let outer = server
+            .request(
+                "textDocument/definition",
+                json!({
+                    "textDocument": { "uri": uri }, "position": { "line": 0, "character": 19 }
+                }),
+            )
+            .unwrap();
+        assert_eq!(outer["uri"], uri);
+        assert_eq!(outer["range"]["start"]["line"], 2);
+        std::fs::remove_file(directory.0.join("icon.svg")).unwrap();
+        assert_eq!(
+            server.request("textDocument/definition", inner).unwrap(),
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn file_completion_edits_resolve_to_existing_or_unsaved_targets() {
+        use crate::files::tests::TestDir;
+        let directory = TestDir::new();
+        std::fs::create_dir(directory.0.join("docs")).unwrap();
+        std::fs::write(directory.0.join("docs/guide 中文.md"), "# Intro").unwrap();
+        let uri = directory.uri("source.md");
+        let mut server = server();
+        open(
+            &mut server,
+            &directory.uri("docs/guide-new.md"),
+            "# New",
+            Instant::now(),
+        );
+        let result =
+            complete_marked(&mut server, &uri, "😀 [go](docs/gu¦.md#intro \"Title\")").unwrap();
+        assert_eq!(
+            completion_labels(&result),
+            ["guide 中文.md", "guide-new.md"]
+        );
+        let item = &result["items"][0];
+        assert_eq!(item["kind"], 17);
+        assert_eq!(item["textEdit"]["range"]["start"]["character"], 8);
+        assert_eq!(
+            item["textEdit"]["newText"],
+            "docs/guide%20%E4%B8%AD%E6%96%87.md#intro"
+        );
+        server.notification("textDocument/didChange", json!({
+            "textDocument": { "uri": uri, "version": 2 },
+            "contentChanges": [{ "range": item["textEdit"]["range"], "text": item["textEdit"]["newText"] }]
+        }), Instant::now()).unwrap();
+        let definition = server
+            .definition(
+                &uri,
+                Position {
+                    line: 0,
+                    character: 5,
+                },
+            )
+            .unwrap();
+        assert_eq!(definition["uri"], directory.uri("docs/guide 中文.md"));
+        assert_eq!(definition["range"]["start"]["line"], 0);
+        let folders = complete_marked(&mut server, &uri, "[go](do¦").unwrap();
+        assert_eq!(completion_labels(&folders), ["docs/"]);
+        assert_eq!(folders["items"][0]["textEdit"]["newText"], "docs/");
+        assert_eq!(folders["items"][0]["kind"], 19);
+        let alias = directory
+            .uri("docs/")
+            .replacen("file://", "file://localhost", 1);
+        let result = complete_marked(&mut server, &uri, &format!("[go]({alias}gu¦)")).unwrap();
+        assert_eq!(
+            completion_labels(&result),
+            ["guide 中文.md", "guide-new.md"]
+        );
+    }
+
+    #[test]
+    fn cross_file_anchor_completion_uses_latest_target_state_and_never_falls_back_when_out_of_sync()
+    {
+        use crate::files::tests::TestDir;
+        let directory = TestDir::new();
+        let uri = directory.uri("source.md");
+        let target_uri = directory.uri("guide.md");
+        let alias = target_uri.replace("/guide.md", "/./%67uide.md");
+        std::fs::write(directory.0.join("guide.md"), "# Disk\n# Disk").unwrap();
+        let mut server = server();
+        let marked = "[go](guide.md#¦)";
+        assert_eq!(
+            completion_labels(&complete_marked(&mut server, &uri, marked).unwrap()),
+            ["disk", "disk-2"]
+        );
+        open(
+            &mut server,
+            &alias,
+            "# Unsaved\n# Unsaved\n> # Nested\n",
+            Instant::now(),
+        );
+        assert_eq!(
+            completion_labels(&complete_marked(&mut server, &uri, marked).unwrap()),
+            ["unsaved", "unsaved-2"]
+        );
+        replace(&mut server, &alias, 2, "# Current", Instant::now()).unwrap();
+        let result = complete_marked(&mut server, &uri, marked).unwrap();
+        assert_eq!(completion_labels(&result), ["current"]);
+        assert_eq!(
+            result["items"][0]["textEdit"]["newText"],
+            "guide.md#current"
+        );
+        server
+            .notification(
+                "textDocument/didChange",
+                json!({ "textDocument": { "uri": alias, "version": 3 } }),
+                Instant::now(),
+            )
+            .unwrap_err();
+        assert_eq!(
+            complete_marked(&mut server, &uri, marked).unwrap_err().code,
+            -32801
+        );
+        replace(&mut server, &alias, 4, "# Restored", Instant::now()).unwrap();
+        assert_eq!(
+            completion_labels(&complete_marked(&mut server, &uri, marked).unwrap()),
+            ["restored"]
+        );
+        server
+            .notification(
+                "textDocument/didClose",
+                json!({ "textDocument": { "uri": alias } }),
+                Instant::now(),
+            )
+            .unwrap();
+        std::fs::write(directory.0.join("guide.md"), "# Changed on disk").unwrap();
+        assert_eq!(
+            completion_labels(&complete_marked(&mut server, &uri, marked).unwrap()),
+            ["changed-on-disk"]
+        );
+    }
+
+    #[test]
+    fn anchor_completion_shares_heading_prefixes_and_does_not_replace_label_completion() {
+        let mut server = Server::default();
+        server
+            .request(
+                "initialize",
+                json!({ "capabilities": {}, "initializationOptions": { "headingIdPrefix": "h-" } }),
+            )
+            .unwrap();
+        let uri = "untitled:completion";
+        let result =
+            complete_marked(&mut server, uri, "# 中文😀\n# 中文😀\n\n[go](#h-%e4¦)").unwrap();
+        assert_eq!(completion_labels(&result), ["h-中文😀", "h-中文😀-2"]);
+        assert_eq!(
+            result["items"][1]["textEdit"]["newText"],
+            "#h-%E4%B8%AD%E6%96%87%F0%9F%98%80-2"
+        );
+        let result = complete_marked(&mut server, uri, "[go][Gu¦]\n\n[Guide]: /target").unwrap();
+        assert_eq!(completion_labels(&result), ["Guide"]);
+        assert_eq!(result["items"][0]["textEdit"]["newText"], "Guide");
+        let result = complete_marked(&mut server, uri, "[Guide]: #h-%E4¦\n\n# 中文😀").unwrap();
+        assert_eq!(completion_labels(&result), ["h-中文😀"]);
+        for marked in [
+            "[go](gu¦)",
+            "# Intro\n\n[go](https://example.test/#¦)",
+            "# Intro\n\n[go](command:run#¦)",
+            "[go](file.md?query¦)",
+        ] {
+            assert!(
+                completion_labels(&complete_marked(&mut server, uri, marked).unwrap()).is_empty(),
+                "{marked}"
+            );
+        }
+    }
+
+    #[test]
+    fn completion_respects_workspace_updates_missing_targets_and_read_limits() {
+        use crate::files::tests::TestDir;
+        let directory = TestDir::new();
+        std::fs::create_dir(directory.0.join("root")).unwrap();
+        std::fs::create_dir(directory.0.join("other")).unwrap();
+        std::fs::write(directory.0.join("other/guide.md"), "# Outside").unwrap();
+        std::fs::write(directory.0.join("root/invalid.md"), [0xFF]).unwrap();
+        std::fs::write(directory.0.join("root/text.txt"), "# Text").unwrap();
+        std::fs::File::create(directory.0.join("root/large.md"))
+            .unwrap()
+            .set_len((crate::document::MAX_DOCUMENT_BYTES + 1) as u64)
+            .unwrap();
+        let uri = directory.uri("root/source.md");
+        let mut server = Server::default();
+        server.request("initialize", json!({ "capabilities": {}, "workspaceFolders": [{ "uri": directory.uri("root"), "name": "root" }] })).unwrap();
+        for marked in [
+            "[go](../other/gu¦)",
+            "[go](../other/guide.md#¦)",
+            "[go](missing.md#¦)",
+            "[go](invalid.md#¦)",
+            "[go](large.md#¦)",
+            "[go](text.txt#¦)",
+            "[go](directory/#¦)",
+        ] {
+            assert!(
+                completion_labels(&complete_marked(&mut server, &uri, marked).unwrap()).is_empty(),
+                "{marked}"
+            );
+        }
+        server.notification("workspace/didChangeWorkspaceFolders", json!({ "event": { "added": [{ "uri": directory.uri("other"), "name": "other" }], "removed": [] } }), Instant::now()).unwrap();
+        assert_eq!(
+            completion_labels(&complete_marked(&mut server, &uri, "[go](../other/gu¦)").unwrap()),
+            ["guide.md"]
+        );
+        assert_eq!(
+            completion_labels(
+                &complete_marked(&mut server, &uri, "[go](../other/guide.md#¦)").unwrap()
+            ),
+            ["outside"]
+        );
+        server.notification("workspace/didChangeWorkspaceFolders", json!({ "event": { "added": [], "removed": [{ "uri": directory.uri("other"), "name": "other" }] } }), Instant::now()).unwrap();
+        assert!(completion_labels(
+            &complete_marked(&mut server, &uri, "[go](../other/gu¦)").unwrap()
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn navigates_local_anchors_without_changing_reference_definition_or_rename_semantics() {
+        let mut server = server();
+        let uri = "untitled:anchors";
+        let now = Instant::now();
+        open(&mut server, uri, "# foo*bar*baz\r\n# 中文😀\r\n# 中文😀\r\n\r\n[one](#foo-bar-baz)\r\n[two](#%E4%B8%AD%E6%96%87%F0%9F%98%80-2)\r\n[case](#Foo-bar-baz)\r\n[root](#)\r\n[ref][label]\r\n\r\n[label]: #foo-bar-baz\r\n", now);
+        let first = navigate(&mut server, uri, 4).unwrap();
+        assert_eq!(first["uri"], uri);
+        assert_eq!(
+            first["range"],
+            json!({ "start": { "line": 0, "character": 2 }, "end": { "line": 0, "character": 13 } })
+        );
+        let second = navigate(&mut server, uri, 5).unwrap();
+        assert_eq!(
+            second["range"],
+            json!({ "start": { "line": 2, "character": 2 }, "end": { "line": 2, "character": 6 } })
+        );
+        assert_eq!(navigate(&mut server, uri, 6).unwrap(), Value::Null);
+        assert_eq!(
+            navigate(&mut server, uri, 7).unwrap()["range"],
+            json!(document_start())
+        );
+        assert_eq!(
+            navigate(&mut server, uri, 8).unwrap()["range"]["start"]["line"],
+            10
+        );
+        assert_eq!(navigate(&mut server, uri, 10).unwrap(), first);
+        let renamed = server.request("textDocument/rename", json!({
+            "textDocument": { "uri": uri }, "position": { "line": 8, "character": 7 }, "newName": "next"
+        })).unwrap();
+        assert_eq!(renamed["changes"][uri].as_array().unwrap().len(), 2);
+        let document = server.documents.get_mut(uri).unwrap();
+        assert!(document
+            .ast(&server.parser)
+            .unwrap()
+            .children
+            .iter()
+            .all(|node| {
+                !matches!(node, yozora_ast::Node::Heading(heading) if heading.identifier.is_some())
+            }));
+    }
+
+    #[test]
+    fn validates_initialization_atomically_and_supports_heading_prefixes() {
+        let mut server = Server::default();
+        for options in [
+            json!({ "headingIdPrefix": 1 }),
+            json!({ "headingIdPrefix": "x".repeat(257) }),
+        ] {
+            assert_eq!(
+                server
+                    .request(
+                        "initialize",
+                        json!({ "capabilities": {}, "initializationOptions": options })
+                    )
+                    .unwrap_err()
+                    .code,
+                -32602
+            );
+            assert!(server.state == State::Uninitialized);
+        }
+        let initialized = server
+            .request(
+                "initialize",
+                json!({
+                    "capabilities": {}, "initializationOptions": { "headingIdPrefix": "h-" }
+                }),
+            )
+            .unwrap();
+        assert_eq!(
+            initialized["capabilities"]["documentLinkProvider"],
+            json!({ "resolveProvider": false })
+        );
+        assert_eq!(
+            initialized["capabilities"]["workspace"]["workspaceFolders"],
+            json!({ "supported": true, "changeNotifications": true })
+        );
+        open(
+            &mut server,
+            "untitled:prefix",
+            "[go](#h-intro)\n[missing](#intro)\n\n# Intro\n",
+            Instant::now(),
+        );
+        assert_eq!(
+            navigate(&mut server, "untitled:prefix", 0).unwrap()["range"]["start"]["line"],
+            3
+        );
+        assert_eq!(
+            navigate(&mut server, "untitled:prefix", 1).unwrap(),
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn file_navigation_prefers_unsaved_uri_aliases_and_tracks_target_lifecycle() {
+        use crate::files::tests::TestDir;
+        let directory = TestDir::new();
+        let path = directory.0.join("guide 中文%.md");
+        std::fs::write(&path, "# Intro\n").unwrap();
+        let source_uri = directory.uri("source.md");
+        let target_uri = directory.uri("guide 中文%.md");
+        let alias = target_uri
+            .replacen("file://", "file://localhost", 1)
+            .replace("/guide", "/./guide")
+            .replace("%E4", "%e4");
+        let mut server = server();
+        let now = Instant::now();
+        open(&mut server, &source_uri,
+            "[go](guide%20%E4%B8%AD%E6%96%87%25.md#intro)\n[file](guide%20%E4%B8%AD%E6%96%87%25.md)\n", now);
+        let disk = navigate(&mut server, &source_uri, 0).unwrap();
+        assert_eq!(disk["uri"], target_uri);
+        assert_eq!(disk["range"]["start"]["line"], 0);
+        open(&mut server, &alias, "\n\n# Intro\n", now);
+        let unsaved = navigate(&mut server, &source_uri, 0).unwrap();
+        assert_eq!(unsaved["uri"], alias);
+        assert_eq!(unsaved["range"]["start"]["line"], 2);
+        let links = server
+            .request(
+                "textDocument/documentLink",
+                json!({ "textDocument": { "uri": source_uri } }),
+            )
+            .unwrap();
+        assert_eq!(links[0]["target"], format!("{alias}#intro"));
+        assert_eq!(links[1]["target"], alias);
+
+        server
+            .queue_query(
+                json!(42),
+                "textDocument/definition",
+                json!({
+                    "textDocument": { "uri": source_uri }, "position": { "line": 0, "character": 2 }
+                }),
+                now,
+            )
+            .unwrap();
+        replace(&mut server, &alias, 2, "\n# Intro\n", now).unwrap();
+        let queued = server.take_due_work(now + QUERY_DELAY).unwrap().unwrap();
+        assert_eq!(queued["id"], 42);
+        assert_eq!(queued["result"]["range"]["start"]["line"], 1);
+
+        assert!(server
+            .notification(
+                "textDocument/didChange",
+                json!({
+                    "textDocument": { "uri": alias, "version": 3 }
+                }),
+                now
+            )
+            .is_err());
+        for line in [0, 1] {
+            assert_eq!(
+                navigate(&mut server, &source_uri, line).unwrap_err().code,
+                -32801
+            );
+        }
+        replace(&mut server, &alias, 4, "# Different\n", now).unwrap();
+        assert_eq!(navigate(&mut server, &source_uri, 0).unwrap(), Value::Null);
+        assert_eq!(navigate(&mut server, &source_uri, 1).unwrap()["uri"], alias);
+        server
+            .notification(
+                "textDocument/didClose",
+                json!({ "textDocument": { "uri": alias } }),
+                now,
+            )
+            .unwrap();
+        assert_eq!(navigate(&mut server, &source_uri, 0).unwrap(), disk);
+        std::fs::write(&path, "\n\n\n# Intro\n").unwrap();
+        assert_eq!(
+            navigate(&mut server, &source_uri, 0).unwrap()["range"]["start"]["line"],
+            3
+        );
+        open(&mut server, &alias, "# Intro\n", now);
+        assert_eq!(navigate(&mut server, &source_uri, 0).unwrap()["uri"], alias);
+    }
+
+    #[test]
+    fn handles_unsaved_targets_missing_paths_non_markdown_files_and_encoded_delimiters() {
+        use crate::files::tests::TestDir;
+        let directory = TestDir::new();
+        let mut server = server();
+        let uri = directory.uri("source.md");
+        let now = Instant::now();
+        std::fs::write(directory.0.join("asset.bin"), [0xFF]).unwrap();
+        std::fs::write(directory.0.join("a#b?c%.md"), "# Intro").unwrap();
+        open(&mut server, &uri,
+            "[new](new.md#intro)\n[missing](missing.md)\n[file](asset.bin)\n[fragment](asset.bin#intro)\n[encoded](a%23b%3Fc%25.md?view=raw#intro)\n[self](./source.md#intro)\n\n# Intro\n", now);
+        assert_eq!(navigate(&mut server, &uri, 0).unwrap(), Value::Null);
+        open(&mut server, &directory.uri("new.md"), "\n# Intro", now);
+        assert_eq!(
+            navigate(&mut server, &uri, 0).unwrap()["range"]["start"]["line"],
+            1
+        );
+        assert_eq!(navigate(&mut server, &uri, 1).unwrap(), Value::Null);
+        assert_eq!(
+            navigate(&mut server, &uri, 2).unwrap(),
+            json!({ "uri": directory.uri("asset.bin"), "range": document_start() })
+        );
+        assert_eq!(navigate(&mut server, &uri, 3).unwrap(), Value::Null);
+        assert_eq!(
+            navigate(&mut server, &uri, 4).unwrap()["uri"],
+            directory.uri("a#b?c%.md")
+        );
+        assert_eq!(
+            navigate(&mut server, &uri, 5).unwrap()["range"]["start"]["line"],
+            7
+        );
+        let links = server
+            .request(
+                "textDocument/documentLink",
+                json!({ "textDocument": { "uri": uri } }),
+            )
+            .unwrap();
+        assert_eq!(links.as_array().unwrap().len(), 5);
+        assert_eq!(
+            links[3]["target"],
+            format!("{}?view=raw#intro", directory.uri("a#b?c%.md"))
+        );
+    }
+
+    #[test]
+    fn applies_workspace_folder_changes_atomically_and_honors_root_uri() {
+        use crate::files::tests::TestDir;
+        let directory = TestDir::new();
+        std::fs::create_dir_all(directory.0.join("root/docs")).unwrap();
+        std::fs::create_dir(directory.0.join("other")).unwrap();
+        std::fs::write(directory.0.join("root/guide.md"), "# Intro").unwrap();
+        std::fs::write(directory.0.join("other/guide.md"), "# Other").unwrap();
+        let uri = directory.uri("root/docs/source.md");
+        let root_uri = directory.uri("root");
+        let other_uri = directory.uri("other");
+        let text = "[parent](../guide.md#intro)\n[other](../../other/guide.md#other)\n";
+        let now = Instant::now();
+        let mut fallback = server();
+        open(&mut fallback, &uri, text, now);
+        assert_eq!(navigate(&mut fallback, &uri, 0).unwrap(), Value::Null);
+        let mut server = Server::default();
+        server
+            .request(
+                "initialize",
+                json!({ "capabilities": {}, "rootUri": root_uri }),
+            )
+            .unwrap();
+        open(&mut server, &uri, text, now);
+        assert_eq!(
+            navigate(&mut server, &uri, 0).unwrap()["uri"],
+            directory.uri("root/guide.md")
+        );
+        assert_eq!(navigate(&mut server, &uri, 1).unwrap(), Value::Null);
+        server
+            .notification(
+                "workspace/didChangeWorkspaceFolders",
+                json!({
+                    "event": { "removed": [], "added": [{ "uri": other_uri, "name": "other" }] }
+                }),
+                now,
+            )
+            .unwrap();
+        assert_eq!(
+            navigate(&mut server, &uri, 1).unwrap()["uri"],
+            directory.uri("other/guide.md")
+        );
+        assert!(server.notification("workspace/didChangeWorkspaceFolders", json!({
+            "event": { "removed": [{ "uri": root_uri }, { "uri": other_uri }], "added": [{ "uri": "invalid" }] }
+        }), now).is_err());
+        assert!(!navigate(&mut server, &uri, 0).unwrap().is_null());
+        assert!(!navigate(&mut server, &uri, 1).unwrap().is_null());
+        server
+            .notification(
+                "workspace/didChangeWorkspaceFolders",
+                json!({
+                    "event": { "removed": [{ "uri": other_uri }], "added": [] }
+                }),
+                now,
+            )
+            .unwrap();
+        assert_eq!(navigate(&mut server, &uri, 1).unwrap(), Value::Null);
+    }
+
+    #[test]
+    fn document_links_include_admonition_titles_and_safe_external_uris_and_share_query_cancellation(
+    ) {
+        let mut server = server();
+        let uri = "untitled:links";
+        let now = Instant::now();
+        open(&mut server, uri, ":::note [title](#intro)\n[body](#intro)\n:::\n\n# Intro\n\n<https://example.test/docs>\n\n[mail](mailto:reader@example.test)\n\n[unsafe](javascript:alert)\n", now);
+        let params = json!({ "textDocument": { "uri": uri } });
+        let links = server
+            .request("textDocument/documentLink", params.clone())
+            .unwrap();
+        assert_eq!(links.as_array().unwrap().len(), 4);
+        assert_eq!(links[0]["range"]["start"]["line"], 0);
+        assert_eq!(links[1]["range"]["start"]["line"], 1);
+        assert_eq!(links[0]["target"], format!("{uri}#intro"));
+        assert_eq!(links[2]["target"], "https://example.test/docs");
+        assert_eq!(links[3]["target"], "mailto:reader@example.test");
+        assert_eq!(
+            server
+                .definition(
+                    uri,
+                    Position {
+                        line: 0,
+                        character: 11
+                    }
+                )
+                .unwrap()["range"]["start"]["line"],
+            4
+        );
+        assert_eq!(navigate(&mut server, uri, 6).unwrap(), Value::Null);
+        assert!(is_document_query("textDocument/documentLink"));
+        server
+            .queue_query(json!(7), "textDocument/documentLink", params, now)
+            .unwrap();
+        replace(&mut server, uri, 2, "# Changed", now).unwrap();
+        assert_eq!(server.outgoing.last().unwrap()["error"]["code"], -32801);
+        assert!(server.pending_queries.is_empty());
     }
 
     #[test]

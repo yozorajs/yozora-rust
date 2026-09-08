@@ -48,7 +48,21 @@ vim.lsp.enable('yozora')
   client's range limit.
 - `textDocument/definition`: document-local reference links, reference images,
   and footnotes, including references in admonition titles. Identifier matching
-  and duplicate definitions follow the parser's rules.
+  and duplicate definitions follow the parser's rules. Direct links, images, and
+  link definitions also navigate to local files and heading anchors, for example
+  `[guide](./guide.md#intro)` or `[section](#intro-2)`. Navigation selects the
+  innermost resource or reference at the cursor. Reference occurrences navigate
+  to their declaration first. Files without a fragment open at the start;
+  nonempty fragments select the matching heading text. Missing targets return null.
+- `textDocument/documentLink`: clickable destinations for direct links, images,
+  link definitions, and resolved link/image references, including admonition
+  titles. Ranges cover the parser's resource nodes. The server inspects at most
+  1,000 resources per request, with a 1 MiB combined budget for destination input
+  and resolved URI output, and omits missing or disallowed local paths. HTTP,
+  HTTPS, and mailto links are returned without fetching their contents. Local
+  fragments are preserved as URI fragments for the client; heading validation
+  and exact source positions are provided by `textDocument/definition`.
+- `workspace/didChangeWorkspaceFolders`: update the local navigation roots.
 - `textDocument/hover`: links and images show their destination and title;
   footnotes show a text summary. Resolved references and their active definitions
   use the same information. Previews are limited to 2,000 Unicode characters,
@@ -63,9 +77,9 @@ vim.lsp.enable('yozora')
   `![alt][label]`, and `[^label]`, including unclosed labels. Matching follows the
   parser's case folding and ASCII whitespace normalization. An existing label is
   replaced up to its closing `]`; without a closing bracket, only the prefix up to
-  the cursor is replaced and `]` is inserted, preserving following text. Code,
-  math, HTML, declaration labels, and link destinations are excluded. Completion
-  currently supports labels typed on one line; labels from multiline definitions
+  the cursor is replaced and `]` is inserted, preserving following text. Label
+  completion excludes code, math, HTML, declaration labels, and link destinations.
+  It supports labels typed on one line; labels from multiline definitions
   are inserted with equivalent single-space separators. A closing bracket in code,
   math, HTML, another table cell, or beyond the 999-character label limit is treated
   as following text. Table pipes are escaped while preserving label identity.
@@ -73,6 +87,23 @@ vim.lsp.enable('yozora')
   that cannot form the intended reference in the surrounding block. Large blocks
   or definition sets reduce the number checked. Incomplete lists refresh as the
   user types.
+  Destinations in links, images, and reference definitions also complete local
+  file/directory names and heading anchors, such as `[go](./docs/gu)` and
+  `[go](guide.md#in)`. Matching is case-sensitive, with raw Unicode, encoded
+  characters, and partially typed percent escapes supported. Directories end in
+  `/`; unsaved files and their parent directories participate. Heading candidates
+  use the same IDs, prefix, and target-buffer precedence as navigation.
+  Destination completion requires the destination and its `](`/`]:` introducer
+  on the cursor's line; display text may span preceding lines. It edits the whole
+  destination, preserving the display, title, remaining path components, and
+  query/fragment semantics. Inserted destinations use URI encoding and Markdown
+  escapes as needed. Unfinished destinations at line end are supported without
+  inserting closing delimiters. Code, math, HTML, titles, query parameters, and
+  remote destinations do not produce path or anchor candidates. A cursor inside
+  a Markdown escape, character entity, or percent-encoded path separator does not
+  produce destination edits. URI schemes and authorities are not path components.
+  `(`, `/`, and `#`
+  are completion triggers in addition to `[` and `^`.
 - `textDocument/prepareRename` and `textDocument/rename`: rename document-local
   reference labels from an active definition or a resolved reference. Explicit
   references select only their label; implicit `[old]` and `[old][]` references
@@ -92,10 +123,11 @@ vim.lsp.enable('yozora')
   Publications are debounced by 150 ms per document, so intermediate edit versions
   can be skipped during continuous typing.
 
-Queries operate on open buffers, including unsaved documents. Navigation to
-direct URLs, heading anchors, cross-file indexing, and formatting are outside
-the current capabilities. Unresolved
-references remain ordinary text, following the parser's fallback behavior.
+Queries start from open buffers, including unsaved documents. Target buffers use
+their unsaved text; closed Markdown files are read on demand for anchor navigation.
+Workspace indexing, heading rename, and formatting are
+outside the current capabilities. Unresolved references remain ordinary text,
+following the parser's fallback behavior.
 
 ## Implementation contracts
 
@@ -124,6 +156,35 @@ Definition, hover, and reference queries share identifier resolution and the
 first-definition-wins rule. Analysis only reads the AST; the parser has no
 dependency on LSP code.
 
+Heading anchors use `yozora-ast-util`'s TOC identifiers, including Unicode case
+folding, inline content, and duplicate suffixes (`intro`, `intro-2`, ...).
+Only top-level headings participate, matching the existing TOC contract; nested
+headings still appear in outlines. The optional `initializationOptions.headingIdPrefix`
+uses the same literal prefix as `calc_heading_toc`; it defaults to an empty string
+and accepts up to 256 UTF-8 bytes without control characters. Fragments are
+percent-decoded once and matched exactly, without further case folding.
+
+Local navigation accepts file URIs with an empty authority or `localhost`.
+Relative paths use the source file's directory. Untitled/non-file buffers support
+same-buffer anchors and external document links. Paths and fragments support
+percent-encoded Unicode and delimiters; `+` remains a literal plus. File queries
+are separated from the path and preserved in document links. Paths must remain
+within `workspaceFolders` (or `rootUri` when folders are absent); without a
+workspace, access is limited to the source file's directory. Remote workspace
+roots do not grant local file access. Folder changes are validated before replacing
+the roots. Canonical paths are checked against the roots, including symlinks and
+the existing ancestors of unsaved files. Sensitive paths such as `.ssh`, `.env*`,
+`local/env.*`, and credential/request/response files are excluded.
+
+Open file buffers are matched by requested URI first, then normalized lexical
+path, then canonical aliases, retaining the selected buffer's original URI.
+An out-of-sync target returns `ContentModified`
+without falling back to disk. Closed targets are never cached: anchor lookup reads
+only regular UTF-8 `.md`, `.markdown`, `.mdown`, `.mkd`, `.mkdn`, or `.yozora` files,
+case-insensitively, with the same 16 MiB limit as open buffers. Navigation without
+a fragment only checks file metadata. No extensions, directory index files, or
+website routes are inferred. External URLs are never fetched.
+
 Completion reads the source text and AST through one immutable snapshot of the
 document version. Its lexical context handles unfinished syntax, while AST
 ranges exclude non-reference regions. Label identity is reused from
@@ -134,6 +195,19 @@ exact edited range. This preserves multiline delimiter pairing, table escaping,
 and container syntax. Validation has a 1 MiB input budget per request, counting
 both source and association strings; at least one candidate is checked even if
 its block exceeds the budget. The 200-candidate limit still applies.
+
+Destination completion first checks its context by reparsing the containing block
+with URL markers. It then reparses candidate edits against that same block and
+definition associations. The server retains an owned probe while reading a target
+buffer, keeping source and target borrows separate. Context probes, candidate
+probes, association strings, and returned text share a strict 1 MiB budget; large
+blocks or long destinations can yield fewer candidates or no candidates. At most
+200 candidates are returned. Directory completion examines up to 1,000 entries in
+one directory and merges scoped open file paths; it never scans recursively.
+Names are sorted, and directory contents are read anew on each request. All local
+access restrictions used by navigation also apply to completion. Anchor lookups
+use the existing bounded Markdown reader and return `ContentModified` for an
+out-of-sync open target instead of using disk contents.
 
 Rename returns a WorkspaceEdit and leaves server text unchanged until the client
 sends `didChange`. Clients advertising `workspace.workspaceEdit.documentChanges`

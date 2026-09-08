@@ -56,6 +56,43 @@ pub struct FoldingRange {
     pub end_line: u32,
 }
 
+#[derive(Debug, Serialize)]
+pub struct DocumentLink {
+    pub range: Range,
+    pub target: String,
+}
+
+#[derive(Deserialize)]
+pub struct WorkspaceFolder {
+    pub uri: String,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InitializationOptions {
+    #[serde(default)]
+    pub heading_id_prefix: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InitializeParams {
+    pub root_uri: Option<String>,
+    pub workspace_folders: Option<Vec<WorkspaceFolder>>,
+    pub initialization_options: Option<InitializationOptions>,
+}
+
+#[derive(Deserialize)]
+pub struct WorkspaceFoldersChange {
+    pub added: Vec<WorkspaceFolder>,
+    pub removed: Vec<WorkspaceFolder>,
+}
+
+#[derive(Deserialize)]
+pub struct DidChangeWorkspaceFoldersParams {
+    pub event: WorkspaceFoldersChange,
+}
+
 #[derive(Deserialize)]
 pub struct TextDocumentIdentifier {
     pub uri: String,

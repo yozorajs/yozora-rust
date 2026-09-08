@@ -4,7 +4,7 @@ use yozora_parser::YozoraParser;
 
 use crate::protocol::{ContentChange, Position, ResponseError};
 
-const MAX_DOCUMENT_BYTES: usize = 16 * 1024 * 1024;
+pub(super) const MAX_DOCUMENT_BYTES: usize = 16 * 1024 * 1024;
 const LINE_CHECKPOINT_BYTES: usize = 128;
 
 /// The server is the only writer. Text, line index and AST belong to one version.

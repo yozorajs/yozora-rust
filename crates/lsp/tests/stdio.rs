@@ -166,6 +166,201 @@ fn document(uri: &str) -> Value {
 }
 
 #[test]
+fn file_and_anchor_completion_follow_unsaved_target_edits_over_stdio() {
+    let directory = std::env::temp_dir().join(format!(
+        "yozora-lsp-stdio-completion-{}",
+        std::process::id()
+    ));
+    let path = directory.to_string_lossy().replace('\\', "/");
+    let encoded: String = path
+        .bytes()
+        .map(|byte| {
+            if byte.is_ascii_alphanumeric() || b"/-._~:".contains(&byte) {
+                (byte as char).to_string()
+            } else {
+                format!("%{byte:02X}")
+            }
+        })
+        .collect();
+    let root = format!(
+        "file://{}{encoded}",
+        if encoded.starts_with('/') { "" } else { "/" }
+    );
+    let uri = format!("{root}/source.md");
+    let filename = "guide%20%E4%B8%AD%E6%96%87.md";
+    let target = format!("{root}/{filename}");
+    let mut client = Client::start();
+    let initialized = client.request("initialize", json!({ "capabilities": {}, "rootUri": root }));
+    assert!(initialized.get("error").is_none(), "{initialized}");
+    client.notify("initialized", json!({}));
+    client.open(&target, "# Intro\r\n\r\n# 中文😀\r\n");
+    client.open(&uri, "[go](gu)");
+    let at = |character| json!({ "textDocument": { "uri": uri }, "position": { "line": 0, "character": character } });
+    let completion = client.request("textDocument/completion", at(7));
+    let items = completion["result"]["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["label"], "guide 中文.md");
+    assert_eq!(items[0]["textEdit"]["newText"], filename);
+    client.notify("textDocument/didChange", json!({
+        "textDocument": { "uri": uri, "version": 2 },
+        "contentChanges": [{ "range": items[0]["textEdit"]["range"], "text": items[0]["textEdit"]["newText"] }]
+    }));
+    assert_eq!(
+        client.request("textDocument/definition", at(2))["result"]["uri"],
+        target
+    );
+
+    let text = format!("[go]({filename}#%E4)");
+    client.notify(
+        "textDocument/didChange",
+        json!({
+            "textDocument": { "uri": uri, "version": 3 }, "contentChanges": [{ "text": text }]
+        }),
+    );
+    let completion = client.request("textDocument/completion", at(text.len() - 1));
+    let items = completion["result"]["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["label"], "中文😀");
+    client.notify("textDocument/didChange", json!({
+        "textDocument": { "uri": uri, "version": 4 },
+        "contentChanges": [{ "range": items[0]["textEdit"]["range"], "text": items[0]["textEdit"]["newText"] }]
+    }));
+    let definition = client.request("textDocument/definition", at(2));
+    assert_eq!(definition["result"]["uri"], target);
+    assert_eq!(
+        definition["result"]["range"],
+        json!({ "start": { "line": 2, "character": 2 }, "end": { "line": 2, "character": 6 } })
+    );
+
+    let text = format!("[go]({filename}#)");
+    client.notify("textDocument/didChange", json!({ "textDocument": { "uri": uri, "version": 5 }, "contentChanges": [{ "text": text }] }));
+    client.notify("textDocument/didChange", json!({ "textDocument": { "uri": target, "version": 2 }, "contentChanges": [{ "text": "# Modified" }] }));
+    let completion = client.request("textDocument/completion", at(text.len() - 1));
+    assert_eq!(completion["result"]["items"][0]["label"], "modified");
+    client.notify(
+        "textDocument/didChange",
+        json!({ "textDocument": { "uri": target, "version": 3 } }),
+    );
+    assert_eq!(
+        client.request("textDocument/completion", at(text.len() - 1))["error"]["code"],
+        -32801
+    );
+    client.notify("textDocument/didChange", json!({ "textDocument": { "uri": target, "version": 4 }, "contentChanges": [{ "text": "# Restored" }] }));
+    assert_eq!(
+        client.request("textDocument/completion", at(text.len() - 1))["result"]["items"][0]
+            ["label"],
+        "restored"
+    );
+    client.notify("textDocument/didClose", document(&target));
+    assert_eq!(
+        client.request("textDocument/completion", at(text.len() - 1))["result"]["items"],
+        json!([])
+    );
+    client.shutdown();
+}
+
+#[test]
+fn anchor_completion_uses_cr_line_positions_and_preserves_the_closing_delimiter() {
+    let mut client = Client::start();
+    client.initialize(json!({}));
+    let uri = "untitled:cr-anchors";
+    client.open(uri, "# Intro\r# Intro\r\r[go](#in)\r");
+    let result = client.request(
+        "textDocument/completion",
+        json!({
+            "textDocument": { "uri": uri }, "position": { "line": 3, "character": 8 }
+        }),
+    );
+    let item = &result["result"]["items"][1];
+    assert_eq!(item["label"], "intro-2");
+    assert_eq!(
+        item["textEdit"],
+        json!({
+            "range": { "start": { "line": 3, "character": 5 }, "end": { "line": 3, "character": 8 } }, "newText": "#intro-2"
+        })
+    );
+    client.notify("textDocument/didChange", json!({
+        "textDocument": { "uri": uri, "version": 2 },
+        "contentChanges": [{ "range": item["textEdit"]["range"], "text": item["textEdit"]["newText"] }]
+    }));
+    let definition = client.request(
+        "textDocument/definition",
+        json!({ "textDocument": { "uri": uri }, "position": { "line": 3, "character": 2 } }),
+    );
+    assert_eq!(definition["result"]["range"]["start"]["line"], 1);
+    client.shutdown();
+}
+
+#[test]
+fn heading_navigation_and_document_links_follow_utf16_edits_over_stdio() {
+    let mut client = Client::start();
+    let initialized = client.request(
+        "initialize",
+        json!({
+            "capabilities": {}, "initializationOptions": { "headingIdPrefix": "h-" }
+        }),
+    );
+    assert!(initialized.get("error").is_none(), "{initialized}");
+    assert_eq!(
+        initialized["result"]["capabilities"]["documentLinkProvider"],
+        json!({ "resolveProvider": false })
+    );
+    client.notify("initialized", json!({}));
+    let uri = "untitled:heading-links";
+    client.open(uri, "# 中文😀\r\n# 中文😀\r\n\r\n[go](#h-%E4%B8%AD%E6%96%87%F0%9F%98%80-2)\r\n[ref][label]\r\n\r\n[label]: #h-中文😀\r\n\r\n<https://example.test/docs>\r\n");
+    let at = |line| json!({ "textDocument": { "uri": uri }, "position": { "line": line, "character": 2 } });
+    let definition = client.request("textDocument/definition", at(3));
+    assert_eq!(
+        definition["result"],
+        json!({
+            "uri": uri, "range": { "start": { "line": 1, "character": 2 }, "end": { "line": 1, "character": 6 } }
+        })
+    );
+    let reference = client.request("textDocument/definition", at(4));
+    assert_eq!(reference["result"]["range"]["start"]["line"], 6);
+    let declaration = client.request("textDocument/definition", at(6));
+    assert_eq!(declaration["result"]["range"]["start"]["line"], 0);
+    let links = client.request("textDocument/documentLink", document(uri));
+    let links = links["result"].as_array().unwrap();
+    assert_eq!(links.len(), 4);
+    assert_eq!(
+        links[0]["target"],
+        format!("{uri}#h-%E4%B8%AD%E6%96%87%F0%9F%98%80-2")
+    );
+    assert_eq!(links[1]["target"], links[2]["target"]);
+    assert_eq!(links[3]["target"], "https://example.test/docs");
+
+    client.notify("textDocument/didChange", json!({
+        "textDocument": { "uri": uri, "version": 2 },
+        "contentChanges": [{ "range": { "start": { "line": 0, "character": 2 }, "end": { "line": 0, "character": 6 } }, "text": "Changed" }]
+    }));
+    assert_eq!(
+        client.request("textDocument/definition", at(3))["result"],
+        Value::Null
+    );
+    assert_eq!(
+        client.request("textDocument/definition", at(6))["result"]["range"]["start"]["line"],
+        1
+    );
+    client.notify("textDocument/didChange", json!({
+        "textDocument": { "uri": uri, "version": 3 },
+        "contentChanges": [{ "range": { "start": { "line": 1, "character": 5 }, "end": { "line": 1, "character": 6 } }, "text": "x" }]
+    }));
+    assert_eq!(
+        client.request("textDocument/documentLink", document(uri))["error"]["code"],
+        -32801
+    );
+    client.notify("textDocument/didChange", json!({
+        "textDocument": { "uri": uri, "version": 4 }, "contentChanges": [{ "text": "# Restored\n" }]
+    }));
+    assert_eq!(
+        client.request("textDocument/documentLink", document(uri))["result"],
+        json!([])
+    );
+    client.shutdown();
+}
+
+#[test]
 fn publishes_duplicate_diagnostics_on_open_edit_close_and_reopen() {
     let mut client = Client::start();
     client.initialize(json!({ "textDocument": { "publishDiagnostics": {
@@ -638,7 +833,7 @@ fn edits_open_documents_and_updates_symbols_folds_and_definitions() {
     assert_eq!(
         result["capabilities"]["completionProvider"],
         json!({
-            "triggerCharacters": ["[", "^"], "resolveProvider": false
+            "triggerCharacters": ["[", "^", "(", "/", "#"], "resolveProvider": false
         })
     );
     assert_eq!(

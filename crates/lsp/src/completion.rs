@@ -1,4 +1,4 @@
-use yozora_ast::{Association, Node, Root};
+use yozora_ast::{Association, Definition, FootnoteDefinition, Node, Root};
 use yozora_ast_util::{collect_definitions, collect_footnote_definitions};
 use yozora_core_parser::ParseOptions;
 use yozora_core_tokenizer::resolve_label_to_identifier;
@@ -8,7 +8,7 @@ use crate::analysis::{nodes, reference_key, single_line_label, ReferenceKey};
 use crate::document::{check_size, Snapshot};
 use crate::protocol::{CompletionItem, CompletionList, Position, Range, ResponseError, TextEdit};
 
-const MAX_PROBE_BYTES: usize = 1024 * 1024;
+pub(super) const MAX_PROBE_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum LabelKind {
@@ -60,35 +60,8 @@ pub fn complete(
     let prefix = resolve_label_to_identifier(&prefix);
     let definitions = collect_definitions(root);
     let footnotes = collect_footnote_definitions(root);
-    let options = ParseOptions {
-        should_reserve_position: Some(true),
-        preset_definitions: Some(
-            definitions
-                .iter()
-                .map(|definition| Association {
-                    identifier: definition.identifier.clone(),
-                    label: definition.label.clone(),
-                })
-                .collect(),
-        ),
-        preset_footnote_definitions: Some(
-            footnotes
-                .iter()
-                .map(|definition| Association {
-                    identifier: definition.identifier.clone(),
-                    label: definition.label.clone(),
-                })
-                .collect(),
-        ),
-        ..ParseOptions::default()
-    };
-    let association_bytes: usize = options
-        .preset_definitions
-        .iter()
-        .flatten()
-        .chain(options.preset_footnote_definitions.iter().flatten())
-        .map(|association| association.identifier.len() + association.label.len())
-        .sum();
+    let options = parse_options(&definitions, &footnotes);
+    let association_bytes = association_bytes(&options);
     let candidates: Vec<_> = match context.kind {
         LabelKind::Link => definitions
             .iter()
@@ -162,6 +135,44 @@ pub fn complete(
         is_incomplete: true,
         items,
     })
+}
+
+pub(super) fn parse_options(
+    definitions: &[&Definition],
+    footnotes: &[&FootnoteDefinition],
+) -> ParseOptions {
+    ParseOptions {
+        should_reserve_position: Some(true),
+        preset_definitions: Some(
+            definitions
+                .iter()
+                .map(|definition| Association {
+                    identifier: definition.identifier.clone(),
+                    label: definition.label.clone(),
+                })
+                .collect(),
+        ),
+        preset_footnote_definitions: Some(
+            footnotes
+                .iter()
+                .map(|definition| Association {
+                    identifier: definition.identifier.clone(),
+                    label: definition.label.clone(),
+                })
+                .collect(),
+        ),
+        ..ParseOptions::default()
+    }
+}
+
+pub(super) fn association_bytes(options: &ParseOptions) -> usize {
+    options
+        .preset_definitions
+        .iter()
+        .flatten()
+        .chain(options.preset_footnote_definitions.iter().flatten())
+        .map(|association| association.identifier.len() + association.label.len())
+        .sum()
 }
 
 struct CompletionProbe<'a> {

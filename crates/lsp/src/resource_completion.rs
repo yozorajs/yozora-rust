@@ -4,6 +4,7 @@ use yozora_core_parser::ParseOptions;
 use yozora_parser::YozoraParser;
 
 use crate::analysis::nodes;
+use crate::cancellation::Cancellation;
 use crate::completion::{association_bytes, parse_options, MAX_PROBE_BYTES};
 use crate::document::{check_size, Snapshot};
 use crate::files::{self, PathCandidate};
@@ -64,7 +65,9 @@ impl Context {
         snapshot: &Snapshot<'_>,
         position: Position,
         parser: &YozoraParser,
+        cancellation: &Cancellation,
     ) -> Result<Option<Self>, ResponseError> {
+        cancellation.check()?;
         let (line, cursor) = snapshot.line(position)?;
         let mut introducers: Vec<_> = line[..cursor]
             .rmatch_indices("](")
@@ -112,6 +115,7 @@ impl Context {
             },
         )?;
         for (introducer, definition, span) in introducers {
+            cancellation.check()?;
             let opening = Position {
                 line: position.line,
                 character: line[..introducer].encode_utf16().count() as u32,
@@ -179,6 +183,7 @@ impl Context {
                 ));
             }
             for after in after_variants {
+                cancellation.check()?;
                 let cost = before.len() + marked.len() + after.len() + associations;
                 if cost > remaining {
                     return Ok(None);
@@ -186,6 +191,7 @@ impl Context {
                 remaining -= cost;
                 let parsed =
                     parser.parse(format!("{before}{marked}{after}"), Some(options.clone()));
+                cancellation.check()?;
                 for node in nodes(&parsed.children) {
                     let Some((kind, url)) = resource(node) else {
                         continue;
@@ -324,10 +330,17 @@ impl Context {
             .collect()
     }
 
-    pub fn complete(mut self, candidates: Vec<Candidate>, parser: &YozoraParser) -> CompletionList {
+    pub fn complete(
+        mut self,
+        candidates: Vec<Candidate>,
+        parser: &YozoraParser,
+        cancellation: &Cancellation,
+    ) -> Result<CompletionList, ResponseError> {
+        cancellation.check()?;
         let mut items = Vec::new();
         let associations = association_bytes(&self.options);
         for candidate in candidates.into_iter().take(200) {
+            cancellation.check()?;
             let Some(uri) = files::encode_uri(&candidate.uri) else {
                 continue;
             };
@@ -356,6 +369,7 @@ impl Context {
                 format!("{}{new_text}{}", self.before, self.after),
                 Some(self.options.clone()),
             );
+            cancellation.check()?;
             if !nodes(&parsed.children).any(|node| {
                 resource(node)
                     .is_some_and(|(kind, value)| kind == self.resource_kind && value == uri)
@@ -376,10 +390,10 @@ impl Context {
                 },
             });
         }
-        CompletionList {
+        Ok(CompletionList {
             is_incomplete: true,
             items,
-        }
+        })
     }
 }
 
@@ -502,6 +516,7 @@ mod tests {
             &document.snapshot(&parser, position).unwrap(),
             position,
             &parser,
+            &Cancellation::default(),
         )
         .unwrap();
         (document, context)
@@ -572,7 +587,13 @@ mod tests {
             let (mut document, context) = request_context(marked);
             let context = context.unwrap_or_else(|| panic!("missing context: {marked}"));
             let candidates = context.paths(vec![entry("guide2.md", false)]);
-            let mut result = context.complete(candidates, &YozoraParser::default());
+            let mut result = context
+                .complete(
+                    candidates,
+                    &YozoraParser::default(),
+                    &Cancellation::default(),
+                )
+                .unwrap();
             assert_eq!(result.items.len(), 1, "{marked}");
             assert_eq!(accept(&mut document, result.items.remove(0)), expected);
         }
@@ -601,7 +622,13 @@ mod tests {
             let (mut document, context) = request_context(marked);
             let context = context.unwrap();
             let candidates = context.paths(vec![entry("parts", true), entry("page.md", false)]);
-            let mut result = context.complete(candidates, &YozoraParser::default());
+            let mut result = context
+                .complete(
+                    candidates,
+                    &YozoraParser::default(),
+                    &Cancellation::default(),
+                )
+                .unwrap();
             assert_eq!(result.items.len(), 1, "{marked}");
             assert_eq!(result.items[0].kind, 19);
             assert_eq!(result.items[0].label, "parts/");
@@ -614,7 +641,13 @@ mod tests {
         let (mut document, context) = request_context("😀 [go](中文/文¦档.md)");
         let context = context.unwrap();
         let candidates = context.paths(vec![entry("文件.md", false)]);
-        let mut result = context.complete(candidates, &YozoraParser::default());
+        let mut result = context
+            .complete(
+                candidates,
+                &YozoraParser::default(),
+                &Cancellation::default(),
+            )
+            .unwrap();
         assert_eq!(result.items.len(), 1);
         assert_eq!(result.items[0].text_edit.range.start.character, 8);
         assert_eq!(result.items[0].text_edit.range.end.character, 16);
@@ -627,7 +660,13 @@ mod tests {
             request_context("| A | B |\n| - | - |\n| [go](pi¦pe.md) | neighbor |");
         let context = context.unwrap();
         let candidates = context.paths(vec![entry("pipe|name.md", false)]);
-        let mut result = context.complete(candidates, &YozoraParser::default());
+        let mut result = context
+            .complete(
+                candidates,
+                &YozoraParser::default(),
+                &Cancellation::default(),
+            )
+            .unwrap();
         assert_eq!(result.items.len(), 1);
         assert!(accept(&mut document, result.items.remove(0))
             .contains("[go](pipe%7Cname.md) | neighbor"));
@@ -636,7 +675,13 @@ mod tests {
             request_context("[go](docs\\(v1\\)/gu¦ide.md?copy=&amp;copy; \"Title\")");
         let context = context.unwrap();
         let candidates = context.paths(vec![entry("guide2.md", false)]);
-        let mut result = context.complete(candidates, &YozoraParser::default());
+        let mut result = context
+            .complete(
+                candidates,
+                &YozoraParser::default(),
+                &Cancellation::default(),
+            )
+            .unwrap();
         assert_eq!(result.items.len(), 1);
         accept(&mut document, result.items.remove(0));
         let root = document.ast(&YozoraParser::default()).unwrap();
@@ -657,7 +702,13 @@ mod tests {
             let (mut document, context) = request_context(marked);
             let context = context.unwrap_or_else(|| panic!("missing context: {marked}"));
             let candidates = context.paths(vec![entry("guide.md", false)]);
-            let mut result = context.complete(candidates, &YozoraParser::default());
+            let mut result = context
+                .complete(
+                    candidates,
+                    &YozoraParser::default(),
+                    &Cancellation::default(),
+                )
+                .unwrap();
             assert_eq!(result.items.len(), 1, "{marked}");
             assert_eq!(accept(&mut document, result.items.remove(0)), expected);
         }
@@ -665,7 +716,14 @@ mod tests {
         let context = context.unwrap();
         let candidates = context.paths(vec![entry("docs", true)]);
         assert_eq!(
-            context.complete(candidates, &YozoraParser::default()).items[0]
+            context
+                .complete(
+                    candidates,
+                    &YozoraParser::default(),
+                    &Cancellation::default()
+                )
+                .unwrap()
+                .items[0]
                 .text_edit
                 .new_text,
             "docs/"
@@ -685,7 +743,13 @@ mod tests {
             let (mut document, context) = request_context(&format!("{headings}{suffix}"));
             let context = context.unwrap();
             let candidates = context.anchors(document.ast(&YozoraParser::default()).unwrap(), "");
-            let result = context.complete(candidates, &YozoraParser::default());
+            let result = context
+                .complete(
+                    candidates,
+                    &YozoraParser::default(),
+                    &Cancellation::default(),
+                )
+                .unwrap();
             assert_eq!(
                 result
                     .items
@@ -699,7 +763,13 @@ mod tests {
         let (mut document, context) = request_context(&format!("{headings}[go](#h-in¦)"));
         let context = context.unwrap();
         let candidates = context.anchors(document.ast(&YozoraParser::default()).unwrap(), "h-");
-        let result = context.complete(candidates, &YozoraParser::default());
+        let result = context
+            .complete(
+                candidates,
+                &YozoraParser::default(),
+                &Cancellation::default(),
+            )
+            .unwrap();
         assert_eq!(result.items[1].text_edit.new_text, "#h-intro-2");
     }
 
@@ -750,7 +820,13 @@ mod tests {
         let (_, context) = request_context(&marked);
         let context = context.unwrap();
         let candidates = context.paths((0..200).map(|_| entry("guide.md", false)).collect());
-        let result = context.complete(candidates, &YozoraParser::default());
+        let result = context
+            .complete(
+                candidates,
+                &YozoraParser::default(),
+                &Cancellation::default(),
+            )
+            .unwrap();
         assert!(result.items.len() < 4);
         assert!(serde_json::to_vec(&result).unwrap().len() < MAX_PROBE_BYTES);
     }

@@ -7,7 +7,7 @@ use crate::document::MAX_DOCUMENT_BYTES;
 
 /// URI roots belong to the server. Resolve paths afresh for each query so moved
 /// files and symlinks cannot leave a stale disk cache or access boundary behind.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Workspace {
     folders: Vec<String>,
 }

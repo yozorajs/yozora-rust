@@ -166,6 +166,86 @@ fn document(uri: &str) -> Value {
 }
 
 #[test]
+fn deeply_nested_images_survive_automatic_worker_diagnostics_and_later_edits() {
+    let mut client = Client::start();
+    client.initialize(json!({}));
+    let uri = "untitled:deep-images";
+    let source = format!("{}x{}", "![".repeat(4_000), "](/url)".repeat(4_000));
+    client.open(uri, &source);
+    let diagnostics = client.diagnostics();
+    assert_eq!(diagnostics["uri"], uri);
+    assert_eq!(diagnostics["diagnostics"], json!([]));
+    let response = client.request("textDocument/documentSymbol", document(uri));
+    assert_eq!(response["result"], json!([]));
+    client.notify(
+        "textDocument/didChange",
+        json!({
+            "textDocument": { "uri": uri, "version": 2 },
+            "contentChanges": [{ "text": "# Recovered" }]
+        }),
+    );
+    let response = client.request("textDocument/documentSymbol", document(uri));
+    assert_eq!(response["result"][0]["name"], "Recovered");
+    client.shutdown();
+}
+
+#[test]
+fn rename_round_trips_through_a_large_incremental_edit_batch() {
+    let mut client = Client::start();
+    client.initialize(json!({}));
+    let uri = "untitled:bulk-rename";
+    let count = 2_000;
+    client.open(
+        uri,
+        &format!("{}\n[old]: /url", "[😀][old]\r\n".repeat(count)),
+    );
+    let params = json!({
+        "textDocument": { "uri": uri },
+        "position": { "line": 0, "character": 6 },
+        "newName": "renamed",
+    });
+    let response = client.request("textDocument/rename", params);
+    let edits = response["result"]["changes"][uri].as_array().unwrap();
+    assert_eq!(edits.len(), count + 1);
+    let changes: Vec<_> = edits
+        .iter()
+        .rev()
+        .map(|edit| {
+            json!({
+                "range": edit["range"], "text": edit["newText"]
+            })
+        })
+        .collect();
+    client.notify(
+        "textDocument/didChange",
+        json!({
+            "textDocument": { "uri": uri, "version": 2 }, "contentChanges": changes
+        }),
+    );
+    let response = client.request(
+        "textDocument/prepareRename",
+        json!({
+            "textDocument": { "uri": uri }, "position": { "line": 0, "character": 6 }
+        }),
+    );
+    assert_eq!(response["result"]["placeholder"], "renamed");
+    let response = client.request(
+        "textDocument/references",
+        json!({
+            "textDocument": { "uri": uri }, "position": { "line": 0, "character": 6 },
+            "context": { "includeDeclaration": true }
+        }),
+    );
+    let locations = response["result"].as_array().unwrap();
+    assert_eq!(locations.len(), count + 1);
+    assert_eq!(
+        locations.last().unwrap()["range"]["start"]["line"],
+        count + 1
+    );
+    client.shutdown();
+}
+
+#[test]
 fn file_and_anchor_completion_follow_unsaved_target_edits_over_stdio() {
     let directory = std::env::temp_dir().join(format!(
         "yozora-lsp-stdio-completion-{}",

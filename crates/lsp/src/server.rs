@@ -1,31 +1,30 @@
 use std::collections::{HashMap, VecDeque};
 use std::io::{self, BufRead, Write};
-use std::path::PathBuf;
 use std::process::ExitCode;
-use std::sync::mpsc::RecvTimeoutError;
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
-use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
+#[cfg(test)]
 use yozora_parser::YozoraParser;
 
-use crate::analysis;
-use crate::completion;
-use crate::diagnostics;
-use crate::document::Document;
-use crate::files::{self, FileScope, Target, Workspace};
-use crate::links;
+use crate::cancellation::Cancellation;
+use crate::document::{open_document, Document};
+use crate::files::Workspace;
 use crate::protocol::{
-    DidChangeParams, DidChangeWorkspaceFoldersParams, DidOpenParams, DocumentSymbol,
-    InitializeParams, Position, Range, ReferencesParams, RenameParams, ResponseError,
-    TextDocumentParams, TextDocumentPositionParams,
+    parse_params, DidChangeParams, DidChangeWorkspaceFoldersParams, DidOpenParams,
+    InitializeParams, ResponseError, TextDocumentParams,
 };
-use crate::rename;
-use crate::resource_completion;
+use crate::query::{format_diagnostics, Request};
 use crate::transport::{read_messages, write_message};
+use crate::worker::{self, Workers, WORKER_COUNT};
+#[cfg(test)]
+use crate::{protocol::Position, query::document_start};
 
 const DIAGNOSTICS_DELAY: Duration = Duration::from_millis(150);
 const QUERY_DELAY: Duration = Duration::from_millis(5);
+const MAX_PENDING_QUERIES: usize = 128;
+const MAX_PENDING_QUERY_BYTES: usize = 1024 * 1024;
 
 #[derive(Default, Eq, PartialEq)]
 enum State {
@@ -37,34 +36,78 @@ enum State {
 
 struct PendingQuery {
     id: Value,
-    method: String,
-    params: Value,
-    uri: String,
+    request: Request,
     deadline: Instant,
+}
+
+impl PendingQuery {
+    fn retained_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.request.owned_bytes()
+            + match &self.id {
+                Value::String(id) => id.capacity(),
+                _ => 0,
+            }
+    }
+}
+
+enum Event {
+    Input(io::Result<Option<Vec<u8>>>),
+    Finished(Box<worker::Finished>),
+}
+
+enum Reply {
+    Query(Value),
+    Diagnostics,
+}
+
+struct RunningWork {
+    uri: String,
+    reply: Option<Reply>,
+    scope_epoch: u64,
+    cancellation: Cancellation,
+}
+
+impl Drop for RunningWork {
+    fn drop(&mut self) {
+        // EOF, exit and I/O errors also stop the remaining stages of live work.
+        self.cancellation.cancel();
+    }
 }
 
 #[derive(Default)]
 struct Server {
     state: State,
+    #[cfg(test)]
     parser: YozoraParser,
-    documents: HashMap<String, Document>,
-    workspace: Workspace,
-    heading_id_prefix: String,
-    hierarchical_symbols: bool,
-    folding_range_limit: Option<usize>,
-    hover_markdown: bool,
-    versioned_edits: bool,
-    diagnostic_related_information: bool,
-    diagnostic_version: bool,
+    query: crate::query::State,
     diagnostics_due: HashMap<String, Instant>,
     pending_queries: VecDeque<PendingQuery>,
+    pending_query_bytes: usize,
+    running: [Option<RunningWork>; WORKER_COUNT],
+    scope_epoch: u64,
     // Notifications can invalidate queries and retract diagnostics together.
     // Drain these messages even when the notification returns an error.
     outgoing: Vec<Value>,
 }
 
-pub fn run(reader: impl BufRead + Send + 'static, mut writer: impl Write) -> io::Result<ExitCode> {
-    let incoming = read_messages(reader)?;
+pub fn run(reader: impl BufRead + Send + 'static, writer: impl Write) -> io::Result<ExitCode> {
+    run_with_workers(reader, writer, |events| {
+        Workers::new(move |result| events.send(Event::Finished(Box::new(result))).is_ok())
+    })
+}
+
+fn run_with_workers(
+    reader: impl BufRead + Send + 'static,
+    mut writer: impl Write,
+    make_workers: impl FnOnce(mpsc::SyncSender<Event>) -> io::Result<Workers>,
+) -> io::Result<ExitCode> {
+    let (events, incoming) = mpsc::sync_channel(1);
+    let input_events = events.clone();
+    read_messages(reader, move |message| {
+        input_events.send(Event::Input(message)).is_ok()
+    })?;
+    let workers = make_workers(events)?;
     let mut server = Server::default();
     loop {
         let message = match server.next_deadline() {
@@ -74,21 +117,23 @@ pub fn run(reader: impl BufRead + Send + 'static, mut writer: impl Write) -> io:
             None => incoming.recv().map_err(|_| RecvTimeoutError::Disconnected),
         };
         match message {
-            Ok(body) => {
-                if let Some(status) = server.handle_message(&body?, &mut writer)? {
+            Ok(Event::Input(message)) => {
+                let Some(body) = message? else { break };
+                if let Some(status) = server.handle_message(&body, &mut writer)? {
                     return Ok(status);
                 }
             }
+            Ok(Event::Finished(result)) => server.finish_work(*result),
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
         }
         // Check timers after every message as well as on idle timeouts, so
         // traffic for one document cannot starve diagnostics for another.
-        // At most one analysis runs before returning to incoming messages.
-        match server.take_due_work(Instant::now()) {
-            Ok(Some(message)) => write_message(&mut writer, &message)?,
-            Ok(None) => {}
-            Err(error) => eprintln!("yozora-lsp: diagnostics: {}", error.message),
+        for message in server.outgoing.drain(..) {
+            write_message(&mut writer, &message)?;
+        }
+        while let Some((worker, task)) = server.start_work(Instant::now()) {
+            workers.submit(worker, task)?;
         }
     }
     Ok(server.exit_status())
@@ -174,62 +219,200 @@ impl Server {
         params: Value,
         now: Instant,
     ) -> Result<(), ResponseError> {
-        let document: TextDocumentParams = parse_params(params.clone())?;
-        let uri = document.text_document.uri;
-        open_document(&mut self.documents, &uri)?;
-        self.pending_queries.push_back(PendingQuery {
+        let request = Request::parse(method, params)?;
+        open_document(&mut self.query.documents, &request.uri)?;
+        let query = PendingQuery {
             id,
-            method: method.to_string(),
-            params,
-            uri,
+            request,
             deadline: now + QUERY_DELAY,
-        });
+        };
+        let bytes = query.retained_bytes();
+        if self.pending_queries.len() >= MAX_PENDING_QUERIES
+            || bytes > MAX_PENDING_QUERY_BYTES - self.pending_query_bytes
+        {
+            return Err(ResponseError::new(
+                -32000,
+                "server is busy; retry after outstanding queries complete",
+            ));
+        }
+        self.pending_query_bytes += bytes;
+        self.pending_queries.push_back(query);
         Ok(())
     }
 
-    fn reject_queries(&mut self, reject: impl Fn(&PendingQuery) -> bool, error: ResponseError) {
+    fn reject_queries(&mut self, reject: impl Fn(&str, &Value) -> bool, error: ResponseError) {
         let outgoing = &mut self.outgoing;
+        let pending_bytes = &mut self.pending_query_bytes;
         self.pending_queries.retain(|query| {
-            if reject(query) {
+            if reject(&query.request.uri, &query.id) {
+                *pending_bytes -= query.retained_bytes();
                 outgoing.push(error.response(query.id.clone()));
                 false
             } else {
                 true
             }
         });
+        for work in self.running.iter_mut().flatten() {
+            if let Some(Reply::Query(id)) = &work.reply {
+                if reject(&work.uri, id) {
+                    outgoing.push(error.response(id.clone()));
+                    work.reply = None;
+                    work.cancellation.cancel();
+                }
+            }
+        }
     }
 
     fn invalidate_queries(&mut self, uri: &str) {
         self.reject_queries(
-            |query| query.uri == uri,
-            ResponseError::new(-32801, "document changed before the query started"),
+            |source, _| source == uri,
+            ResponseError::new(-32801, "document changed before the query completed"),
         );
+        for work in self.running.iter_mut().flatten() {
+            if work.uri == uri {
+                work.reply = None;
+                work.cancellation.cancel();
+            }
+        }
+    }
+
+    fn busy(&self, uri: &str) -> bool {
+        self.running.iter().flatten().any(|work| work.uri == uri)
     }
 
     fn next_deadline(&self) -> Option<Instant> {
+        if self.running.iter().all(Option::is_some) {
+            return None;
+        }
         self.pending_queries
-            .front()
+            .iter()
+            .filter(|query| !self.busy(&query.request.uri))
             .map(|query| query.deadline)
-            .into_iter()
-            .chain(self.diagnostics_due.values().copied())
+            .chain(
+                self.diagnostics_due
+                    .iter()
+                    .filter(|(uri, _)| !self.busy(uri))
+                    .map(|(_, deadline)| *deadline),
+            )
             .min()
     }
 
-    fn take_due_work(&mut self, now: Instant) -> Result<Option<Value>, ResponseError> {
-        // Serve the oldest deadline across both kinds of work, so a stream of
-        // queries cannot starve diagnostics for another document.
-        let query_deadline = self.pending_queries.front().map(|query| query.deadline);
-        let diagnostic_deadline = self.diagnostics_due.values().min().copied();
-        if query_deadline.is_some_and(|deadline| {
-            deadline <= now && diagnostic_deadline.is_none_or(|other| deadline <= other)
-        }) {
-            let query = self.pending_queries.pop_front().expect("query was checked");
-            return Ok(Some(match self.request(&query.method, query.params) {
-                Ok(result) => json!({ "jsonrpc": "2.0", "id": query.id, "result": result }),
-                Err(error) => error.response(query.id),
-            }));
+    fn start_work(&mut self, now: Instant) -> Option<(usize, worker::Task)> {
+        if self.state != State::Running {
+            return None;
         }
-        self.take_due_diagnostics(now)
+        let worker = self.running.iter().position(Option::is_none)?;
+        // One task per source prevents repeated queries or diagnostics for one
+        // slow document from occupying every worker. Older blocked work must
+        // not prevent an eligible request for another document from starting.
+        let query = self
+            .pending_queries
+            .iter()
+            .enumerate()
+            .filter(|(_, query)| query.deadline <= now && !self.busy(&query.request.uri))
+            .min_by_key(|(index, query)| (query.deadline, *index))
+            .map(|(index, query)| (index, query.deadline));
+        let diagnostic = self
+            .diagnostics_due
+            .iter()
+            .filter(|(uri, deadline)| **deadline <= now && !self.busy(uri))
+            .min_by_key(|(uri, deadline)| (**deadline, *uri))
+            .map(|(uri, deadline)| (uri.clone(), *deadline));
+        let (uri, reply, query) = if let Some((index, _)) =
+            query.filter(|(_, deadline)| diagnostic.as_ref().is_none_or(|(_, due)| deadline <= due))
+        {
+            let query = self
+                .pending_queries
+                .remove(index)
+                .expect("selected query exists");
+            self.pending_query_bytes -= query.retained_bytes();
+            (
+                query.request.uri.clone(),
+                Reply::Query(query.id),
+                Some(query.request),
+            )
+        } else {
+            let (uri, _) = diagnostic?;
+            self.diagnostics_due.remove(&uri);
+            (uri, Reply::Diagnostics, None)
+        };
+        let cancellation = Cancellation::default();
+        self.running[worker] = Some(RunningWork {
+            uri: uri.clone(),
+            reply: Some(reply),
+            scope_epoch: self.scope_epoch,
+            cancellation: cancellation.clone(),
+        });
+        Some((
+            worker,
+            worker::Task {
+                state: self.query.clone(),
+                uri,
+                query,
+                cancellation,
+            },
+        ))
+    }
+
+    fn finish_work(&mut self, mut finished: worker::Finished) {
+        let Some(mut work) = self.running[finished.worker].take() else {
+            return;
+        };
+        let matches = |uri: &str| {
+            self.query
+                .documents
+                .get(uri)
+                .zip(finished.state.documents.get(uri))
+                .is_some_and(|(live, snapshot)| live.matches(snapshot))
+        };
+        let current = matches(&work.uri)
+            && finished.dependencies.targets.iter().all(|uri| matches(uri))
+            && (!finished.dependencies.files || work.scope_epoch == self.scope_epoch);
+        for (uri, snapshot) in &mut finished.state.documents {
+            if let Some(live) = self.query.documents.get_mut(uri) {
+                live.adopt_ast(snapshot);
+            }
+        }
+        match work.reply.take() {
+            Some(Reply::Query(id)) => {
+                let result = if current {
+                    finished.result
+                } else {
+                    Err(ResponseError::new(
+                        -32801,
+                        "document or workspace changed during analysis",
+                    ))
+                };
+                self.outgoing.push(match result {
+                    Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
+                    Err(error) => error.response(id),
+                });
+            }
+            Some(Reply::Diagnostics) if current => match finished.result {
+                Ok(publication) => self.outgoing.push(publication),
+                Err(error) => {
+                    eprintln!("yozora-lsp: diagnostics: {}", error.message);
+                    let version = self.query.documents[&work.uri].version();
+                    self.outgoing.push(format_diagnostics(
+                        &work.uri,
+                        self.query.diagnostic_version.then_some(version),
+                        Vec::new(),
+                        false,
+                    ));
+                }
+            },
+            _ => {}
+        }
+    }
+
+    #[cfg(test)]
+    fn take_due_work(&mut self, now: Instant) -> Result<Option<Value>, ResponseError> {
+        let Some((worker, task)) = self.start_work(now) else {
+            return Ok(None);
+        };
+        let before = self.outgoing.len();
+        self.finish_work(worker::execute(worker, task, &self.parser));
+        Ok((self.outgoing.len() > before).then(|| self.outgoing.pop().unwrap()))
     }
 
     fn request(&mut self, method: &str, params: Value) -> Result<Value, ResponseError> {
@@ -259,19 +442,19 @@ impl Server {
                     "headingIdPrefix must be at most 256 UTF-8 bytes without control characters",
                 ));
             }
-            self.workspace = Workspace::new(folders);
-            self.heading_id_prefix = prefix;
-            self.hierarchical_symbols = params
+            self.query.workspace = Workspace::new(folders);
+            self.query.heading_id_prefix = prefix;
+            self.query.hierarchical_symbols = params
                 .pointer(
                     "/capabilities/textDocument/documentSymbol/hierarchicalDocumentSymbolSupport",
                 )
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
-            self.folding_range_limit = params
+            self.query.folding_range_limit = params
                 .pointer("/capabilities/textDocument/foldingRange/rangeLimit")
                 .and_then(Value::as_u64)
                 .and_then(|limit| usize::try_from(limit).ok());
-            self.hover_markdown = params
+            self.query.hover_markdown = params
                 .pointer("/capabilities/textDocument/hover/contentFormat")
                 .and_then(Value::as_array)
                 .and_then(|formats| {
@@ -281,15 +464,15 @@ impl Server {
                         .find(|format| matches!(*format, "markdown" | "plaintext"))
                 })
                 == Some("markdown");
-            self.versioned_edits = params
+            self.query.versioned_edits = params
                 .pointer("/capabilities/workspace/workspaceEdit/documentChanges")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
-            self.diagnostic_related_information = params
+            self.query.diagnostic_related_information = params
                 .pointer("/capabilities/textDocument/publishDiagnostics/relatedInformation")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
-            self.diagnostic_version = params
+            self.query.diagnostic_version = params
                 .pointer("/capabilities/textDocument/publishDiagnostics/versionSupport")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
@@ -329,245 +512,44 @@ impl Server {
                     ));
                 }
                 self.state = State::Shutdown;
-                self.documents.clear();
+                self.query.documents.clear();
                 self.diagnostics_due.clear();
                 self.outgoing.clear();
                 self.reject_queries(
-                    |_| true,
+                    |_, _| true,
                     ResponseError::new(-32800, "server is shutting down"),
                 );
+                for work in self.running.iter_mut().flatten() {
+                    work.reply = None;
+                    work.cancellation.cancel();
+                }
                 Ok(Value::Null)
             }
-            "textDocument/documentSymbol" => {
-                let params: TextDocumentParams = parse_params(params)?;
-                let uri = params.text_document.uri;
-                let document = open_document(&mut self.documents, &uri)?;
-                let symbols = analysis::document_symbols(document.ast(&self.parser)?);
-                if self.hierarchical_symbols {
-                    Ok(json!(symbols))
-                } else {
-                    Ok(flat_symbols(&symbols, &uri))
-                }
-            }
-            "textDocument/foldingRange" => {
-                let params: TextDocumentParams = parse_params(params)?;
-                let document = open_document(&mut self.documents, &params.text_document.uri)?;
-                let mut ranges = analysis::folding_ranges(document.ast(&self.parser)?);
-                if let Some(limit) = self.folding_range_limit {
-                    ranges.truncate(limit);
-                }
-                Ok(json!(ranges))
-            }
-            "textDocument/definition" => {
-                let params: TextDocumentPositionParams = parse_params(params)?;
-                self.definition(&params.text_document.uri, params.position)
-            }
-            "textDocument/documentLink" => {
-                let params: TextDocumentParams = parse_params(params)?;
-                let uri = params.text_document.uri;
-                let scope = self.workspace.scope(&uri);
-                let open_uris = self.open_file_uris(&scope, &uri);
-                let document = open_document(&mut self.documents, &uri)?;
-                Ok(json!(links::document_links(
-                    document.ast(&self.parser)?,
-                    |destination| {
-                        match files::resolve(&uri, destination, &scope)? {
-                            Target::External(uri) => Some(uri),
-                            Target::Local {
-                                file,
-                                query,
-                                fragment,
-                            } => {
-                                let target_uri = match file {
-                                    None => uri.clone(),
-                                    Some(file) => match open_file_uri(&open_uris, &file) {
-                                        Some(uri) => uri.to_string(),
-                                        None if files::is_file(&file.path) => {
-                                            files::path_uri(&file.path)?
-                                        }
-                                        None => return None,
-                                    },
-                                };
-                                files::link_uri(&target_uri, query.as_deref(), fragment.as_deref())
-                            }
-                        }
-                    }
-                )))
-            }
-            "textDocument/hover" => {
-                let params: TextDocumentPositionParams = parse_params(params)?;
-                let document = open_document(&mut self.documents, &params.text_document.uri)?;
-                document.validate_position(params.position)?;
-                Ok(
-                    analysis::hover(document.ast(&self.parser)?, params.position)
-                        .map(|info| format_hover(info, self.hover_markdown))
-                        .unwrap_or(Value::Null),
-                )
-            }
-            "textDocument/references" => {
-                let ReferencesParams {
-                    position_params: params,
-                    context,
-                } = parse_params(params)?;
-                let uri = params.text_document.uri;
-                let document = open_document(&mut self.documents, &uri)?;
-                document.validate_position(params.position)?;
-                let locations: Vec<_> = analysis::references(
-                    document.ast(&self.parser)?,
-                    params.position,
-                    context.include_declaration,
-                )
-                .into_iter()
-                .map(|range| json!({ "uri": uri, "range": range }))
-                .collect();
-                Ok(json!(locations))
-            }
-            "textDocument/completion" => {
-                let params: TextDocumentPositionParams = parse_params(params)?;
-                self.complete(&params.text_document.uri, params.position)
-            }
-            "textDocument/prepareRename" => {
-                let params: TextDocumentPositionParams = parse_params(params)?;
-                let document = open_document(&mut self.documents, &params.text_document.uri)?;
-                let snapshot = document.snapshot(&self.parser, params.position)?;
-                Ok(json!(rename::prepare(&snapshot, params.position)))
-            }
-            "textDocument/rename" => {
-                let RenameParams {
-                    position_params: params,
-                    new_name,
-                } = parse_params(params)?;
-                let uri = params.text_document.uri;
-                let document = open_document(&mut self.documents, &uri)?;
-                let snapshot = document.snapshot(&self.parser, params.position)?;
-                let edits = rename::rename(&snapshot, params.position, &new_name, &self.parser)?;
-                if self.versioned_edits {
-                    Ok(json!({ "documentChanges": [{
-                        "textDocument": { "uri": uri, "version": snapshot.version }, "edits": edits
-                    }] }))
-                } else {
-                    Ok(json!({ "changes": { uri: edits } }))
-                }
-            }
+            #[cfg(test)]
+            method if is_document_query(method) => self.query.request(
+                Request::parse(method, params)?,
+                &self.parser,
+                &Cancellation::default(),
+                &mut crate::query::Dependencies::default(),
+            ),
             _ => Err(ResponseError::new(-32601, "Method not found")),
         }
     }
 
+    #[cfg(test)]
     fn definition(&mut self, uri: &str, position: Position) -> Result<Value, ResponseError> {
-        let document = open_document(&mut self.documents, uri)?;
-        document.validate_position(position)?;
-        let root = document.ast(&self.parser)?;
-        if let Some(range) = analysis::definition(root, position) {
-            return Ok(json!({ "uri": uri, "range": range }));
-        }
-        let Some(destination) = links::destination_at(root, position).map(str::to_string) else {
-            return Ok(Value::Null);
-        };
-        let scope = self.workspace.scope(uri);
-        let Some(Target::Local { file, fragment, .. }) = files::resolve(uri, &destination, &scope)
-        else {
-            return Ok(Value::Null);
-        };
-        let fragment = fragment.as_deref().filter(|value| !value.is_empty());
-        let target_uri;
-        let mut disk_document;
-        let document = if let Some(file) = file {
-            if let Some(open_uri) = open_file_uri(&self.open_file_uris(&scope, uri), &file) {
-                target_uri = open_uri.to_string();
-                open_document(&mut self.documents, &target_uri)?
-            } else {
-                let Some(file_uri) = files::path_uri(&file.path) else {
-                    return Ok(Value::Null);
-                };
-                target_uri = file_uri;
-                if fragment.is_none() {
-                    return Ok(if files::is_file(&file.path) {
-                        json!({ "uri": target_uri, "range": document_start() })
-                    } else {
-                        Value::Null
-                    });
-                }
-                let Some(text) = files::read_markdown(&file.path) else {
-                    return Ok(Value::Null);
-                };
-                disk_document = Document::new(0, text)?;
-                &mut disk_document
-            }
-        } else {
-            target_uri = uri.to_string();
-            open_document(&mut self.documents, uri)?
-        };
-        // Never fall back to disk when an open target has lost synchronization.
-        document.validate_position(Position::default())?;
-        let range = match fragment {
-            Some(fragment) => links::heading(
-                document.ast(&self.parser)?,
-                fragment,
-                &self.heading_id_prefix,
-            ),
-            None => Some(document_start()),
-        };
-        Ok(range
-            .map(|range| json!({ "uri": target_uri, "range": range }))
-            .unwrap_or(Value::Null))
+        self.request(
+            "textDocument/definition",
+            json!({ "textDocument": { "uri": uri }, "position": position }),
+        )
     }
 
+    #[cfg(test)]
     fn complete(&mut self, uri: &str, position: Position) -> Result<Value, ResponseError> {
-        let document = open_document(&mut self.documents, uri)?;
-        let snapshot = document.snapshot(&self.parser, position)?;
-        let Some(context) = resource_completion::Context::new(&snapshot, position, &self.parser)?
-        else {
-            return Ok(json!(completion::complete(
-                &snapshot,
-                position,
-                &self.parser
-            )?));
-        };
-        let scope = self.workspace.scope(uri);
-        let open_uris = self.open_file_uris(&scope, uri);
-        let candidates = match context.target() {
-            Some(resource_completion::Target::Path(prefix)) => context.paths(
-                files::path_candidates(uri, prefix, &scope, open_uris.keys().map(PathBuf::as_path)),
-            ),
-            Some(resource_completion::Target::Anchor { resource, .. }) => {
-                match files::resolve(uri, resource, &scope) {
-                    Some(Target::Local { file: None, .. }) => {
-                        let document = open_document(&mut self.documents, uri)?;
-                        context.anchors(document.ast(&self.parser)?, &self.heading_id_prefix)
-                    }
-                    Some(Target::Local {
-                        file: Some(file), ..
-                    }) => {
-                        if let Some(uri) = open_file_uri(&open_uris, &file) {
-                            let document = open_document(&mut self.documents, uri)?;
-                            context.anchors(document.ast(&self.parser)?, &self.heading_id_prefix)
-                        } else if let Some(text) = files::read_markdown(&file.path) {
-                            let mut document = Document::new(0, text)?;
-                            context.anchors(document.ast(&self.parser)?, &self.heading_id_prefix)
-                        } else {
-                            Vec::new()
-                        }
-                    }
-                    _ => Vec::new(),
-                }
-            }
-            None => Vec::new(),
-        };
-        Ok(json!(context.complete(candidates, &self.parser)))
-    }
-
-    fn open_file_uris(&self, scope: &FileScope, source_uri: &str) -> HashMap<PathBuf, Vec<String>> {
-        let mut uris: Vec<_> = self.documents.keys().collect();
-        // Preserve all aliases. Prefer the source only when no exact target
-        // URI or lexical path selects a more specific buffer.
-        uris.sort_by_key(|uri| (uri.as_str() != source_uri, *uri));
-        let mut result: HashMap<PathBuf, Vec<String>> = HashMap::new();
-        for uri in uris {
-            if let Some(path) = files::file_uri_path(uri).and_then(|path| scope.resolve(&path)) {
-                result.entry(path).or_default().push(uri.clone());
-            }
-        }
-        result
+        self.request(
+            "textDocument/completion",
+            json!({ "textDocument": { "uri": uri }, "position": position }),
+        )
     }
 
     fn notification(
@@ -594,7 +576,8 @@ impl Server {
                 for uri in added.iter().chain(&removed) {
                     validate_uri(uri)?;
                 }
-                self.workspace.change(&removed, added);
+                self.query.workspace.change(&removed, added);
+                self.scope_epoch = self.scope_epoch.wrapping_add(1);
             }
             "textDocument/didOpen" => {
                 let params: DidOpenParams = parse_params(params)?;
@@ -604,12 +587,13 @@ impl Server {
                 self.invalidate_queries(&item.uri);
                 self.diagnostics_due
                     .insert(item.uri.clone(), now + DIAGNOSTICS_DELAY);
-                self.documents.insert(item.uri, document);
+                self.query.documents.insert(item.uri, document);
+                self.scope_epoch = self.scope_epoch.wrapping_add(1);
             }
             "textDocument/didChange" => {
                 let params: DidChangeParams = parse_params(params)?;
                 let uri = params.text_document.uri;
-                let document = open_document(&mut self.documents, &uri)?;
+                let document = open_document(&mut self.query.documents, &uri)?;
                 let previous_version = document.version();
                 let result = match parse_params(params.content_changes) {
                     Ok(changes) => document.change(params.text_document.version, changes),
@@ -627,7 +611,7 @@ impl Server {
                         self.diagnostics_due.remove(&uri);
                         self.outgoing.push(format_diagnostics(
                             &uri,
-                            self.diagnostic_version.then_some(version),
+                            self.query.diagnostic_version.then_some(version),
                             Vec::new(),
                             false,
                         ));
@@ -638,7 +622,8 @@ impl Server {
             "textDocument/didClose" => {
                 let params: TextDocumentParams = parse_params(params)?;
                 let uri = params.text_document.uri;
-                if self.documents.remove(&uri).is_some() {
+                if self.query.documents.remove(&uri).is_some() {
+                    self.scope_epoch = self.scope_epoch.wrapping_add(1);
                     self.invalidate_queries(&uri);
                     self.diagnostics_due.remove(&uri);
                     self.outgoing
@@ -650,7 +635,7 @@ impl Server {
                     .get("id")
                     .ok_or_else(|| ResponseError::invalid_params("cancelRequest requires an id"))?;
                 self.reject_queries(
-                    |query| query.id == *id,
+                    |_, query_id| query_id == id,
                     ResponseError::new(-32800, "request cancelled"),
                 );
             }
@@ -660,6 +645,7 @@ impl Server {
         Ok(())
     }
 
+    #[cfg(test)]
     fn take_due_diagnostics(&mut self, now: Instant) -> Result<Option<Value>, ResponseError> {
         let Some((uri, deadline)) = self
             .diagnostics_due
@@ -673,90 +659,10 @@ impl Server {
         }
         let uri = uri.clone();
         self.diagnostics_due.remove(&uri);
-        let document = open_document(&mut self.documents, &uri)?;
-        let diagnostics = diagnostics::duplicate_definitions(document.ast(&self.parser)?);
-        Ok(Some(format_diagnostics(
-            &uri,
-            self.diagnostic_version.then_some(document.version()),
-            diagnostics,
-            self.diagnostic_related_information,
-        )))
+        self.query
+            .diagnostics(&uri, &self.parser, &Cancellation::default())
+            .map(Some)
     }
-}
-
-fn open_file_uri<'a>(
-    open_uris: &'a HashMap<PathBuf, Vec<String>>,
-    file: &files::LocalFile,
-) -> Option<&'a str> {
-    let aliases = open_uris.get(&file.path)?;
-    // Buffer identity is the requested URI, then its normalized lexical path.
-    // Canonical aliases are a fallback, never an override of a matching buffer.
-    aliases
-        .iter()
-        .find(|uri| *uri == &file.uri)
-        .or_else(|| {
-            let lexical = files::file_uri_path(&file.uri)?;
-            aliases
-                .iter()
-                .find(|uri| files::file_uri_path(uri).as_ref() == Some(&lexical))
-        })
-        .or_else(|| aliases.first())
-        .map(String::as_str)
-}
-
-fn document_start() -> Range {
-    Range {
-        start: Position::default(),
-        end: Position::default(),
-    }
-}
-
-fn format_diagnostics(
-    uri: &str,
-    version: Option<i32>,
-    duplicates: Vec<diagnostics::DuplicateDefinition>,
-    related_information: bool,
-) -> Value {
-    let diagnostics: Vec<_> = duplicates
-        .into_iter()
-        .map(|duplicate| {
-            let mut diagnostic = json!({
-                "range": duplicate.range,
-                "severity": 2, // DiagnosticSeverity.Warning
-                "code": duplicate.code,
-                "source": "yozora-lsp",
-                "message": duplicate.message,
-            });
-            if related_information {
-                diagnostic["relatedInformation"] = json!([{
-                    "location": { "uri": uri, "range": duplicate.first_definition },
-                    "message": "The first definition is used here.",
-                }]);
-            }
-            diagnostic
-        })
-        .collect();
-    let mut params = json!({ "uri": uri, "diagnostics": diagnostics });
-    if let Some(version) = version {
-        params["version"] = json!(version);
-    }
-    json!({ "jsonrpc": "2.0", "method": "textDocument/publishDiagnostics", "params": params })
-}
-
-fn format_hover(info: analysis::HoverInfo, markdown: bool) -> Value {
-    let (kind, value) = if markdown {
-        let mut escaped = String::new();
-        for character in info.text.chars() {
-            if character.is_ascii_punctuation() {
-                escaped.push('\\');
-            }
-            escaped.push(character);
-        }
-        ("markdown", escaped)
-    } else {
-        ("plaintext", info.text)
-    };
-    json!({ "contents": { "kind": kind, "value": value }, "range": info.range })
 }
 
 fn is_document_query(method: &str) -> bool {
@@ -772,19 +678,6 @@ fn is_document_query(method: &str) -> bool {
             | "textDocument/prepareRename"
             | "textDocument/rename"
     )
-}
-
-fn parse_params<T: DeserializeOwned>(params: Value) -> Result<T, ResponseError> {
-    serde_json::from_value(params).map_err(|error| ResponseError::invalid_params(error.to_string()))
-}
-
-fn open_document<'a>(
-    documents: &'a mut HashMap<String, Document>,
-    uri: &str,
-) -> Result<&'a mut Document, ResponseError> {
-    documents
-        .get_mut(uri)
-        .ok_or_else(|| ResponseError::invalid_params("document is not open"))
 }
 
 fn validate_uri(uri: &str) -> Result<(), ResponseError> {
@@ -805,29 +698,8 @@ fn validate_uri(uri: &str) -> Result<(), ResponseError> {
     }
 }
 
-fn flat_symbols(symbols: &[DocumentSymbol], uri: &str) -> Value {
-    let mut result = Vec::new();
-    let mut stack: Vec<_> = symbols.iter().rev().map(|symbol| (symbol, None)).collect();
-    while let Some((symbol, parent)) = stack.pop() {
-        let mut entry = json!({
-            "name": symbol.name,
-            "kind": symbol.kind,
-            "location": { "uri": uri, "range": symbol.selection_range },
-        });
-        if let Some(parent) = parent {
-            entry["containerName"] = Value::String(parent);
-        }
-        result.push(entry);
-        stack.extend(
-            symbol
-                .children
-                .iter()
-                .rev()
-                .map(|child| (child, Some(symbol.name.clone()))),
-        );
-    }
-    Value::Array(result)
-}
+#[cfg(test)]
+mod runtime_tests;
 
 #[cfg(test)]
 mod tests {
@@ -895,6 +767,369 @@ mod tests {
             .unwrap();
     }
 
+    #[test]
+    fn queues_only_typed_parameters_and_rejects_malformed_requests_before_scheduling() {
+        let mut server = server();
+        let now = Instant::now();
+        let uri = "untitled:typed-queue";
+        open(&mut server, uri, "# Title", now);
+        for method in [
+            "textDocument/documentSymbol",
+            "textDocument/foldingRange",
+            "textDocument/definition",
+            "textDocument/documentLink",
+            "textDocument/hover",
+            "textDocument/references",
+            "textDocument/completion",
+            "textDocument/prepareRename",
+            "textDocument/rename",
+        ] {
+            server
+                .queue_query(
+                    json!(method),
+                    method,
+                    json!({
+                        "textDocument": { "uri": uri, "extension": "x".repeat(512 * 1024) },
+                        "position": { "line": 0, "character": 2 },
+                        "context": { "includeDeclaration": false },
+                        "newName": "renamed",
+                        "ignoredExtension": "x".repeat(512 * 1024),
+                    }),
+                    now,
+                )
+                .unwrap();
+        }
+        assert_eq!(server.pending_queries.len(), 9);
+        assert!(server.pending_query_bytes < 4_096);
+        let before = server.pending_query_bytes;
+        for (method, params) in [
+            (
+                "textDocument/hover",
+                json!({ "textDocument": { "uri": uri } }),
+            ),
+            (
+                "textDocument/rename",
+                json!({ "textDocument": { "uri": uri }, "position": Position::default() }),
+            ),
+            (
+                "textDocument/references",
+                json!({ "textDocument": { "uri": uri }, "position": Position::default() }),
+            ),
+        ] {
+            assert_eq!(
+                server
+                    .queue_query(json!("invalid"), method, params, now)
+                    .unwrap_err()
+                    .code,
+                -32602
+            );
+        }
+        assert_eq!(server.pending_query_bytes, before);
+        assert_eq!(server.pending_queries.len(), 9);
+    }
+
+    #[test]
+    fn bounds_pending_request_count_and_releases_capacity_on_dispatch_and_shutdown() {
+        let mut server = server();
+        let now = Instant::now();
+        let uri = "untitled:queue-limit";
+        open(&mut server, uri, "# Title", now);
+        for id in 0..MAX_PENDING_QUERIES {
+            queue(&mut server, json!(id), uri, now);
+        }
+        let before = server.pending_query_bytes;
+        assert_eq!(
+            server
+                .queue_query(
+                    json!("overflow"),
+                    "textDocument/documentSymbol",
+                    json!({ "textDocument": { "uri": uri } }),
+                    now
+                )
+                .unwrap_err()
+                .code,
+            -32000
+        );
+        assert_eq!(server.pending_queries.len(), MAX_PENDING_QUERIES);
+        assert_eq!(server.pending_query_bytes, before);
+        let (_, task) = server.start_work(now + QUERY_DELAY).unwrap();
+        assert!(server.pending_query_bytes < before);
+        queue(&mut server, json!("replacement"), uri, now);
+        assert_eq!(server.pending_queries.len(), MAX_PENDING_QUERIES);
+        server.request("shutdown", Value::Null).unwrap();
+        assert!(task.cancellation.is_cancelled());
+        assert!(server.pending_queries.is_empty());
+        assert_eq!(server.pending_query_bytes, 0);
+        assert_eq!(server.outgoing.len(), MAX_PENDING_QUERIES + 1);
+    }
+
+    #[test]
+    fn pending_byte_budget_counts_ids_uris_and_rename_strings() {
+        for field in ["id", "uri", "newName"] {
+            let mut server = server();
+            let now = Instant::now();
+            let padding = "x".repeat(MAX_PENDING_QUERY_BYTES / 2);
+            let uri = if field == "uri" {
+                format!("untitled:{padding}")
+            } else {
+                "untitled:byte-budget".into()
+            };
+            let id = if field == "id" {
+                json!(padding)
+            } else {
+                json!(1)
+            };
+            let params = json!({
+                "textDocument": { "uri": uri },
+                "position": Position::default(),
+                "newName": if field == "newName" { padding.as_str() } else { "new" },
+            });
+            open(&mut server, &uri, "# Title", now);
+            server
+                .queue_query(id.clone(), "textDocument/rename", params.clone(), now)
+                .unwrap();
+            let before = server.pending_query_bytes;
+            assert!(before >= MAX_PENDING_QUERY_BYTES / 2);
+            let overflow_id = if field == "id" {
+                json!(format!("{padding}2"))
+            } else {
+                json!("overflow")
+            };
+            assert_eq!(
+                server
+                    .queue_query(overflow_id, "textDocument/rename", params.clone(), now)
+                    .unwrap_err()
+                    .code,
+                -32000
+            );
+            assert_eq!(server.pending_query_bytes, before);
+            assert_eq!(server.pending_queries.len(), 1);
+            server
+                .notification("$/cancelRequest", json!({ "id": id }), now)
+                .unwrap();
+            assert_eq!(server.pending_query_bytes, 0);
+            server
+                .queue_query(json!("reused"), "textDocument/rename", params, now)
+                .unwrap();
+        }
+        let mut server = server();
+        let now = Instant::now();
+        let uri = "untitled:oversized-request";
+        open(&mut server, uri, "# Title", now);
+        assert_eq!(
+            server
+                .queue_query(
+                    json!("x".repeat(MAX_PENDING_QUERY_BYTES)),
+                    "textDocument/documentSymbol",
+                    json!({ "textDocument": { "uri": uri } }),
+                    now
+                )
+                .unwrap_err()
+                .code,
+            -32000
+        );
+        assert!(server.pending_queries.is_empty());
+        assert_eq!(server.pending_query_bytes, 0);
+    }
+
+    #[test]
+    fn running_work_does_not_block_eligible_queries_from_another_document() {
+        let mut server = server();
+        let now = Instant::now();
+        open(&mut server, "untitled:slow", "# Slow", now);
+        open(&mut server, "untitled:fast", "# Fast", now);
+        queue(&mut server, json!(1), "untitled:slow", now);
+        queue(&mut server, json!(2), "untitled:slow", now);
+        queue(&mut server, json!(3), "untitled:fast", now);
+        let (slow_worker, slow) = server.start_work(now + QUERY_DELAY).unwrap();
+        let (fast_worker, fast) = server.start_work(now + QUERY_DELAY).unwrap();
+        assert_ne!(slow_worker, fast_worker);
+        assert_eq!(fast.uri, "untitled:fast");
+        server.finish_work(worker::execute(fast_worker, fast, &server.parser));
+        assert_eq!(server.outgoing[0]["id"], 3);
+        assert_eq!(server.outgoing[0]["result"][0]["name"], "Fast");
+        assert!(server.start_work(now + QUERY_DELAY).is_none());
+        server.finish_work(worker::execute(slow_worker, slow, &server.parser));
+        let (worker, task) = server.start_work(now + QUERY_DELAY).unwrap();
+        assert_eq!(task.uri, "untitled:slow");
+        server.finish_work(worker::execute(worker, task, &server.parser));
+        assert_eq!(server.outgoing[2]["id"], 2);
+    }
+
+    #[test]
+    fn cancellation_retires_running_responses_before_the_worker_finishes_and_allows_id_reuse() {
+        let mut server = server();
+        let now = Instant::now();
+        open(&mut server, "untitled:first", "# First", now);
+        open(&mut server, "untitled:second", "# Second", now);
+        queue(&mut server, json!(9), "untitled:first", now);
+        let (old_worker, old) = server.start_work(now + QUERY_DELAY).unwrap();
+        server
+            .notification("$/cancelRequest", json!({ "id": 9 }), now)
+            .unwrap();
+        assert_eq!(server.outgoing[0]["error"]["code"], -32800);
+        queue(&mut server, json!(9), "untitled:second", now);
+        let (new_worker, new) = server.start_work(now + QUERY_DELAY).unwrap();
+        server.finish_work(worker::execute(old_worker, old, &server.parser));
+        assert_eq!(server.outgoing.len(), 1);
+        server.finish_work(worker::execute(new_worker, new, &server.parser));
+        assert_eq!(server.outgoing.len(), 2);
+        assert_eq!(server.outgoing[1]["id"], 9);
+        assert_eq!(server.outgoing[1]["result"][0]["name"], "Second");
+    }
+
+    #[test]
+    fn close_and_reopen_with_reused_versions_cannot_adopt_a_running_tasks_old_ast() {
+        let mut server = server();
+        let now = Instant::now();
+        let uri = "untitled:reopened";
+        open(&mut server, uri, "# Old", now);
+        queue(&mut server, json!(1), uri, now);
+        let (worker, task) = server.start_work(now + QUERY_DELAY).unwrap();
+        // Completion can be waiting in the event channel when close/reopen arrives.
+        let finished = worker::execute(worker, task, &server.parser);
+        server
+            .notification(
+                "textDocument/didClose",
+                json!({ "textDocument": { "uri": uri } }),
+                now,
+            )
+            .unwrap();
+        assert_eq!(server.outgoing[0]["error"]["code"], -32801);
+        open(&mut server, uri, "# Reopened", now);
+        server.outgoing.clear();
+        server.finish_work(finished);
+        assert!(server.outgoing.is_empty());
+        let symbols = server
+            .request(
+                "textDocument/documentSymbol",
+                json!({ "textDocument": { "uri": uri } }),
+            )
+            .unwrap();
+        assert_eq!(symbols[0]["name"], "Reopened");
+    }
+
+    #[test]
+    fn only_changes_to_actual_target_buffers_invalidate_running_file_queries() {
+        let directory = crate::files::tests::TestDir::new();
+        let uri = directory.uri("source.md");
+        let target = directory.uri("target.md");
+        let unrelated = directory.uri("unrelated.md");
+        let now = Instant::now();
+        for (method, character) in [
+            ("textDocument/definition", 2),
+            ("textDocument/completion", 20),
+        ] {
+            for change_target in [false, true] {
+                let mut server = server();
+                open(&mut server, &uri, "[go](target.md#intro)", now);
+                open(&mut server, &target, "# Intro", now);
+                open(&mut server, &unrelated, "# Unrelated", now);
+                server
+                .queue_query(
+                    json!(1),
+                    method,
+                    json!({
+                        "textDocument": { "uri": uri }, "position": { "line": 0, "character": character }
+                    }),
+                    now,
+                )
+                .unwrap();
+                let (worker, task) = server.start_work(now + QUERY_DELAY).unwrap();
+                replace(
+                    &mut server,
+                    if change_target { &target } else { &unrelated },
+                    2,
+                    "# Changed",
+                    now,
+                )
+                .unwrap();
+                let finished = worker::execute(worker, task, &server.parser);
+                assert!(finished.dependencies.targets.contains(&target));
+                server.finish_work(finished);
+                if change_target {
+                    assert_eq!(server.outgoing[0]["error"]["code"], -32801);
+                } else if method == "textDocument/definition" {
+                    assert_eq!(server.outgoing[0]["result"]["uri"], target);
+                } else {
+                    assert_eq!(completion_labels(&server.outgoing[0]["result"]), ["intro"]);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn workspace_changes_invalidate_running_file_results_without_discarding_local_symbols() {
+        let directory = crate::files::tests::TestDir::new();
+        let uri = directory.uri("source.md");
+        let now = Instant::now();
+        for method in ["textDocument/documentLink", "textDocument/documentSymbol"] {
+            let mut server = server();
+            open(&mut server, &uri, "# Intro\n\n[go](#intro)", now);
+            server
+                .queue_query(
+                    json!(1),
+                    method,
+                    json!({ "textDocument": { "uri": uri } }),
+                    now,
+                )
+                .unwrap();
+            let (worker, task) = server.start_work(now + QUERY_DELAY).unwrap();
+            server
+                .notification(
+                    "workspace/didChangeWorkspaceFolders",
+                    json!({ "event": {
+                "added": [{ "uri": directory.uri("") }], "removed": []
+            } }),
+                    now,
+                )
+                .unwrap();
+            server.finish_work(worker::execute(worker, task, &server.parser));
+            if method == "textDocument/documentLink" {
+                assert_eq!(server.outgoing[0]["error"]["code"], -32801);
+            } else {
+                assert_eq!(server.outgoing[0]["result"][0]["name"], "Intro");
+            }
+        }
+    }
+
+    #[test]
+    fn edits_discard_running_diagnostics_and_publish_only_the_newer_version() {
+        let mut server = server();
+        let now = Instant::now();
+        let uri = "untitled:diagnostic-race";
+        open(&mut server, uri, DUPLICATES, now);
+        let (worker, task) = server.start_work(now + DIAGNOSTICS_DELAY).unwrap();
+        assert!(task.query.is_none());
+        let finished = worker::execute(worker, task, &server.parser);
+        replace(&mut server, uri, 2, "# Clean", now + DIAGNOSTICS_DELAY).unwrap();
+        server.finish_work(finished);
+        assert!(server.outgoing.is_empty());
+        let (worker, task) = server.start_work(now + DIAGNOSTICS_DELAY * 2).unwrap();
+        server.finish_work(worker::execute(worker, task, &server.parser));
+        assert_eq!(server.outgoing[0]["params"]["version"], 2);
+        assert_eq!(server.outgoing[0]["params"]["diagnostics"], json!([]));
+    }
+
+    #[test]
+    fn shutdown_retires_running_work_without_waiting_for_analysis() {
+        let mut server = server();
+        let now = Instant::now();
+        let uri = "untitled:shutdown-running";
+        open(&mut server, uri, DUPLICATES, now);
+        queue(&mut server, json!(1), uri, now);
+        let (worker, task) = server.start_work(now + QUERY_DELAY).unwrap();
+        assert_eq!(
+            server.request("shutdown", Value::Null).unwrap(),
+            Value::Null
+        );
+        assert_eq!(server.outgoing[0]["error"]["code"], -32800);
+        server.finish_work(worker::execute(worker, task, &server.parser));
+        assert_eq!(server.outgoing.len(), 1);
+        assert!(server.start_work(now + DIAGNOSTICS_DELAY).is_none());
+        assert!(server.query.documents.is_empty());
+    }
+
     fn navigate(server: &mut Server, uri: &str, line: u32) -> Result<Value, ResponseError> {
         server.request(
             "textDocument/definition",
@@ -912,6 +1147,7 @@ mod tests {
         let cursor = marked.find('¦').unwrap();
         open(server, uri, &marked.replacen('¦', "", 1), Instant::now());
         let snapshot = server
+            .query
             .documents
             .get_mut(uri)
             .unwrap()
@@ -1367,7 +1603,7 @@ mod tests {
             "textDocument": { "uri": uri }, "position": { "line": 8, "character": 7 }, "newName": "next"
         })).unwrap();
         assert_eq!(renamed["changes"][uri].as_array().unwrap().len(), 2);
-        let document = server.documents.get_mut(uri).unwrap();
+        let document = server.query.documents.get_mut(uri).unwrap();
         assert!(document
             .ast(&server.parser)
             .unwrap()
@@ -1736,6 +1972,7 @@ mod tests {
             assert_eq!(remaining["id"], 2);
             assert_eq!(remaining["result"][0]["name"], "Other");
             assert!(server.pending_queries.is_empty());
+            assert_eq!(server.pending_query_bytes, 0);
         }
     }
 

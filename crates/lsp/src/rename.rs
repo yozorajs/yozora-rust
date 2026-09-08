@@ -9,6 +9,7 @@ use crate::analysis::{
     nodes, reference_key, resolve_symbol, single_line_label, symbol_key, DefinitionTarget,
     ReferenceKey,
 };
+use crate::cancellation::Cancellation;
 use crate::document::{check_size, Snapshot};
 use crate::protocol::{Position, PrepareRenameResult, Range, ResponseError, TextEdit};
 
@@ -43,10 +44,13 @@ pub fn rename(
     position: Position,
     new_name: &str,
     parser: &YozoraParser,
+    cancellation: &Cancellation,
 ) -> Result<Vec<TextEdit>, ResponseError> {
+    cancellation.check()?;
     let subject = subject_at(snapshot, position)
         .ok_or_else(|| failed("position is not a resolved reference label"))?;
     let new_identifier = validate_name(subject.key, new_name, parser)?;
+    cancellation.check()?;
     let new_key = match subject.key {
         ReferenceKey::Link(_) => ReferenceKey::Link(&new_identifier),
         ReferenceKey::Footnote(_) => ReferenceKey::Footnote(&new_identifier),
@@ -67,6 +71,7 @@ pub fn rename(
     let mut edited_length = snapshot.text.len();
     for node in nodes(&snapshot.root.children).filter(|node| symbol_key(node) == Some(subject.key))
     {
+        cancellation.check()?;
         let occurrence = occurrence(snapshot, node)
             .ok_or_else(|| failed("cannot locate every occurrence of this label"))?;
         let new_text = match occurrence.kind {
@@ -81,6 +86,7 @@ pub fn rename(
             replacements.push((occurrence.edit, new_text));
         }
     }
+    cancellation.check()?;
     replacements.sort_by_key(|(range, _)| (range.start, range.end));
     if replacements
         .windows(2)
@@ -91,6 +97,7 @@ pub fn rename(
     let mut edited = String::with_capacity(edited_length);
     let mut cursor = 0;
     for (range, new_text) in &replacements {
+        cancellation.check()?;
         edited.push_str(&snapshot.text[cursor..range.start]);
         edited.push_str(new_text);
         cursor = range.end;
@@ -99,6 +106,7 @@ pub fn rename(
 
     // Validate the complete edit before offering it: a new name can turn plain
     // Markdown into a reference, or interfere with table and container syntax.
+    cancellation.check()?;
     let reparsed = parser.parse(
         &edited,
         Some(ParseOptions {
@@ -106,6 +114,7 @@ pub fn rename(
             ..ParseOptions::default()
         }),
     );
+    cancellation.check()?;
     if !preserves_semantics(snapshot.root, &reparsed, subject.key, new_key) {
         return Err(failed(
             "rename would change other Markdown syntax or reference bindings",
@@ -114,6 +123,7 @@ pub fn rename(
     replacements
         .into_iter()
         .map(|(range, new_text)| {
+            cancellation.check()?;
             Ok(TextEdit {
                 range: source_range(snapshot, range)
                     .ok_or_else(|| failed("invalid source range"))?,
@@ -418,7 +428,13 @@ mod tests {
         let (mut document, position) = marked_document(marked);
         let parser = YozoraParser::default();
         let snapshot = document.snapshot(&parser, position)?;
-        let edits = rename(&snapshot, position, new_name, &parser)?;
+        let edits = rename(
+            &snapshot,
+            position,
+            new_name,
+            &parser,
+            &Cancellation::default(),
+        )?;
         document.change(
             8,
             edits
@@ -487,9 +503,15 @@ mod tests {
         let (mut document, position) = marked_document(marked);
         let parser = YozoraParser::default();
         let snapshot = document.snapshot(&parser, position).unwrap();
-        assert!(rename(&snapshot, position, "old", &parser)
-            .unwrap()
-            .is_empty());
+        assert!(rename(
+            &snapshot,
+            position,
+            "old",
+            &parser,
+            &Cancellation::default()
+        )
+        .unwrap()
+        .is_empty());
     }
 
     #[test]
@@ -540,9 +562,15 @@ mod tests {
             let snapshot = document.snapshot(&parser, position).unwrap();
             assert!(prepare(&snapshot, position).is_none(), "{marked}");
             assert_eq!(
-                rename(&snapshot, position, "new", &parser)
-                    .unwrap_err()
-                    .code,
+                rename(
+                    &snapshot,
+                    position,
+                    "new",
+                    &parser,
+                    &Cancellation::default()
+                )
+                .unwrap_err()
+                .code,
                 -32803
             );
         }

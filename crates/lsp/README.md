@@ -30,10 +30,11 @@ vim.lsp.enable('yozora')
 
 - `textDocument/didOpen`, `didChange`, and `didClose`: in-memory document sync,
   with both incremental edits and full replacements. Positions use UTF-16.
-- `$/cancelRequest`: cancel document queries that have not started yet.
+- `$/cancelRequest`: cancel pending or running document queries.
   Each cancelled request receives `RequestCancelled`; unknown or completed IDs
-  are ignored. Newer edits, close, and reopen invalidate waiting queries for that
-  document with `ContentModified`.
+  are ignored. Newer edits, close, and reopen invalidate pending and running queries
+  for that document with `ContentModified`. A running
+  analysis may finish in the background; its response is discarded after cancellation.
 - `textDocument/documentSymbol`: ATX and setext heading outlines. Clients that
   support hierarchical symbols receive heading sections and selection ranges;
   other clients receive flat symbols with parent names. Headings inside block
@@ -137,20 +138,60 @@ or accepting a change schedules diagnostics with a 150 ms delay. Further edits t
 that document reset its deadline. Document queries enter a short 5 ms queue so
 already-arriving edits and cancellations can retire obsolete work before parsing.
 They do not wait for the diagnostic deadline. An accepted newer change invalidates
-waiting queries for that URI, including when its edit batch is malformed. Stale
+pending and running queries for that URI, including when its edit batch is malformed. Stale
 changes leave waiting queries intact. Reopening also invalidates them when the
 version number is reused. Queries and diagnostics reuse the same AST until the
 next edit invalidates it.
+Text, line indexes, and parsed ASTs are shared through `Arc`. Each analysis gets
+a snapshot of open buffers, workspace roots, and client capabilities. Workers
+only update their snapshot's AST caches; the server adopts those caches only
+when text identity and version still match the live document. Text identity also
+distinguishes close/reopen when the client reuses a version number.
 The line index keeps sparse UTF-16 checkpoints on long lines, bounding coordinate
 scans for dense reference edits. Rename constructs the proposed source in one pass
-before validating its semantics.
+before validating its semantics. Descending `didChange` edits with strictly
+separated ranges also build the text in one pass and rebuild the index once.
+Other batches retain sequential coordinates, including touching ranges, clamped
+positions, and edits that join CR/LF boundaries. Every intermediate document must
+fit the size limit, even when a later edit would shrink it.
 
-The message loop checks deadlines both while idle and after each incoming message,
-performing at most one due analysis before checking input again. Queries and
-diagnostics share deadline order so query traffic cannot starve diagnostic work.
-Editing one buffer does not reset another buffer's deadline. Full parsing still
-runs synchronously on the server thread; a parse already in progress cannot be
-interrupted and can still delay subsequent messages.
+Document requests are decoded into typed parameters before scheduling; unused
+client extension fields are discarded. The pending queue admits at most 128
+requests with a combined 1 MiB accounting budget for request records and their
+owned strings, including IDs, URIs, and rename text. The two active worker tasks
+are outside this pending budget. An over-budget request receives JSON-RPC error
+`-32000` immediately and may be retried after outstanding queries complete.
+Dispatch, cancellation, document invalidation, and shutdown release queue capacity.
+Cancellation and shutdown remain available when the queue is full.
+
+The message loop checks deadlines after each input or completed analysis and
+while idle. Two bounded workers execute queries and diagnostics, including their
+parsing and filesystem access. Each worker owns its parser. One task per source
+document prevents repeated requests for one slow buffer from occupying both
+workers; eligible work for other documents can proceed. Queries and diagnostics
+share deadline order among eligible tasks. Editing one buffer does not reset
+another buffer's deadline.
+
+Cancellation and shutdown do not wait for workers. Each task has an independent
+cancellation flag written by the server when its response is retired, its source
+changes or closes, or the server stops. Workers check it before analysis, after
+parsing a document, between completion context/candidate probes, and while building
+and validating rename edits. Cancelled work stops at the next check without
+returning partial results. Completed document ASTs can still be adopted when their
+live revisions match. Running parser calls and filesystem operations are not
+preempted; when both workers are busy, further analysis waits. Results are published only
+while their request remains active and the source plus any target buffers actually
+read by the query still match their snapshots. File queries also check an epoch
+for workspace-folder changes and open/close events that could change URI alias
+selection. Stale query results return `ContentModified`; stale diagnostics are
+discarded. A worker catches an analysis panic, returns `InternalError` for the
+query, and recreates its parser before taking more work. Failed diagnostics are
+cleared and logged to stderr.
+
+Built-in inline containers yield child token lists to an explicit parse stack,
+so nested images and references do not consume the worker's call stack. Each
+token list keeps its original parse-hook scope and depth-first callback order.
+Temporary image children and partial ASTs are released iteratively as well.
 
 Definition, hover, and reference queries share identifier resolution and the
 first-definition-wins rule. Analysis only reads the AST; the parser has no
@@ -224,7 +265,7 @@ An invalid newer edit cancels scheduled diagnostics and clears the previous resu
 immediately. Restoring synchronization schedules fresh diagnostics. Stale changes
 neither publish diagnostics nor reset an existing deadline. Closing a document
 cancels its scheduled work, releases its state, and immediately publishes an empty
-diagnostic list without a version. Shutdown replies to all waiting queries with
+diagnostic list without a version. Shutdown replies to all pending and running queries with
 `RequestCancelled` before its own response and discards scheduled diagnostics.
 Once a notification identifies an open document and a newer version, an undecodable
 or missing edit batch also suspends synchronization. Invalid document metadata is
@@ -234,11 +275,12 @@ The stdio transport uses the existing `serde` and `serde_json` dependencies. It
 supports the advertised LSP subset and the initialize/shutdown/exit lifecycle.
 Stdout carries framed JSON-RPC messages; errors are written to stderr. Incoming
 frames and documents are limited to 16 MiB, and input headers to 8 KiB.
-A dedicated blocking reader forwards input through a channel holding at most one
-queued frame. This lets diagnostic timers run even while stdin is idle or a frame
-is incomplete. Document state, analysis, and all stdout writes remain on the server
-thread. The reader has process lifetime and is not joined on exit, so shutdown does
-not depend on the client closing stdin. Input errors propagate to the server loop.
+A dedicated blocking reader and the analysis workers publish to one bounded event
+channel. This lets diagnostic timers run even while stdin is idle or a frame is
+incomplete. Live document mutations, scheduling, result validation, and all stdout
+writes remain on the server thread. The reader and workers have process lifetime
+and are not joined on exit, so shutdown does not depend on the client closing
+stdin or on a slow analysis finishing. Input errors propagate to the server loop.
 
 ## Validation
 
@@ -251,7 +293,24 @@ cargo test --workspace
 
 The integration tests launch the binary and communicate over pipes, exercising
 framing, lifecycle, client capabilities, Unicode edits, and live document queries.
+They exercise automatic diagnostics for deeply nested images and a large rename
+round trip through incremental `didChange`. Edit tests compare batch processing
+against sequential application across Unicode, CRLF, clamping, and invalid ranges.
 They also check diagnostic publications on open, edit, resynchronization, and close,
 including notifications interleaved with responses, coalesced edits, and incomplete
 input frames. Scheduling tests use explicit timestamps to verify deadlines without
-wall-clock sleeps.
+wall-clock sleeps. Worker tests use channel synchronization to verify progress
+while another parser is blocked and recovery after an analysis panic. A message-loop
+test uses the same synchronization with real framed messages to check cancellation,
+other-buffer queries, reuse of a cancelled task's AST, and shutdown/exit while both
+workers are blocked. Completion tests block individual context and candidate probes
+to verify that cancellation, edits, and close/reopen stop subsequent probes and
+allow fresh queries for the same buffer. Worker tests also cover cancellation before
+parsing and during a rename's initial parse, including reuse of the completed AST.
+Snapshot tests cover cancellation, request ID reuse,
+target-buffer edits, workspace changes, close/reopen, stale diagnostics, and cache
+adoption across document versions.
+Queue tests cover unknown parameter fields, count and byte budgets, and capacity
+release. A blocked-worker test fills the queue and verifies overload responses,
+cancellation, recovery for another buffer, and shutdown. Panic recovery also
+includes already-materialized deep inline and block results.

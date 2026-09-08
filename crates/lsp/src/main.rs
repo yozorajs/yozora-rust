@@ -1,14 +1,17 @@
 mod analysis;
+mod cancellation;
 mod completion;
 mod diagnostics;
 mod document;
 mod files;
 mod links;
 mod protocol;
+mod query;
 mod rename;
 mod resource_completion;
 mod server;
 mod transport;
+mod worker;
 
 use std::io;
 use std::process::ExitCode;

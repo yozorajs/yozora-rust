@@ -1,5 +1,4 @@
 use std::io::{self, BufRead, Read, Write};
-use std::sync::mpsc::{self, Receiver};
 use std::thread;
 
 use serde_json::Value;
@@ -13,25 +12,18 @@ const MAX_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
 /// block forever waiting for the client to close stdin.
 pub fn read_messages(
     mut reader: impl BufRead + Send + 'static,
-) -> io::Result<Receiver<io::Result<Vec<u8>>>> {
-    let (sender, receiver) = mpsc::sync_channel(1);
+    mut publish: impl FnMut(io::Result<Option<Vec<u8>>>) -> bool + Send + 'static,
+) -> io::Result<()> {
     thread::Builder::new()
         .name("yozora-lsp-input".into())
         .spawn(move || loop {
-            match read_message(&mut reader) {
-                Ok(Some(body)) => {
-                    if sender.send(Ok(body)).is_err() {
-                        break;
-                    }
-                }
-                Ok(None) => break,
-                Err(error) => {
-                    let _ = sender.send(Err(error));
-                    break;
-                }
+            let message = read_message(&mut reader);
+            let terminal = !matches!(message, Ok(Some(_)));
+            if !publish(message) || terminal {
+                break;
             }
         })?;
-    Ok(receiver)
+    Ok(())
 }
 
 pub fn read_message(reader: &mut impl BufRead) -> io::Result<Option<Vec<u8>>> {

@@ -5,6 +5,7 @@ use yozora_core_tokenizer::resolve_label_to_identifier;
 use yozora_parser::YozoraParser;
 
 use crate::analysis::{nodes, reference_key, single_line_label, ReferenceKey};
+use crate::cancellation::Cancellation;
 use crate::document::{check_size, Snapshot};
 use crate::protocol::{CompletionItem, CompletionList, Position, Range, ResponseError, TextEdit};
 
@@ -39,7 +40,9 @@ pub fn complete(
     snapshot: &Snapshot<'_>,
     position: Position,
     parser: &YozoraParser,
+    cancellation: &Cancellation,
 ) -> Result<CompletionList, ResponseError> {
+    cancellation.check()?;
     let root = snapshot.root;
     let (line, cursor) = snapshot.line(position)?;
     let Some(context) = context(root, line, cursor, position.line) else {
@@ -92,6 +95,7 @@ pub fn complete(
         .take(200)
         .enumerate()
     {
+        cancellation.check()?;
         // ASCII whitespace has the same label identity, including multiline labels.
         let label = single_line_label(label);
         let mut new_text = if context.in_table {
@@ -114,7 +118,14 @@ pub fn complete(
             LabelKind::Footnote => ReferenceKey::Footnote(identifier),
         };
         if check_size(snapshot.text.len() - probe.replaced_bytes + new_text.len()).is_err()
-            || !probe.accepts(parser, &options, key, &new_text, context.has_closing)
+            || !probe.accepts(
+                parser,
+                cancellation,
+                &options,
+                key,
+                &new_text,
+                context.has_closing,
+            )?
         {
             continue;
         }
@@ -232,13 +243,16 @@ impl<'a> CompletionProbe<'a> {
     fn accepts(
         &self,
         parser: &YozoraParser,
+        cancellation: &Cancellation,
         options: &ParseOptions,
         key: ReferenceKey<'_>,
         new_text: &str,
         has_closing: bool,
-    ) -> bool {
+    ) -> Result<bool, ResponseError> {
         let source = format!("{}{new_text}{}", self.before, self.after);
+        cancellation.check()?;
         let parsed = parser.parse(&source, Some(options.clone()));
+        cancellation.check()?;
         let expected = Range {
             start: self.reference_start,
             end: Position {
@@ -251,7 +265,7 @@ impl<'a> CompletionProbe<'a> {
         let resolves = nodes(&parsed.children).any(|node| {
             reference_key(node) == Some(key) && node.position().map(Range::from) == Some(expected)
         });
-        resolves
+        Ok(resolves)
     }
 }
 
@@ -517,7 +531,7 @@ mod tests {
         let mut document = Document::new(1, marked.replacen('¦', "", 1)).unwrap();
         let parser = YozoraParser::default();
         let snapshot = document.snapshot(&parser, position).unwrap();
-        let result = complete(&snapshot, position, &parser).unwrap();
+        let result = complete(&snapshot, position, &parser, &Cancellation::default()).unwrap();
         (document, result)
     }
 

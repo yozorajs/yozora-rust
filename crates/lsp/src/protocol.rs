@@ -1,3 +1,4 @@
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -123,7 +124,7 @@ pub struct TextDocumentParams {
     pub text_document: TextDocumentIdentifier,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct ContentChange {
     pub range: Option<Range>,
     pub text: String,
@@ -221,4 +222,8 @@ impl ResponseError {
             "error": { "code": self.code, "message": self.message },
         })
     }
+}
+
+pub(super) fn parse_params<T: DeserializeOwned>(params: Value) -> Result<T, ResponseError> {
+    serde_json::from_value(params).map_err(|error| ResponseError::invalid_params(error.to_string()))
 }

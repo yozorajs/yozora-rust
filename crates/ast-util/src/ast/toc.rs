@@ -18,10 +18,12 @@ pub struct HeadingTocNode {
     pub children: Vec<HeadingTocNode>,
 }
 
-pub fn calc_heading_toc(ast: &mut Root, identifier_prefix: &str) -> HeadingToc {
+/// IDs for top-level headings in source order, without changing the AST.
+/// Nested headings are excluded, matching `calc_heading_toc`.
+pub fn calc_heading_identifiers(ast: &Root, identifier_prefix: &str) -> Vec<String> {
     let mut next_suffixes = HashMap::<String, usize>::new();
-    let mut flat_nodes = Vec::<HeadingTocNode>::new();
-    for node in &mut ast.children {
+    let mut identifiers = Vec::new();
+    for node in &ast.children {
         let Node::Heading(heading) = node else {
             continue;
         };
@@ -41,6 +43,19 @@ pub fn calc_heading_toc(ast: &mut Root, identifier_prefix: &str) -> HeadingToc {
             next_suffixes.insert(base, suffix);
         }
         next_suffixes.insert(identifier.clone(), 2);
+        identifiers.push(identifier);
+    }
+    identifiers
+}
+
+pub fn calc_heading_toc(ast: &mut Root, identifier_prefix: &str) -> HeadingToc {
+    let identifiers = calc_heading_identifiers(ast, identifier_prefix);
+    let headings = ast.children.iter_mut().filter_map(|node| match node {
+        Node::Heading(heading) => Some(heading),
+        _ => None,
+    });
+    let mut flat_nodes = Vec::<HeadingTocNode>::new();
+    for (heading, identifier) in headings.zip(identifiers) {
         heading.identifier = Some(identifier.clone());
         flat_nodes.push(HeadingTocNode {
             identifier,

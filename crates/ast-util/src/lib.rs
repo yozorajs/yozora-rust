@@ -46,7 +46,10 @@ pub use mutate_async::{
 };
 pub use position::remove_positions;
 pub use search::search_node;
-pub use toc::{calc_heading_toc, calc_identifier_from_nodes, HeadingToc, HeadingTocNode};
+pub use toc::{
+    calc_heading_identifiers, calc_heading_toc, calc_identifier_from_nodes, HeadingToc,
+    HeadingTocNode,
+};
 pub use traverse::{traverse_ast, ParentRef};
 pub use url::{
     default_url_resolver, resolve_urls_for_ast, resolve_urls_for_ast_matching,

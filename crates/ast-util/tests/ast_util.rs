@@ -11,8 +11,8 @@ use yozora_ast::{
 };
 use yozora_ast_util::mutate::{create_postorder_mutation, create_preorder_mutation, MutationStep};
 use yozora_ast_util::{
-    calc_definition_map, calc_excerpt_ast, calc_footnote_definition_map, calc_heading_toc,
-    calc_identifier_set, collect_definitions, collect_nodes, create_node_matcher,
+    calc_definition_map, calc_excerpt_ast, calc_footnote_definition_map, calc_heading_identifiers,
+    calc_heading_toc, calc_identifier_set, collect_definitions, collect_nodes, create_node_matcher,
     create_shallow_node_collector, default_url_resolver, get_excerpt_ast, remove_positions,
     replace_footnotes_in_references, resolve_urls_for_ast, resolve_urls_for_ast_with_resolver,
     search_node, shallow_clone_ast, shallow_mutate_ast_in_postorder,
@@ -763,6 +763,47 @@ fn toc_identifiers_include_image_alt_text() {
             .map(|node| node.identifier.as_str())
             .collect::<Vec<_>>(),
         ["alpha-beta", "gamma-delta", "before-alpha-after"]
+    );
+}
+
+#[test]
+fn heading_identifiers_are_read_only_and_share_toc_scope_and_prefix() {
+    let heading = |value| {
+        Node::Heading(yozora_ast::Heading {
+            position: None,
+            identifier: Some("previous-id".to_string()),
+            depth: 1,
+            children: vec![text(value)],
+        })
+    };
+    let mut root = Root {
+        node_type: "root".to_string(),
+        position: None,
+        children: vec![
+            heading("Intro"),
+            Node::Blockquote(yozora_ast::Blockquote {
+                position: None,
+                children: vec![heading("Intro")],
+            }),
+            heading("Intro-2"),
+            heading("Intro"),
+            heading("中文，标题"),
+        ],
+    };
+    let original = root.clone();
+    let identifiers = calc_heading_identifiers(&root, "h-");
+    assert_eq!(
+        identifiers,
+        ["h-intro", "h-intro-2", "h-intro-3", "h-中文-标题"]
+    );
+    assert_eq!(root, original);
+    let toc = calc_heading_toc(&mut root, "h-");
+    assert_eq!(
+        toc.children
+            .iter()
+            .map(|node| &node.identifier)
+            .collect::<Vec<_>>(),
+        identifiers.iter().collect::<Vec<_>>()
     );
 }
 

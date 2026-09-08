@@ -89,5 +89,23 @@ fn bench_parser_parse(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, bench_parser_parse);
+fn bench_multiline_paragraphs(c: &mut Criterion) {
+    let parser = YozoraParser::default();
+    let options = parse_options(true);
+    let mut group = c.benchmark_group("parser_parse/multiline_paragraphs");
+    for count in [1_000, 4_000, 8_000] {
+        for (name, line, suffix) in [
+            ("plain", "text\n", ""),
+            ("references", "[t][old]\n", "\n\n[old]: /url"),
+        ] {
+            let input = format!("{}{suffix}", line.repeat(count));
+            group.bench_with_input(BenchmarkId::new(name, count), &input, |b, content| {
+                b.iter(|| black_box(parser.parse(black_box(content), Some(options.clone()))));
+            });
+        }
+    }
+    group.finish();
+}
+
+criterion_group!(benches, bench_parser_parse, bench_multiline_paragraphs);
 criterion_main!(benches);

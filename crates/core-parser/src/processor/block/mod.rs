@@ -170,14 +170,25 @@ impl<'a> BlockContentProcessor<'a> {
                 let parent_path = self.state_stack[self.current_stack_index - 1].path.clone();
                 let current_path = current_state.path.clone();
                 let hook = self.hooks[current_hook_idx].hook.clone();
-                let (child_index, mut token) =
-                    detach_child_for_parent_snapshot(&mut self.root, &parent_path, &current_path);
-                let result = {
+                let result = hook.borrow_mut().eat_continuation_text_without_parent(
+                    &eating_info,
+                    token_mut(&mut self.root, &current_path),
+                );
+                let result = result.unwrap_or_else(|| {
+                    let (child_index, mut token) = detach_child_for_parent_snapshot(
+                        &mut self.root,
+                        &parent_path,
+                        &current_path,
+                    );
                     let parent_token = token_ref(&self.root, &parent_path);
-                    hook.borrow_mut()
-                        .eat_continuation_text(&eating_info, &mut token, parent_token)
-                };
-                restore_detached_child(&mut self.root, &parent_path, child_index, token);
+                    let result = hook.borrow_mut().eat_continuation_text(
+                        &eating_info,
+                        &mut token,
+                        parent_token,
+                    );
+                    restore_detached_child(&mut self.root, &parent_path, child_index, token);
+                    result
+                });
 
                 let mut finished = false;
                 let mut rolled_back = false;
@@ -320,20 +331,25 @@ impl<'a> BlockContentProcessor<'a> {
                     count_of_precede_spaces,
                 );
                 let hook = self.hooks[last_hook_idx].hook.clone();
-                let (child_index, mut token) = detach_child_for_parent_snapshot(
-                    &mut self.root,
-                    &parent_path,
-                    &last_state.path,
+                let result = hook.borrow_mut().eat_lazy_continuation_text_without_parent(
+                    &eating_info,
+                    token_mut(&mut self.root, &last_state.path),
                 );
-                let result = {
+                let result = result.unwrap_or_else(|| {
+                    let (child_index, mut token) = detach_child_for_parent_snapshot(
+                        &mut self.root,
+                        &parent_path,
+                        &last_state.path,
+                    );
                     let parent_token = token_ref(&self.root, &parent_path);
-                    hook.borrow_mut().eat_lazy_continuation_text(
+                    let result = hook.borrow_mut().eat_lazy_continuation_text(
                         &eating_info,
                         &mut token,
                         parent_token,
-                    )
-                };
-                restore_detached_child(&mut self.root, &parent_path, child_index, token);
+                    );
+                    restore_detached_child(&mut self.root, &parent_path, child_index, token);
+                    result
+                });
 
                 if let EatLazyContinuationTextResult::Opening { next_index } = result {
                     self.current_stack_index = last_index;
@@ -811,6 +827,128 @@ mod tests {
     }
 
     struct EchoHook;
+
+    struct SnapshotHook {
+        parent_free: bool,
+        lazy: bool,
+    }
+
+    impl SnapshotHook {
+        fn append_with_parent(&self, token: &mut BlockToken, parent: &BlockToken) {
+            assert!(!self.parent_free, "parent-free continuation must be used");
+            let before = *token.data_as::<usize>().unwrap();
+            let snapshot = parent.children.last().unwrap();
+            assert_eq!(snapshot.data_as::<usize>(), Some(&before));
+            token.data = Arc::new(before + 1);
+            assert_eq!(snapshot.data_as::<usize>(), Some(&before));
+        }
+
+        fn append_without_parent(&self, token: &mut BlockToken) {
+            let data = Arc::get_mut(&mut token.data)
+                .expect("parent-free continuation must not force a token snapshot")
+                .downcast_mut::<usize>()
+                .unwrap();
+            *data += 1;
+        }
+    }
+
+    impl MatchBlockHook for SnapshotHook {
+        fn is_containing_block(&self) -> bool {
+            false
+        }
+
+        fn eat_opener(
+            &mut self,
+            line: &PhrasingContentLine,
+            _parent: &BlockToken,
+        ) -> Option<EatOpenerResult> {
+            Some(EatOpenerResult {
+                token: make_token("snapshot", "paragraph", line).with_data(1usize),
+                next_index: line.end_index,
+                saturated: false,
+            })
+        }
+
+        fn eat_continuation_text_without_parent(
+            &mut self,
+            line: &PhrasingContentLine,
+            token: &mut BlockToken,
+        ) -> Option<EatContinuationTextResult> {
+            if !self.parent_free {
+                return None;
+            }
+            if self.lazy {
+                return Some(EatContinuationTextResult::NotMatched);
+            }
+            self.append_without_parent(token);
+            Some(EatContinuationTextResult::Opening {
+                next_index: line.end_index,
+            })
+        }
+
+        fn eat_lazy_continuation_text_without_parent(
+            &mut self,
+            line: &PhrasingContentLine,
+            token: &mut BlockToken,
+        ) -> Option<yozora_core_tokenizer::EatLazyContinuationTextResult> {
+            if !self.parent_free {
+                return None;
+            }
+            self.append_without_parent(token);
+            Some(
+                yozora_core_tokenizer::EatLazyContinuationTextResult::Opening {
+                    next_index: line.end_index,
+                },
+            )
+        }
+
+        fn eat_continuation_text(
+            &mut self,
+            line: &PhrasingContentLine,
+            token: &mut BlockToken,
+            parent: &BlockToken,
+        ) -> EatContinuationTextResult {
+            if self.lazy {
+                return EatContinuationTextResult::NotMatched;
+            }
+            self.append_with_parent(token, parent);
+            EatContinuationTextResult::Opening {
+                next_index: line.end_index,
+            }
+        }
+
+        fn eat_lazy_continuation_text(
+            &mut self,
+            line: &PhrasingContentLine,
+            token: &mut BlockToken,
+            parent: &BlockToken,
+        ) -> yozora_core_tokenizer::EatLazyContinuationTextResult {
+            self.append_with_parent(token, parent);
+            yozora_core_tokenizer::EatLazyContinuationTextResult::Opening {
+                next_index: line.end_index,
+            }
+        }
+    }
+
+    #[test]
+    fn continuations_preserve_parent_snapshots_and_allow_parent_free_mutation() {
+        for parent_free in [false, true] {
+            for lazy in [false, true] {
+                let hook = MatchBlockProcessorHook::new(
+                    "snapshot",
+                    -1,
+                    Box::new(SnapshotHook { parent_free, lazy }),
+                );
+                let mut processor = create_block_content_processor(Vec::new(), Some(hook));
+                for _ in 0..64 {
+                    processor.consume(&make_line("text"));
+                }
+                let root = processor.done();
+                assert_eq!(root.children.len(), 1);
+                assert_eq!(root.children[0].data_as::<usize>(), Some(&64));
+            }
+        }
+    }
 
     impl MatchBlockHook for EchoHook {
         fn is_containing_block(&self) -> bool {

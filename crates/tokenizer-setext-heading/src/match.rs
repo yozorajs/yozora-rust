@@ -2,15 +2,15 @@ use yozora_ast::HEADING_TYPE;
 use yozora_character::{is_whitespace_character, AsciiCodePoint, VirtualCodePoint};
 use yozora_core_tokenizer::{
     calc_end_point, calc_start_point, BlockToken, EatAndInterruptPreviousSiblingResult,
-    PhrasingContentLine, RemainingSibling,
+    MatchBlockPhaseApi, PhrasingContentLine, RemainingSibling,
 };
 
 use crate::types::SetextHeadingTokenData;
 
 pub(crate) fn eat_and_interrupt_previous_sibling(
     line: &PhrasingContentLine,
-    _prev_sibling_token: &BlockToken,
-    phrasing_lines: Option<Vec<PhrasingContentLine>>,
+    prev_sibling_token: &BlockToken,
+    match_api: &dyn MatchBlockPhaseApi,
 ) -> Option<EatAndInterruptPreviousSiblingResult> {
     if line.indent_width >= 4 || line.first_non_whitespace_index >= line.end_index {
         return None;
@@ -48,7 +48,7 @@ pub(crate) fn eat_and_interrupt_previous_sibling(
     }
 
     let marker = marker?;
-    let lines = phrasing_lines?;
+    let lines = match_api.extract_phrasing_lines(prev_sibling_token)?;
     let first_line = lines.first()?;
 
     let token = BlockToken::new("", HEADING_TYPE, calc_spanning_position(first_line, line))

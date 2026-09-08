@@ -56,6 +56,22 @@ impl MatchBlockHook for ParagraphMatchHook {
         false
     }
 
+    fn eat_continuation_text_without_parent(
+        &mut self,
+        line: &PhrasingContentLine,
+        token: &mut BlockToken,
+    ) -> Option<EatContinuationTextResult> {
+        Some(r#match::eat_continuation_text(line, token))
+    }
+
+    fn eat_lazy_continuation_text_without_parent(
+        &mut self,
+        line: &PhrasingContentLine,
+        token: &mut BlockToken,
+    ) -> Option<EatLazyContinuationTextResult> {
+        Some(r#match::eat_lazy_continuation_text(line, token))
+    }
+
     fn eat_opener(
         &mut self,
         line: &PhrasingContentLine,
@@ -174,6 +190,48 @@ mod tests {
                 value: calc_string_from_node_points(node_points, 0, node_points.len(), false),
             })]
         }
+    }
+
+    #[test]
+    fn continuation_keeps_retained_token_data_and_typed_snapshots_independent() {
+        let line = PhrasingContentLine::whole(Arc::new(
+            create_node_point_generator("hello").pop().unwrap(),
+        ));
+        let mut hook = ParagraphMatchHook::new();
+        let parent = BlockToken::new("root", "root", None);
+        let mut token = hook.eat_opener(&line, &parent).unwrap().token;
+        let snapshot = token.clone();
+        let typed = TypedBlockToken::<crate::types::ParagraphTokenData>::try_from(&token).unwrap();
+        for lazy in [false, true] {
+            if lazy {
+                assert!(matches!(
+                    hook.eat_lazy_continuation_text_without_parent(&line, &mut token),
+                    Some(EatLazyContinuationTextResult::Opening { .. })
+                ));
+            } else {
+                assert!(matches!(
+                    hook.eat_continuation_text_without_parent(&line, &mut token),
+                    Some(EatContinuationTextResult::Opening { .. })
+                ));
+            }
+        }
+        assert_eq!(
+            token
+                .data_as::<crate::types::ParagraphTokenData>()
+                .unwrap()
+                .lines
+                .len(),
+            3
+        );
+        assert_eq!(
+            snapshot
+                .data_as::<crate::types::ParagraphTokenData>()
+                .unwrap()
+                .lines
+                .len(),
+            1
+        );
+        assert_eq!(typed.lines.len(), 1);
     }
 
     #[test]

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use yozora_ast::PARAGRAPH_TYPE;
 use yozora_core_tokenizer::{
     calc_position_from_phrasing_content_lines, BlockToken, EatContinuationTextResult,
@@ -30,16 +32,22 @@ pub(crate) fn eat_continuation_text(
         return EatContinuationTextResult::NotMatched;
     }
 
-    let Some(data) = token.data_as::<ParagraphTokenData>() else {
+    // Parent-aware callers and retained token snapshots still require COW.
+    // The parser's parent-free path can append without copying previous lines.
+    if Arc::get_mut(&mut token.data).is_none() {
+        let Some(data) = token.data_as::<ParagraphTokenData>().cloned() else {
+            return EatContinuationTextResult::NotMatched;
+        };
+        token.data = Arc::new(data);
+    }
+    let Some(data) =
+        Arc::get_mut(&mut token.data).and_then(|data| data.downcast_mut::<ParagraphTokenData>())
+    else {
         return EatContinuationTextResult::NotMatched;
     };
 
-    let mut lines = data.lines.clone();
-    lines.push(line.clone());
-    token.data = std::sync::Arc::new(ParagraphTokenData {
-        lines: lines.clone(),
-    });
-    token.position = Some(calc_position_from_phrasing_content_lines(&lines));
+    data.lines.push(line.clone());
+    token.position = Some(calc_position_from_phrasing_content_lines(&data.lines));
 
     EatContinuationTextResult::Opening {
         next_index: line.end_index,

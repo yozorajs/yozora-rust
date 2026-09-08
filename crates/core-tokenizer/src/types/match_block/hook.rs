@@ -61,6 +61,26 @@ pub type ResultOfOnClose = Option<OnCloseResult>;
 pub trait MatchBlockHook {
     fn is_containing_block(&self) -> bool;
 
+    /// Optional continuation without a parent snapshot, allowing uniquely owned
+    /// token data to be updated in place. `None` delegates to the parent-aware
+    /// hook and must leave the token unchanged.
+    fn eat_continuation_text_without_parent(
+        &mut self,
+        _line: &PhrasingContentLine,
+        _token: &mut BlockToken,
+    ) -> Option<EatContinuationTextResult> {
+        None
+    }
+
+    /// The lazy-continuation counterpart of `eat_continuation_text_without_parent`.
+    fn eat_lazy_continuation_text_without_parent(
+        &mut self,
+        _line: &PhrasingContentLine,
+        _token: &mut BlockToken,
+    ) -> Option<EatLazyContinuationTextResult> {
+        None
+    }
+
     fn eat_opener(
         &mut self,
         line: &PhrasingContentLine,

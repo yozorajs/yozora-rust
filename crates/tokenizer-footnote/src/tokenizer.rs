@@ -145,11 +145,19 @@ impl<'a> FootnoteParseHook<'a> {
 
 impl ParseInlineHook for FootnoteParseHook<'_> {
     fn parse(&self, tokens: &[InlineToken]) -> Vec<Node> {
-        parse::parse_footnote_tokens(tokens, self.api)
+        parse::parse_footnote_tokens(tokens, self.api).resolve(self.api)
     }
 }
 
 impl InlineTokenizer for FootnoteTokenizer {
+    fn parse_deferred<'a>(
+        &'a self,
+        tokens: &'a [InlineToken],
+        api: &'a dyn ParseInlinePhaseApi,
+    ) -> Option<ParseInlineHookResult<'a>> {
+        Some(parse::parse_footnote_tokens(tokens, api))
+    }
+
     fn r#match<'a>(
         &'a self,
         api: &'a dyn MatchInlinePhaseApi,

@@ -339,11 +339,19 @@ impl<'a> LinkReferenceParseHook<'a> {
 
 impl ParseInlineHook for LinkReferenceParseHook<'_> {
     fn parse(&self, tokens: &[InlineToken]) -> Vec<Node> {
-        parse::parse_link_reference_tokens(tokens, self.api)
+        parse::parse_link_reference_tokens(tokens, self.api).resolve(self.api)
     }
 }
 
 impl InlineTokenizer for LinkReferenceTokenizer {
+    fn parse_deferred<'a>(
+        &'a self,
+        tokens: &'a [InlineToken],
+        api: &'a dyn ParseInlinePhaseApi,
+    ) -> Option<ParseInlineHookResult<'a>> {
+        Some(parse::parse_link_reference_tokens(tokens, api))
+    }
+
     fn r#match<'a>(
         &'a self,
         api: &'a dyn MatchInlinePhaseApi,

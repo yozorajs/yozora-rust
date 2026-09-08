@@ -1,31 +1,31 @@
 use yozora_ast::{DeleteNode, Node};
-use yozora_core_tokenizer::{InlineToken, NodeInterval, ParseInlinePhaseApi};
+use yozora_core_tokenizer::{
+    parse_inline_containers, InlineToken, NodeInterval, ParseInlineHookResult, ParseInlinePhaseApi,
+};
 
 use crate::types::DeleteTokenData;
 
-pub(crate) fn parse_delete_tokens(
-    tokens: &[InlineToken],
-    parse_api: &dyn ParseInlinePhaseApi,
-) -> Vec<Node> {
-    let mut nodes = Vec::with_capacity(tokens.len());
+pub(crate) fn parse_delete_tokens<'a>(
+    tokens: &'a [InlineToken],
+    parse_api: &'a dyn ParseInlinePhaseApi,
+) -> ParseInlineHookResult<'a> {
+    parse_inline_containers(
+        tokens,
+        |token| {
+            token.data_as::<DeleteTokenData>()?;
+            Some(token)
+        },
+        move |token, children| {
+            let position = if parse_api.should_reserve_position() {
+                Some(parse_api.calc_position(NodeInterval {
+                    start_index: token.start_index,
+                    end_index: token.end_index,
+                }))
+            } else {
+                None
+            };
 
-    for token in tokens {
-        let Some(_) = token.data_as::<DeleteTokenData>() else {
-            continue;
-        };
-
-        let children = parse_api.parse_inline_tokens(Some(&token.children));
-        let position = if parse_api.should_reserve_position() {
-            Some(parse_api.calc_position(NodeInterval {
-                start_index: token.start_index,
-                end_index: token.end_index,
-            }))
-        } else {
-            None
-        };
-
-        nodes.push(Node::Delete(DeleteNode { position, children }));
-    }
-
-    nodes
+            Node::Delete(DeleteNode { position, children })
+        },
+    )
 }

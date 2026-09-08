@@ -236,11 +236,19 @@ impl<'a> ImageParseHook<'a> {
 
 impl ParseInlineHook for ImageParseHook<'_> {
     fn parse(&self, tokens: &[InlineToken]) -> Vec<Node> {
-        parse::parse_image_tokens(tokens, self.api)
+        parse::parse_image_tokens(tokens, self.api).resolve(self.api)
     }
 }
 
 impl InlineTokenizer for ImageTokenizer {
+    fn parse_deferred<'a>(
+        &'a self,
+        tokens: &'a [InlineToken],
+        api: &'a dyn ParseInlinePhaseApi,
+    ) -> Option<ParseInlineHookResult<'a>> {
+        Some(parse::parse_image_tokens(tokens, api))
+    }
+
     fn r#match<'b>(
         &'b self,
         api: &'b dyn MatchInlinePhaseApi,

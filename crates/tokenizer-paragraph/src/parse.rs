@@ -1,4 +1,4 @@
-use yozora_ast::{Node, Paragraph};
+use yozora_ast::{Node, NodeBuffer, Paragraph};
 use yozora_character::calc_trim_boundary_of_code_points;
 use yozora_core_tokenizer::{merge_and_strip_content_lines, BlockToken, ParseBlockPhaseApi};
 
@@ -8,7 +8,7 @@ pub(crate) fn parse_paragraph_tokens(
     tokens: &[BlockToken],
     parse_api: &dyn ParseBlockPhaseApi,
 ) -> Vec<Node> {
-    let mut nodes = Vec::with_capacity(tokens.len());
+    let mut nodes = NodeBuffer::with_capacity(tokens.len());
 
     for token in tokens {
         let Some(data) = token.data_as::<ParagraphTokenData>() else {
@@ -42,5 +42,5 @@ pub(crate) fn parse_paragraph_tokens(
         nodes.push(Node::Paragraph(Paragraph { position, children }));
     }
 
-    nodes
+    nodes.into_vec()
 }

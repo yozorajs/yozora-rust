@@ -57,3 +57,32 @@ fn empty_image_destinations_are_formatted() {
         assert_eq!(image.url, "formatted:");
     }
 }
+
+#[test]
+fn formats_urls_in_depth_first_source_order_while_materializing_image_alt() {
+    let urls = Arc::new(Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&urls);
+    let root = GfmParser::default().parse(
+        "[![**A** ![B](inner \"I\")](outer \"O\")](link \"L\") ![C](sibling)",
+        Some(ParseOptions {
+            format_url: Some(Arc::new(move |url| {
+                recorded.lock().unwrap().push(url.to_string());
+                format!("formatted:{url}")
+            })),
+            ..ParseOptions::default()
+        }),
+    );
+    assert_eq!(*urls.lock().unwrap(), ["link", "outer", "inner", "sibling"]);
+    let Node::Paragraph(paragraph) = &root.children[0] else {
+        panic!("expected paragraph")
+    };
+    let Node::Link(link) = &paragraph.children[0] else {
+        panic!("expected link")
+    };
+    let Node::Image(image) = &link.children[0] else {
+        panic!("expected image")
+    };
+    assert_eq!(image.alt, "A B");
+    assert_eq!(image.url, "formatted:outer");
+    assert_eq!(image.title.as_deref(), Some("O"));
+}

@@ -1,4 +1,4 @@
-use yozora_ast::{Blockquote, Node};
+use yozora_ast::{Blockquote, Node, NodeBuffer};
 use yozora_core_tokenizer::{
     BlockToken, ParseBlockError, ParseBlockGenerator, ParseBlockGeneratorResult,
     ParseBlockGeneratorResume, ParseBlockHookResult, ParseBlockPhaseApi, ParseBlockResult,
@@ -13,7 +13,7 @@ pub(crate) fn parse_blockquote_tokens<'a>(
         tokens,
         next_token_index: 0,
         pending_token_index: None,
-        nodes: Vec::with_capacity(tokens.len()),
+        nodes: NodeBuffer::with_capacity(tokens.len()),
         started: false,
     }))
 }
@@ -23,7 +23,7 @@ struct BlockquoteParseGenerator<'a> {
     tokens: &'a [BlockToken],
     next_token_index: usize,
     pending_token_index: Option<usize>,
-    nodes: Vec<Node>,
+    nodes: NodeBuffer,
     started: bool,
 }
 
@@ -65,9 +65,9 @@ impl<'a> ParseBlockGenerator<'a> for BlockquoteParseGenerator<'a> {
         }
 
         if self.next_token_index >= self.tokens.len() {
-            return Ok(ParseBlockGeneratorResult::Complete(std::mem::take(
-                &mut self.nodes,
-            )));
+            return Ok(ParseBlockGeneratorResult::Complete(
+                std::mem::take(&mut self.nodes).into_vec(),
+            ));
         }
 
         let token_index = self.next_token_index;

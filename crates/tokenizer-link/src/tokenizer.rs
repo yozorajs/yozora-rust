@@ -256,11 +256,19 @@ impl<'a> LinkParseHook<'a> {
 
 impl ParseInlineHook for LinkParseHook<'_> {
     fn parse(&self, tokens: &[InlineToken]) -> Vec<Node> {
-        parse::parse_link_tokens(tokens, self.api)
+        parse::parse_link_tokens(tokens, self.api).resolve(self.api)
     }
 }
 
 impl InlineTokenizer for LinkTokenizer {
+    fn parse_deferred<'a>(
+        &'a self,
+        tokens: &'a [InlineToken],
+        api: &'a dyn ParseInlinePhaseApi,
+    ) -> Option<ParseInlineHookResult<'a>> {
+        Some(parse::parse_link_tokens(tokens, api))
+    }
+
     fn r#match<'b>(
         &'b self,
         api: &'b dyn MatchInlinePhaseApi,

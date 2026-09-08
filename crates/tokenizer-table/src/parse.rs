@@ -1,4 +1,4 @@
-use yozora_ast::{Node, Table, TableCell, TableRow};
+use yozora_ast::{Node, NodeBuffer, Table, TableCell, TableRow};
 use yozora_character::{AsciiCodePoint, NodePoint};
 use yozora_core_tokenizer::{merge_and_strip_content_lines, BlockToken, ParseBlockPhaseApi};
 
@@ -8,7 +8,7 @@ pub(crate) fn parse_table_tokens(
     tokens: &[BlockToken],
     parse_api: &dyn ParseBlockPhaseApi,
 ) -> Vec<Node> {
-    let mut nodes = Vec::with_capacity(tokens.len());
+    let mut nodes = NodeBuffer::with_capacity(tokens.len());
 
     for token in tokens {
         let Some(data) = token.data_as::<TableTokenData>() else {
@@ -37,7 +37,7 @@ pub(crate) fn parse_table_tokens(
                             children,
                         })
                     })
-                    .collect();
+                    .collect::<NodeBuffer>();
 
                 Node::TableRow(TableRow {
                     position: if parse_api.should_reserve_position() {
@@ -45,10 +45,10 @@ pub(crate) fn parse_table_tokens(
                     } else {
                         None
                     },
-                    children: cells,
+                    children: cells.into_vec(),
                 })
             })
-            .collect();
+            .collect::<NodeBuffer>();
 
         nodes.push(Node::Table(Table {
             position: if parse_api.should_reserve_position() {
@@ -57,11 +57,11 @@ pub(crate) fn parse_table_tokens(
                 None
             },
             columns: data.columns.clone(),
-            children: rows,
+            children: rows.into_vec(),
         }));
     }
 
-    nodes
+    nodes.into_vec()
 }
 
 fn unescape_table_cell_contents(node_points: &[NodePoint]) -> Vec<NodePoint> {

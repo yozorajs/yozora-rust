@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use yozora_ast::{Admonition, Node};
+use yozora_ast::{Admonition, Node, NodeBuffer};
 use yozora_character::{calc_escaped_string_from_node_points, is_unicode_whitespace_character};
 use yozora_core_tokenizer::{
     merge_and_strip_content_lines, BlockToken, ParseBlockError, ParseBlockGenerator,
@@ -18,7 +18,7 @@ pub(crate) fn parse_admonition_tokens<'a>(
         tokens,
         next_token_index: 0,
         pending: None,
-        nodes: Vec::with_capacity(tokens.len()),
+        nodes: NodeBuffer::with_capacity(tokens.len()),
         started: false,
     }))
 }
@@ -26,7 +26,7 @@ pub(crate) fn parse_admonition_tokens<'a>(
 struct PendingAdmonition {
     token_index: usize,
     keyword: String,
-    title: Vec<Node>,
+    title: NodeBuffer,
 }
 
 struct AdmonitionParseGenerator<'a> {
@@ -34,7 +34,7 @@ struct AdmonitionParseGenerator<'a> {
     tokens: &'a [BlockToken],
     next_token_index: usize,
     pending: Option<PendingAdmonition>,
-    nodes: Vec<Node>,
+    nodes: NodeBuffer,
     started: bool,
 }
 
@@ -61,7 +61,7 @@ impl<'a> ParseBlockGenerator<'a> for AdmonitionParseGenerator<'a> {
                     None
                 },
                 keyword: pending.keyword,
-                title: pending.title,
+                title: pending.title.into_vec(),
                 children,
             }));
             self.next_token_index = pending.token_index + 1;
@@ -120,15 +120,15 @@ impl<'a> ParseBlockGenerator<'a> for AdmonitionParseGenerator<'a> {
             self.pending = Some(PendingAdmonition {
                 token_index,
                 keyword,
-                title,
+                title: title.into(),
             });
             return Ok(ParseBlockGeneratorResult::Yield(
                 self.parse_api.request_block_tokens(Some(&token.children)),
             ));
         }
 
-        Ok(ParseBlockGeneratorResult::Complete(std::mem::take(
-            &mut self.nodes,
-        )))
+        Ok(ParseBlockGeneratorResult::Complete(
+            std::mem::take(&mut self.nodes).into_vec(),
+        ))
     }
 }

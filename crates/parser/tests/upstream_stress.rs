@@ -1,61 +1,6 @@
-use yozora_ast::{Image, Node};
+use yozora_ast::Node;
 use yozora_core_parser::ParseOptions;
-use yozora_core_tokenizer::{
-    AnyTokenizer, InlineToken, InlineTokenizer, MatchInlineHook, MatchInlinePhaseApi,
-    ParseInlineHook, ParseInlinePhaseApi, Tokenizer, TokenizerType,
-};
 use yozora_parser::YozoraParser;
-use yozora_tokenizer_image::{ImageTokenizer, IMAGE_TOKENIZER_NAME};
-use yozora_tokenizer_image_reference::IMAGE_REFERENCE_TOKENIZER_NAME;
-
-struct ShallowImageTokenizer {
-    inner: ImageTokenizer,
-}
-
-impl Tokenizer for ShallowImageTokenizer {
-    fn r#type(&self) -> TokenizerType {
-        TokenizerType::Inline
-    }
-
-    fn name(&self) -> &str {
-        IMAGE_TOKENIZER_NAME
-    }
-
-    fn priority(&self) -> i32 {
-        self.inner.priority()
-    }
-}
-
-struct ShallowImageParseHook;
-
-impl ParseInlineHook for ShallowImageParseHook {
-    fn parse(&self, tokens: &[InlineToken]) -> Vec<Node> {
-        tokens
-            .iter()
-            .map(|_| {
-                Node::Image(Image {
-                    position: None,
-                    url: String::new(),
-                    title: None,
-                    alt: String::new(),
-                })
-            })
-            .collect()
-    }
-}
-
-impl InlineTokenizer for ShallowImageTokenizer {
-    fn r#match<'a>(
-        &'a self,
-        api: &'a dyn MatchInlinePhaseApi,
-    ) -> Box<dyn MatchInlineHook<'a> + 'a> {
-        self.inner.r#match(api)
-    }
-
-    fn parse<'a>(&'a self, _: &'a dyn ParseInlinePhaseApi) -> Box<dyn ParseInlineHook + 'a> {
-        Box::new(ShallowImageParseHook)
-    }
-}
 
 #[test]
 fn parses_deeply_nested_images_without_stack_overflow() {
@@ -64,14 +9,7 @@ fn parses_deeply_nested_images_without_stack_overflow() {
         .and_then(|value| value.parse().ok())
         .unwrap_or(10_000);
     let source = format!("{}x{}", "![".repeat(depth), "](/url)".repeat(depth));
-    let mut parser = YozoraParser::default();
-    parser.replace_tokenizer(
-        AnyTokenizer::Inline(Box::new(ShallowImageTokenizer {
-            inner: ImageTokenizer::default(),
-        })),
-        Some(IMAGE_REFERENCE_TOKENIZER_NAME),
-    );
-    let ast = parser.parse(
+    let ast = YozoraParser::default().parse(
         source,
         Some(ParseOptions {
             should_reserve_position: Some(false),
@@ -81,7 +19,48 @@ fn parses_deeply_nested_images_without_stack_overflow() {
     let Some(Node::Paragraph(paragraph)) = ast.children.first() else {
         panic!("expected paragraph")
     };
-    assert!(matches!(paragraph.children.as_slice(), [Node::Image(_)]));
+    assert!(matches!(paragraph.children.as_slice(), [Node::Image(image)]
+        if image.alt == "x" && image.url == "/url"));
+}
+
+#[test]
+fn parses_nested_images_and_references_with_real_alt_text() {
+    let depth = 4_000;
+    let suffix: String = (0..depth)
+        .map(|level| if level % 2 == 0 { "](/url)" } else { "][ref]" })
+        .collect();
+    let source = format!("{}**x**{}\n\n[ref]: /ref", "![".repeat(depth), suffix);
+    let ast = YozoraParser::default().parse(source, None);
+    let Some(Node::Paragraph(paragraph)) = ast.children.first() else {
+        panic!("expected paragraph")
+    };
+    assert!(
+        matches!(paragraph.children.as_slice(), [Node::ImageReference(image)]
+        if image.alt == "x" && image.identifier == "ref")
+    );
+}
+
+#[test]
+fn materializes_and_drops_deep_inline_children_in_image_alt_text() {
+    let depth = 4_000;
+    let content = format!("{}x{}", "**".repeat(depth), "**".repeat(depth));
+    let parser = YozoraParser::default();
+    for reference in [false, true] {
+        let source = if reference {
+            format!("![{content}][ref]\n\n[ref]: /ref")
+        } else {
+            format!("![{content}](/url)")
+        };
+        let ast = parser.parse(source, None);
+        let Some(Node::Paragraph(paragraph)) = ast.children.first() else {
+            panic!("expected paragraph")
+        };
+        match paragraph.children.as_slice() {
+            [Node::Image(image)] => assert_eq!(image.alt, "x"),
+            [Node::ImageReference(image)] => assert_eq!(image.alt, "x"),
+            _ => panic!("expected image"),
+        }
+    }
 }
 
 #[test]

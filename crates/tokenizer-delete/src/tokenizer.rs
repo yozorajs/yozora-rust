@@ -163,11 +163,19 @@ impl<'a> DeleteParseHook<'a> {
 
 impl ParseInlineHook for DeleteParseHook<'_> {
     fn parse(&self, tokens: &[InlineToken]) -> Vec<Node> {
-        parse::parse_delete_tokens(tokens, self.api)
+        parse::parse_delete_tokens(tokens, self.api).resolve(self.api)
     }
 }
 
 impl InlineTokenizer for DeleteTokenizer {
+    fn parse_deferred<'a>(
+        &'a self,
+        tokens: &'a [InlineToken],
+        api: &'a dyn ParseInlinePhaseApi,
+    ) -> Option<ParseInlineHookResult<'a>> {
+        Some(parse::parse_delete_tokens(tokens, api))
+    }
+
     fn r#match<'a>(
         &'a self,
         api: &'a dyn MatchInlinePhaseApi,

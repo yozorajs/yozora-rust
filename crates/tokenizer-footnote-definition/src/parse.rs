@@ -1,4 +1,4 @@
-use yozora_ast::{FootnoteDefinition, Node};
+use yozora_ast::{FootnoteDefinition, Node, NodeBuffer};
 use yozora_core_tokenizer::{
     BlockToken, ParseBlockError, ParseBlockGenerator, ParseBlockGeneratorResult,
     ParseBlockGeneratorResume, ParseBlockHookResult, ParseBlockPhaseApi, ParseBlockResult,
@@ -15,7 +15,7 @@ pub(crate) fn parse_footnote_definition_tokens<'a>(
         tokens,
         next_token_index: 0,
         pending: None,
-        nodes: Vec::with_capacity(tokens.len()),
+        nodes: NodeBuffer::with_capacity(tokens.len()),
         started: false,
     }))
 }
@@ -31,7 +31,7 @@ struct FootnoteDefinitionParseGenerator<'a> {
     tokens: &'a [BlockToken],
     next_token_index: usize,
     pending: Option<PendingFootnoteDefinition>,
-    nodes: Vec<Node>,
+    nodes: NodeBuffer,
     started: bool,
 }
 
@@ -94,8 +94,8 @@ impl<'a> ParseBlockGenerator<'a> for FootnoteDefinitionParseGenerator<'a> {
             ));
         }
 
-        Ok(ParseBlockGeneratorResult::Complete(std::mem::take(
-            &mut self.nodes,
-        )))
+        Ok(ParseBlockGeneratorResult::Complete(
+            std::mem::take(&mut self.nodes).into_vec(),
+        ))
     }
 }

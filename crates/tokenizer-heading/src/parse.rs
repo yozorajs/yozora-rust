@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use yozora_ast::{Heading, Node};
+use yozora_ast::{Heading, Node, NodeBuffer};
 use yozora_character::{
     calc_trim_boundary_of_code_points, is_whitespace_character, AsciiCodePoint,
 };
@@ -14,7 +14,7 @@ pub(crate) fn parse_heading_tokens(
     tokens: &[BlockToken],
     parse_api: &dyn ParseBlockPhaseApi,
 ) -> Vec<Node> {
-    let mut nodes = Vec::with_capacity(tokens.len());
+    let mut nodes = NodeBuffer::with_capacity(tokens.len());
 
     for token in tokens {
         let Some(data) = token.data_as::<HeadingTokenData>() else {
@@ -81,5 +81,5 @@ pub(crate) fn parse_heading_tokens(
         }));
     }
 
-    nodes
+    nodes.into_vec()
 }

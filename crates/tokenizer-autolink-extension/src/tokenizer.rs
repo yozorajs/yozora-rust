@@ -137,11 +137,19 @@ impl<'a> AutolinkExtensionParseHook<'a> {
 
 impl ParseInlineHook for AutolinkExtensionParseHook<'_> {
     fn parse(&self, tokens: &[InlineToken]) -> Vec<Node> {
-        parse::parse_autolink_extension_tokens(tokens, self.api)
+        parse::parse_autolink_extension_tokens(tokens, self.api).resolve(self.api)
     }
 }
 
 impl InlineTokenizer for AutolinkExtensionTokenizer {
+    fn parse_deferred<'a>(
+        &'a self,
+        tokens: &'a [InlineToken],
+        api: &'a dyn ParseInlinePhaseApi,
+    ) -> Option<ParseInlineHookResult<'a>> {
+        Some(parse::parse_autolink_extension_tokens(tokens, api))
+    }
+
     fn r#match<'a>(
         &'a self,
         api: &'a dyn MatchInlinePhaseApi,

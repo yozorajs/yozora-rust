@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ast::Position;
 
-use super::{take_node_children, Node};
+use super::{drop_nodes, Node};
 
 pub const ROOT_TYPE: &str = "root";
 
@@ -27,9 +27,6 @@ impl Default for Root {
 
 impl Drop for Root {
     fn drop(&mut self) {
-        let mut stack = std::mem::take(&mut self.children);
-        while let Some(mut node) = stack.pop() {
-            take_node_children(&mut node, &mut stack);
-        }
+        drop_nodes(std::mem::take(&mut self.children));
     }
 }

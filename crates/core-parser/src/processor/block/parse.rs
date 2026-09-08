@@ -2,7 +2,7 @@ use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use yozora_ast::Node;
+use yozora_ast::{drop_nodes, Node};
 use yozora_core_tokenizer::{
     BlockToken, ParseBlockError, ParseBlockGenerator, ParseBlockGeneratorResult,
     ParseBlockGeneratorResume, ParseBlockHook, ParseBlockHookResult, ParseBlockResult,
@@ -39,6 +39,12 @@ struct ParseBlockFrame<'a> {
     next_token_index: usize,
     parsed_nodes: Vec<Node>,
     hook_execution: Option<ParseBlockHookExecution<'a>>,
+}
+
+impl Drop for ParseBlockFrame<'_> {
+    fn drop(&mut self) {
+        drop_nodes(std::mem::take(&mut self.parsed_nodes));
+    }
 }
 
 struct ParseBlockScheduler<'a> {

@@ -102,7 +102,53 @@ pub enum Node {
     Custom(CustomNode),
 }
 
-pub(super) fn take_node_children(node: &mut Node, stack: &mut Vec<Node>) {
+/// Release an AST or partial parse result without recursive destructor calls.
+pub fn drop_nodes(mut nodes: Vec<Node>) {
+    while let Some(mut node) = nodes.pop() {
+        take_node_children(&mut node, &mut nodes);
+    }
+}
+
+/// Own partial AST results across fallible parsing steps. Early returns and
+/// unwinding release descendants iteratively; `into_vec` transfers completed nodes.
+#[derive(Default)]
+pub struct NodeBuffer(Vec<Node>);
+
+impl NodeBuffer {
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self(Vec::with_capacity(capacity))
+    }
+
+    pub fn push(&mut self, node: Node) {
+        self.0.push(node);
+    }
+
+    pub fn into_vec(mut self) -> Vec<Node> {
+        std::mem::take(&mut self.0)
+    }
+}
+
+impl From<Vec<Node>> for NodeBuffer {
+    fn from(nodes: Vec<Node>) -> Self {
+        Self(nodes)
+    }
+}
+
+impl FromIterator<Node> for NodeBuffer {
+    fn from_iter<T: IntoIterator<Item = Node>>(iter: T) -> Self {
+        let mut nodes = Self::default();
+        nodes.0.extend(iter);
+        nodes
+    }
+}
+
+impl Drop for NodeBuffer {
+    fn drop(&mut self) {
+        drop_nodes(std::mem::take(&mut self.0));
+    }
+}
+
+fn take_node_children(node: &mut Node, stack: &mut Vec<Node>) {
     match node {
         Node::Admonition(node) => {
             stack.extend(std::mem::take(&mut node.title));

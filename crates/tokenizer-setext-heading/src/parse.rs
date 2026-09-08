@@ -1,4 +1,4 @@
-use yozora_ast::{Heading, Node};
+use yozora_ast::{Heading, Node, NodeBuffer};
 use yozora_character::AsciiCodePoint;
 use yozora_core_tokenizer::{merge_and_strip_content_lines, BlockToken, ParseBlockPhaseApi};
 
@@ -8,7 +8,7 @@ pub(crate) fn parse_setext_heading_tokens(
     tokens: &[BlockToken],
     parse_api: &dyn ParseBlockPhaseApi,
 ) -> Vec<Node> {
-    let mut nodes = Vec::with_capacity(tokens.len());
+    let mut nodes = NodeBuffer::with_capacity(tokens.len());
 
     for token in tokens {
         let Some(data) = token.data_as::<SetextHeadingTokenData>() else {
@@ -36,5 +36,5 @@ pub(crate) fn parse_setext_heading_tokens(
         }));
     }
 
-    nodes
+    nodes.into_vec()
 }

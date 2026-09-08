@@ -25,7 +25,10 @@ pub use types::parse_block::{
     ParseBlockHook, ParseBlockHookCreator, ParseBlockHookResult, ParseBlockPhaseApi,
     ParseBlockResult, ParseBlockTokensRequest,
 };
-pub use types::parse_inline::{ParseInlineHook, ParseInlineHookCreator, ParseInlinePhaseApi};
+pub use types::parse_inline::{
+    parse_inline_containers, ParseInlineGenerator, ParseInlineGeneratorResult, ParseInlineHook,
+    ParseInlineHookCreator, ParseInlineHookResult, ParseInlinePhaseApi,
+};
 pub use types::phrasing_content::PhrasingContentLine;
 pub use types::token::{
     BlockToken, BlockTokenChildren, InlineToken, PartialBlockToken, PartialInlineToken, TokenData,

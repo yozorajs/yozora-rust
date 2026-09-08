@@ -4,7 +4,7 @@ use crate::types::match_inline::{
     MatchInlineFallbackPhaseApi, MatchInlineHook, MatchInlinePhaseApi,
 };
 use crate::types::parse_block::{ParseBlockHook, ParseBlockPhaseApi};
-use crate::types::parse_inline::{ParseInlineHook, ParseInlinePhaseApi};
+use crate::types::parse_inline::{ParseInlineHook, ParseInlineHookResult, ParseInlinePhaseApi};
 use crate::types::phrasing_content::PhrasingContentLine;
 use crate::types::token::{BlockToken, InlineToken};
 
@@ -49,6 +49,17 @@ pub trait InlineTokenizer: Tokenizer {
         -> Box<dyn MatchInlineHook<'a> + 'a>;
 
     fn parse<'a>(&'a self, api: &'a dyn ParseInlinePhaseApi) -> Box<dyn ParseInlineHook + 'a>;
+
+    /// Opt in to yielding child lists to the processor's explicit stack.
+    /// `None` uses the synchronous hook, whose state belongs to its token list.
+    /// A deferred generator borrows the tokenizer/API, not that scoped hook.
+    fn parse_deferred<'a>(
+        &'a self,
+        _tokens: &'a [InlineToken],
+        _api: &'a dyn ParseInlinePhaseApi,
+    ) -> Option<ParseInlineHookResult<'a>> {
+        None
+    }
 }
 
 pub trait InlineFallbackTokenizer: InlineTokenizer {

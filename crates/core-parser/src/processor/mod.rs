@@ -729,47 +729,13 @@ fn parse_inline_tokens_with_context(
         context,
         node_points,
     };
-    let mut parse_inline_hooks: Vec<Box<dyn yozora_core_tokenizer::ParseInlineHook + '_>> =
-        Vec::with_capacity(context.options.inline_tokenizers.len());
-    for tokenizer in context.options.inline_tokenizers {
-        parse_inline_hooks.push(tokenizer.parse(&api));
-    }
-
-    let fallback_inline_hook = context
-        .options
-        .inline_fallback_tokenizer
-        .map(|tokenizer| (tokenizer.name(), tokenizer.parse(&api)));
-
-    let mut results = Vec::new();
-    let mut i0 = 0usize;
-    while i0 < tokens.len() {
-        let tokenizer_name = tokens[i0].tokenizer.as_ref();
-
-        let mut i1 = i0 + 1;
-        while i1 < tokens.len() && tokens[i1].tokenizer.as_ref() == tokenizer_name {
-            i1 += 1;
-        }
-
-        let hook: &dyn yozora_core_tokenizer::ParseInlineHook =
-            if let Some(hook_index) = context.options.inline_tokenizer_map.get(tokenizer_name) {
-                parse_inline_hooks[*hook_index].as_ref()
-            } else if fallback_inline_hook
-                .as_ref()
-                .is_some_and(|(name, _)| *name == tokenizer_name)
-            {
-                fallback_inline_hook
-                    .as_ref()
-                    .map(|(_, hook)| hook.as_ref())
-                    .expect("fallback hook should exist")
-            } else {
-                panic!("[parseInline] tokenizer '{tokenizer_name}' not found")
-            };
-        results.extend(hook.parse(&tokens[i0..i1]));
-
-        i0 = i1;
-    }
-
-    results
+    inline::parse::parse_inline_tokens(
+        tokens,
+        context.options.inline_tokenizers,
+        context.options.inline_tokenizer_map,
+        context.options.inline_fallback_tokenizer,
+        &api,
+    )
 }
 
 fn calc_position_from_node_points(node_points: &[NodePoint], interval: NodeInterval) -> Position {

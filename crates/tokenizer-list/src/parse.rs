@@ -1,4 +1,4 @@
-use yozora_ast::{List, ListItem, Node, Paragraph, Point, Position};
+use yozora_ast::{List, ListItem, Node, NodeBuffer, Paragraph, Point, Position};
 use yozora_core_tokenizer::{
     BlockToken, ParseBlockError, ParseBlockGenerator, ParseBlockGeneratorResult,
     ParseBlockGeneratorResume, ParseBlockHookResult, ParseBlockPhaseApi, ParseBlockResult,
@@ -15,7 +15,7 @@ pub(crate) fn parse_list_tokens<'a>(
         groups: collect_list_item_groups(tokens),
         next_group_index: 0,
         current_list: None,
-        nodes: Vec::with_capacity(tokens.len()),
+        nodes: NodeBuffer::with_capacity(tokens.len()),
         started: false,
     }))
 }
@@ -64,7 +64,7 @@ struct ResolveListState<'a> {
     spread: bool,
     next_item_index: usize,
     pending_item_index: Option<usize>,
-    children: Vec<Node>,
+    children: NodeBuffer,
 }
 
 struct ListParseGenerator<'a> {
@@ -72,7 +72,7 @@ struct ListParseGenerator<'a> {
     groups: Vec<Vec<&'a BlockToken>>,
     next_group_index: usize,
     current_list: Option<ResolveListState<'a>>,
-    nodes: Vec<Node>,
+    nodes: NodeBuffer,
     started: bool,
 }
 
@@ -151,12 +151,12 @@ impl<'a> ParseBlockGenerator<'a> for ListParseGenerator<'a> {
             }
 
             let Some(tokens) = self.groups.get(self.next_group_index).cloned() else {
-                return Ok(ParseBlockGeneratorResult::Complete(std::mem::take(
-                    &mut self.nodes,
-                )));
+                return Ok(ParseBlockGeneratorResult::Complete(
+                    std::mem::take(&mut self.nodes).into_vec(),
+                ));
             };
             let spread = calc_spread(&tokens);
-            let children = Vec::with_capacity(tokens.len());
+            let children = NodeBuffer::with_capacity(tokens.len());
             self.current_list = Some(ResolveListState {
                 tokens,
                 spread,
@@ -185,7 +185,7 @@ fn resolve_list(state: ResolveListState<'_>, parse_api: &dyn ParseBlockPhaseApi)
         start: first_data.order,
         marker: first_data.marker,
         spread: state.spread,
-        children: state.children,
+        children: state.children.into_vec(),
     }))
 }
 

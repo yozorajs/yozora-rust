@@ -1,34 +1,37 @@
 use yozora_ast::{Footnote, Node};
-use yozora_core_tokenizer::{InlineToken, NodeInterval, ParseInlinePhaseApi};
+use yozora_core_tokenizer::{
+    parse_inline_containers, InlineToken, NodeInterval, ParseInlineHookResult, ParseInlinePhaseApi,
+};
 
 #[derive(Debug, Clone)]
 pub(crate) struct FootnoteTokenData;
 
-pub(crate) fn parse_footnote_tokens(
-    tokens: &[InlineToken],
-    parse_api: &dyn ParseInlinePhaseApi,
-) -> Vec<Node> {
-    let mut nodes = Vec::with_capacity(tokens.len());
+pub(crate) fn parse_footnote_tokens<'a>(
+    tokens: &'a [InlineToken],
+    parse_api: &'a dyn ParseInlinePhaseApi,
+) -> ParseInlineHookResult<'a> {
+    parse_inline_containers(
+        tokens,
+        move |token| {
+            token.data_as::<FootnoteTokenData>()?;
 
-    for token in tokens {
-        let Some(_) = token.data_as::<FootnoteTokenData>() else {
-            continue;
-        };
+            let position = if parse_api.should_reserve_position() {
+                Some(parse_api.calc_position(NodeInterval {
+                    start_index: token.start_index,
+                    end_index: token.end_index,
+                }))
+            } else {
+                None
+            };
 
-        let position = if parse_api.should_reserve_position() {
-            Some(parse_api.calc_position(NodeInterval {
-                start_index: token.start_index,
-                end_index: token.end_index,
-            }))
-        } else {
-            None
-        };
-
-        nodes.push(Node::Footnote(Footnote {
-            position,
-            children: parse_api.parse_inline_tokens(Some(&token.children)),
-        }));
-    }
-
-    nodes
+            Some(Footnote {
+                position,
+                children: Vec::new(),
+            })
+        },
+        |mut node, children| {
+            node.children = children;
+            Node::Footnote(node)
+        },
+    )
 }

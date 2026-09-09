@@ -1,9 +1,27 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
 use crate::document::MAX_DOCUMENT_BYTES;
+use crate::{cancellation::Cancellation, protocol::ResponseError};
+
+pub const MAX_WORKSPACE_ROOTS: usize = 128;
+pub const MAX_WORKSPACE_ENTRIES: usize = 20_000;
+pub const MAX_WORKSPACE_FILES: usize = 2_000;
+pub const MAX_WORKSPACE_BYTES: usize = 32 * 1024 * 1024;
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct SourceBuffer {
+    pub uri: String,
+    pub path: Option<PathBuf>,
+    pub ambiguous: bool,
+}
+
+pub struct Sources {
+    pub files: Vec<PathBuf>,
+    pub buffers: Vec<SourceBuffer>,
+}
 
 /// URI roots belong to the server. Resolve paths afresh for each query so moved
 /// files and symlinks cannot leave a stale disk cache or access boundary behind.
@@ -27,32 +45,75 @@ impl Workspace {
     }
 
     pub fn scope(&self, source_uri: &str) -> FileScope {
-        let roots: Vec<_> = if self.folders.is_empty() {
-            file_uri_path(source_uri)
-                .and_then(|path| path.parent().map(Path::to_path_buf))
-                .into_iter()
-                .collect()
+        if self.folders.is_empty() {
+            FileScope::new(
+                file_uri_path(source_uri)
+                    .and_then(|path| path.parent().map(Path::to_path_buf))
+                    .into_iter(),
+            )
         } else {
-            // A remote workspace never grants access to the process cwd.
+            FileScope::new(self.folders.iter().filter_map(|uri| file_uri_path(uri)))
+        }
+    }
+
+    /// Indexing only visits explicit local roots. Neither an absent workspace
+    /// nor a remote root grants traversal of the cwd or an open file's parent.
+    pub fn index_scope(
+        &self,
+        cancellation: &Cancellation,
+        max_roots: usize,
+    ) -> Result<FileScope, ResponseError> {
+        cancellation.check()?;
+        if self.folders.len() > max_roots {
+            return Err(ResponseError::new(
+                -32000,
+                "workspace index exceeds the root limit; use fewer workspace roots",
+            ));
+        }
+        let scope = FileScope::new(
             self.folders
                 .iter()
-                .filter_map(|uri| file_uri_path(uri))
-                .collect()
-        };
-        FileScope {
-            roots: roots
-                .into_iter()
-                .filter_map(|path| canonical_path(&path).map(|canonical| (path, canonical)))
-                .collect(),
-        }
+                .take_while(|_| !cancellation.is_cancelled())
+                .filter_map(|uri| file_uri_path(uri)),
+        );
+        cancellation.check()?;
+        Ok(scope)
     }
 }
 
+#[derive(Eq, PartialEq)]
 pub struct FileScope {
     roots: Vec<(PathBuf, PathBuf)>,
 }
 
 impl FileScope {
+    pub fn open_file_uris<'a>(
+        &self,
+        uris: impl Iterator<Item = &'a str>,
+        source_uri: &str,
+        cancellation: &Cancellation,
+    ) -> Result<HashMap<PathBuf, Vec<String>>, ResponseError> {
+        cancellation.check()?;
+        let mut uris: Vec<_> = uris.collect();
+        uris.sort_by_key(|uri| (*uri != source_uri, *uri));
+        let mut result: HashMap<PathBuf, Vec<String>> = HashMap::new();
+        for uri in uris {
+            cancellation.check()?;
+            if let Some(path) = file_uri_path(uri).and_then(|path| self.resolve(&path)) {
+                result.entry(path).or_default().push(uri.to_string());
+            }
+        }
+        Ok(result)
+    }
+
+    fn new(roots: impl Iterator<Item = PathBuf>) -> Self {
+        Self {
+            roots: roots
+                .filter_map(|path| canonical_path(&path).map(|canonical| (path, canonical)))
+                .collect(),
+        }
+    }
+
     pub fn resolve(&self, path: &Path) -> Option<PathBuf> {
         let path = normalize_path(path)?;
         // Check spelling before any filesystem access, then check the resolved
@@ -71,6 +132,163 @@ impl FileScope {
             .any(|(_, root)| canonical.starts_with(root))
             .then_some(canonical)
     }
+
+    fn index_excluded(&self, path: &Path) -> bool {
+        // Generated trees are excluded relative to a declared root. A project
+        // explicitly rooted inside `.cache` or `target` can still be indexed.
+        blocked_path(path)
+            || !self.roots.iter().any(|(lexical, canonical)| {
+                [lexical, canonical].into_iter().any(|root| {
+                    path.strip_prefix(root).is_ok_and(|relative| {
+                        !relative.components().any(|component| {
+                            matches!(
+                                component.as_os_str().to_str(),
+                                Some("target" | "node_modules" | ".cache" | ".venv")
+                            )
+                        })
+                    })
+                })
+            })
+    }
+
+    /// Discover disk files and overlay open buffers once. Read queries select a
+    /// stable alias; refactors can reject ambiguous buffers before offering edits.
+    pub fn sources<'a>(
+        &self,
+        uris: impl Iterator<Item = &'a str>,
+        cancellation: &Cancellation,
+        max_entries: usize,
+        max_files: usize,
+    ) -> Result<Sources, ResponseError> {
+        let mut files = self.markdown_files(cancellation, max_entries, max_files)?;
+        let mut opened: BTreeMap<PathBuf, (u8, String, bool)> = BTreeMap::new();
+        let mut buffers = Vec::new();
+        for uri in uris {
+            cancellation.check()?;
+            if let Some(lexical) = file_uri_path(uri) {
+                let path = self.resolve(&lexical).unwrap_or_else(|| lexical.clone());
+                let rank = if path_uri(&path).as_deref() == Some(uri) {
+                    0
+                } else if lexical == path {
+                    1
+                } else {
+                    2
+                };
+                opened
+                    .entry(path)
+                    .and_modify(|selected| {
+                        selected.2 = true;
+                        if (rank, uri) < (selected.0, selected.1.as_str()) {
+                            selected.0 = rank;
+                            selected.1 = uri.to_string();
+                        }
+                    })
+                    .or_insert((rank, uri.to_string(), false));
+            } else if !uri
+                .split_once(':')
+                .is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case("file"))
+            {
+                buffers.push(SourceBuffer {
+                    uri: uri.to_string(),
+                    path: None,
+                    ambiguous: false,
+                });
+            }
+            if opened.len() + buffers.len() > max_files {
+                return Err(ResponseError::new(
+                    -32000,
+                    "workspace exceeds the file limit; use narrower roots or close buffers",
+                ));
+            }
+        }
+        files.retain(|path| !opened.contains_key(path));
+        buffers.extend(
+            opened
+                .into_iter()
+                .map(|(path, (_, uri, ambiguous))| SourceBuffer {
+                    uri,
+                    path: Some(path),
+                    ambiguous,
+                }),
+        );
+        buffers.sort_by(|left, right| left.uri.cmp(&right.uri));
+        if files.len() + buffers.len() > max_files {
+            return Err(ResponseError::new(
+                -32000,
+                "workspace exceeds the file limit; use narrower roots or close buffers",
+            ));
+        }
+        Ok(Sources { files, buffers })
+    }
+
+    /// Return canonical, unique Markdown paths in a stable order. Count every
+    /// directory entry, including skipped names, so wide trees remain bounded.
+    /// Limits reject the whole query instead of silently reporting a partial index.
+    pub fn markdown_files(
+        &self,
+        cancellation: &Cancellation,
+        max_entries: usize,
+        max_files: usize,
+    ) -> Result<Vec<PathBuf>, ResponseError> {
+        cancellation.check()?;
+        let mut directories: Vec<_> = self.roots.iter().map(|(_, path)| path.clone()).collect();
+        let mut visited = BTreeSet::new();
+        let mut files = BTreeSet::new();
+        let mut inspected = 0;
+        while let Some(directory) = directories.pop() {
+            cancellation.check()?;
+            if self.index_excluded(&directory) || !visited.insert(directory.clone()) {
+                continue;
+            }
+            let Some(directory) = self.resolve(&directory) else {
+                continue;
+            };
+            let entries = match fs::read_dir(&directory) {
+                Ok(entries) => entries,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(_) => {
+                    return Err(ResponseError::new(
+                        -32000,
+                        "cannot read a workspace directory",
+                    ))
+                }
+            };
+            for entry in entries {
+                cancellation.check()?;
+                if inspected == max_entries {
+                    return Err(ResponseError::new(-32000, "workspace index exceeds the directory entry limit; use narrower workspace roots"));
+                }
+                inspected += 1;
+                let entry = entry.map_err(|_| {
+                    ResponseError::new(-32000, "cannot read a workspace directory entry")
+                })?;
+                if self.index_excluded(&entry.path()) {
+                    continue;
+                }
+                let Some(path) = self.resolve(&entry.path()) else {
+                    continue;
+                };
+                if self.index_excluded(&path) {
+                    continue;
+                }
+                let Ok(metadata) = path.metadata() else {
+                    continue;
+                };
+                if metadata.is_dir() {
+                    directories.push(path);
+                } else if metadata.is_file() && is_markdown(&path) {
+                    files.insert(path);
+                    if files.len() > max_files {
+                        return Err(ResponseError::new(
+                            -32000,
+                            "workspace index exceeds the file limit; use narrower workspace roots",
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(files.into_iter().collect())
+    }
 }
 
 pub struct LocalFile {
@@ -78,6 +296,26 @@ pub struct LocalFile {
     // scope-checked path may be used for filesystem access.
     pub uri: String,
     pub path: PathBuf,
+}
+
+pub fn open_file_uri<'a>(
+    open_uris: &'a HashMap<PathBuf, Vec<String>>,
+    file: &LocalFile,
+) -> Option<&'a str> {
+    let aliases = open_uris.get(&file.path)?;
+    // Buffer identity is the requested URI, then its normalized lexical path.
+    // Canonical aliases are a fallback, never an override of a matching buffer.
+    aliases
+        .iter()
+        .find(|uri| *uri == &file.uri)
+        .or_else(|| {
+            let lexical = file_uri_path(&file.uri)?;
+            aliases
+                .iter()
+                .find(|uri| file_uri_path(uri).as_ref() == Some(&lexical))
+        })
+        .or_else(|| aliases.first())
+        .map(String::as_str)
 }
 
 pub enum Target {
@@ -158,7 +396,6 @@ pub fn resolve(source_uri: &str, destination: &str, scope: &FileScope) -> Option
 }
 
 fn local_path(source_uri: &str, resource: &str) -> Option<PathBuf> {
-    let source = file_uri_path(source_uri)?;
     if resource
         .split_once(':')
         .is_some_and(|(scheme, _)| valid_scheme(scheme))
@@ -169,6 +406,10 @@ fn local_path(source_uri: &str, resource: &str) -> Option<PathBuf> {
     if decoded.contains('\\') || decoded.starts_with("//") {
         return None;
     }
+    if Path::new(&decoded).is_absolute() {
+        return Some(PathBuf::from(decoded));
+    }
+    let source = file_uri_path(source_uri)?;
     Some(source.parent()?.join(decoded))
 }
 
@@ -407,29 +648,65 @@ pub fn is_file(path: &Path) -> bool {
     path.metadata().is_ok_and(|metadata| metadata.is_file())
 }
 
+pub fn is_markdown(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            ["md", "markdown", "mdown", "mkd", "mkdn", "yozora"]
+                .iter()
+                .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+        })
+}
+
 pub fn read_markdown(path: &Path) -> Option<String> {
-    let extension = path.extension()?.to_str()?.to_ascii_lowercase();
-    if !matches!(
-        extension.as_str(),
-        "md" | "markdown" | "mdown" | "mkd" | "mkdn" | "yozora"
-    ) || blocked_path(path)
-    {
-        return None;
+    let mut remaining = MAX_DOCUMENT_BYTES;
+    read_markdown_budgeted(path, &mut remaining).ok().flatten()
+}
+
+/// Charge attempted reads, including invalid UTF-8 and partially failed reads.
+/// Metadata-only exclusions do not consume the byte budget. The extra byte
+/// detects growth past a limit between metadata inspection and the read.
+pub fn read_markdown_budgeted(
+    path: &Path,
+    remaining: &mut usize,
+) -> Result<Option<String>, ResponseError> {
+    if !is_markdown(path) || blocked_path(path) {
+        return Ok(None);
     }
-    let metadata = path.metadata().ok()?;
+    let Ok(metadata) = path.metadata() else {
+        return Ok(None);
+    };
     if !metadata.is_file() || metadata.len() > MAX_DOCUMENT_BYTES as u64 {
-        return None;
+        return Ok(None);
     }
-    let file = File::open(path).ok()?;
-    let metadata = file.metadata().ok()?;
+    let Ok(file) = File::open(path) else {
+        return Ok(None);
+    };
+    let Ok(metadata) = file.metadata() else {
+        return Ok(None);
+    };
     if !metadata.is_file() || metadata.len() > MAX_DOCUMENT_BYTES as u64 {
-        return None;
+        return Ok(None);
     }
-    let mut text = String::new();
-    file.take((MAX_DOCUMENT_BYTES + 1) as u64)
-        .read_to_string(&mut text)
-        .ok()?;
-    (text.len() <= MAX_DOCUMENT_BYTES).then_some(text)
+    let exhausted = || {
+        ResponseError::new(-32000, "workspace index exceeds the text byte limit; use narrower workspace roots or close buffers")
+    };
+    if metadata.len() > *remaining as u64 {
+        return Err(exhausted());
+    }
+    let mut bytes = Vec::new();
+    let read = file
+        .take((MAX_DOCUMENT_BYTES.min(*remaining) + 1) as u64)
+        .read_to_end(&mut bytes);
+    if bytes.len() > *remaining {
+        *remaining = 0;
+        return Err(exhausted());
+    }
+    *remaining -= bytes.len();
+    if read.is_err() || bytes.len() > MAX_DOCUMENT_BYTES {
+        return Ok(None);
+    }
+    Ok(String::from_utf8(bytes).ok())
 }
 
 fn normalize_path(path: &Path) -> Option<PathBuf> {
@@ -729,6 +1006,29 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn absolute_destinations_from_untitled_buffers_stay_inside_explicit_roots() {
+        let directory = TestDir::new();
+        let uri = directory.uri("guide.md");
+        let scope = Workspace::new(vec![directory.uri("")]).scope("untitled:source");
+        assert!(matches!(
+            resolve("untitled:source", &uri, &scope),
+            Some(Target::Local { file: Some(_), .. })
+        ));
+        assert!(matches!(
+            resolve(
+                "untitled:source",
+                directory.0.join("guide.md").to_str().unwrap(),
+                &scope
+            ),
+            Some(Target::Local { file: Some(_), .. })
+        ));
+        assert!(resolve("untitled:source", "guide.md", &scope).is_none());
+        assert!(resolve("untitled:source", "file:///outside/guide.md", &scope).is_none());
+        let unscoped = Workspace::default().scope("untitled:source");
+        assert!(resolve("untitled:source", &uri, &unscoped).is_none());
+    }
+
+    #[test]
     fn does_not_turn_directory_destinations_into_regular_files() {
         let directory = TestDir::new();
         fs::write(directory.0.join("guide.md"), "# Guide").unwrap();
@@ -925,6 +1225,131 @@ pub(super) mod tests {
             let _socket = std::os::unix::net::UnixListener::bind(&path).unwrap();
             assert!(read_markdown(&path).is_none());
         }
+    }
+
+    #[test]
+    fn workspace_traversal_is_sorted_deduplicated_and_skips_generated_trees() {
+        let directory = TestDir::new();
+        for path in ["docs", "target", "node_modules", ".cache", ".venv", ".git"] {
+            fs::create_dir(directory.0.join(path)).unwrap();
+            fs::write(directory.0.join(path).join("guide.md"), "# Heading").unwrap();
+        }
+        fs::write(directory.0.join("top.MARKDOWN"), "# Top").unwrap();
+        fs::write(directory.0.join("ignored.txt"), "# Other").unwrap();
+        let workspace = Workspace::new(vec![
+            directory.uri(""),
+            directory.uri("docs"),
+            directory.uri(""),
+        ]);
+        let paths = workspace
+            .index_scope(&Cancellation::default(), 100)
+            .unwrap()
+            .markdown_files(&Cancellation::default(), 100, 10)
+            .unwrap();
+        assert_eq!(
+            paths,
+            [
+                directory.0.join("docs/guide.md"),
+                directory.0.join("top.MARKDOWN")
+            ]
+        );
+        for workspace in [
+            Workspace::default(),
+            Workspace::new(vec!["vscode-remote://host/docs".to_string()]),
+        ] {
+            assert!(workspace
+                .index_scope(&Cancellation::default(), 100)
+                .unwrap()
+                .markdown_files(&Cancellation::default(), 0, 0)
+                .unwrap()
+                .is_empty());
+        }
+    }
+
+    #[test]
+    fn traversal_counts_skipped_entries_and_rejects_partial_results() {
+        let directory = TestDir::new();
+        fs::write(directory.0.join("a.txt"), "ignored").unwrap();
+        fs::write(directory.0.join("b.txt"), "ignored").unwrap();
+        let scope = Workspace::new(vec![directory.uri("")])
+            .index_scope(&Cancellation::default(), 100)
+            .unwrap();
+        assert_eq!(
+            scope
+                .markdown_files(&Cancellation::default(), 1, 10)
+                .unwrap_err()
+                .code,
+            -32000
+        );
+        fs::write(directory.0.join("first.md"), "# First").unwrap();
+        fs::write(directory.0.join("second.md"), "# Second").unwrap();
+        assert_eq!(
+            scope
+                .markdown_files(&Cancellation::default(), 10, 1)
+                .unwrap_err()
+                .code,
+            -32000
+        );
+        let cancellation = Cancellation::default();
+        cancellation.cancel();
+        assert_eq!(
+            scope.markdown_files(&cancellation, 0, 0).unwrap_err().code,
+            -32800
+        );
+    }
+
+    #[test]
+    fn generated_tree_exclusions_are_relative_to_each_explicit_root() {
+        let directory = TestDir::new();
+        fs::create_dir_all(directory.0.join("target/project/node_modules")).unwrap();
+        fs::write(directory.0.join("target/project/guide.md"), "# Guide").unwrap();
+        fs::write(
+            directory.0.join("target/project/node_modules/skipped.md"),
+            "# Skipped",
+        )
+        .unwrap();
+        for roots in [
+            vec![directory.uri("target/project")],
+            vec![directory.uri(""), directory.uri("target/project")],
+        ] {
+            let paths = Workspace::new(roots)
+                .index_scope(&Cancellation::default(), 100)
+                .unwrap()
+                .markdown_files(&Cancellation::default(), 100, 10)
+                .unwrap();
+            assert_eq!(paths, [directory.0.join("target/project/guide.md")]);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn traversal_deduplicates_symlink_cycles_and_rechecks_escape_targets() {
+        use std::os::unix::fs::symlink;
+        let directory = TestDir::new();
+        fs::create_dir_all(directory.0.join("root/docs")).unwrap();
+        fs::create_dir(directory.0.join("outside")).unwrap();
+        fs::write(directory.0.join("root/docs/guide.md"), "# Guide").unwrap();
+        fs::write(directory.0.join("outside/outside.md"), "# Outside").unwrap();
+        symlink("docs", directory.0.join("root/alias")).unwrap();
+        symlink("..", directory.0.join("root/docs/cycle")).unwrap();
+        symlink("../outside", directory.0.join("root/escape")).unwrap();
+        symlink("missing", directory.0.join("root/dangling")).unwrap();
+        symlink("docs/guide.md", directory.0.join("root/alias.md")).unwrap();
+        let workspace = Workspace::new(vec![directory.uri("root"), directory.uri("root/alias")]);
+        let paths = workspace
+            .index_scope(&Cancellation::default(), 100)
+            .unwrap()
+            .markdown_files(&Cancellation::default(), 20, 10)
+            .unwrap();
+        assert_eq!(paths, [directory.0.join("root/docs/guide.md")]);
+        fs::remove_file(directory.0.join("root/alias.md")).unwrap();
+        symlink("../outside/outside.md", directory.0.join("root/alias.md")).unwrap();
+        let paths = workspace
+            .index_scope(&Cancellation::default(), 100)
+            .unwrap()
+            .markdown_files(&Cancellation::default(), 20, 10)
+            .unwrap();
+        assert_eq!(paths, [directory.0.join("root/docs/guide.md")]);
     }
 
     #[cfg(unix)]

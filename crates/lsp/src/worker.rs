@@ -9,14 +9,32 @@ use yozora_parser::YozoraParser;
 use crate::cancellation::Cancellation;
 use crate::protocol::ResponseError;
 use crate::query::{Dependencies, Request, State};
+use crate::workspace_index::Index;
 
 pub const WORKER_COUNT: usize = 2;
 
 pub struct Task {
     pub state: State,
-    pub uri: String,
-    pub query: Option<Request>,
+    pub work: Work,
     pub cancellation: Cancellation,
+}
+
+pub enum Work {
+    Query(Request),
+    Diagnostics(String),
+}
+
+impl Work {
+    pub fn uses_workspace(&self) -> bool {
+        matches!(self, Self::Query(request) if request.uses_workspace())
+    }
+
+    pub fn source_uri(&self) -> Option<&str> {
+        match self {
+            Self::Query(request) => request.source_uri(),
+            Self::Diagnostics(uri) => Some(uri),
+        }
+    }
 }
 
 pub struct Finished {
@@ -27,24 +45,32 @@ pub struct Finished {
     panicked: bool,
 }
 
-pub fn execute(worker: usize, mut task: Task, parser: &YozoraParser) -> Finished {
+pub fn execute(
+    worker: usize,
+    mut task: Task,
+    parser: &YozoraParser,
+    index: &mut Index,
+) -> Finished {
     let mut dependencies = Dependencies::default();
-    let query = task.query.take();
-    let result = catch_unwind(AssertUnwindSafe(|| match query {
-        Some(request) => task
-            .state
-            .request(request, parser, &task.cancellation, &mut dependencies),
-        None => task
-            .state
-            .diagnostics(&task.uri, parser, &task.cancellation),
+    let result = catch_unwind(AssertUnwindSafe(|| match task.work {
+        Work::Query(request) => task.state.request(
+            request,
+            parser,
+            index,
+            &task.cancellation,
+            &mut dependencies,
+        ),
+        Work::Diagnostics(uri) => {
+            task.state
+                .diagnostics(&uri, parser, &task.cancellation, &mut dependencies)
+        }
     }));
     let panicked = result.is_err();
     Finished {
         worker,
         state: task.state,
         dependencies,
-        result: result
-            .unwrap_or_else(|_| Err(ResponseError::new(-32603, "document analysis failed"))),
+        result: result.unwrap_or_else(|_| Err(ResponseError::new(-32603, "analysis failed"))),
         panicked,
     }
 }
@@ -75,10 +101,12 @@ impl Workers {
                     // Tokenizer trait objects stay on this thread; no new Send
                     // or Sync requirement is imposed on parser extensions.
                     let mut parser = make_parser();
+                    let mut index = Index::default();
                     while let Ok(task) = receiver.recv() {
-                        let finished = execute(worker, task, &parser);
+                        let finished = execute(worker, task, &parser, &mut index);
                         if finished.panicked {
                             parser = make_parser();
+                            index = Index::default();
                         }
                         if !publish(finished) {
                             break;
@@ -116,8 +144,7 @@ mod tests {
         );
         Task {
             state,
-            uri: uri.to_string(),
-            query: Some(
+            work: Work::Query(
                 Request::parse(
                     "textDocument/hover",
                     json!({
@@ -142,10 +169,10 @@ mod tests {
         for diagnostics in [false, true] {
             let mut task = task("untitled:cancelled", "blocked");
             if diagnostics {
-                task.query = None;
+                task.work = Work::Diagnostics("untitled:cancelled".to_string());
             }
             task.cancellation.cancel();
-            let finished = execute(0, task, &parser);
+            let finished = execute(0, task, &parser, &mut Index::default());
             assert!(!finished.panicked);
             assert_eq!(finished.result.unwrap_err().code, -32800);
         }
@@ -230,9 +257,10 @@ mod tests {
         ] {
             eprintln!("checking partial AST cleanup: {case}");
             let mut task = task("untitled:deep-partial", "panic");
-            task.state
-                .documents
-                .insert(task.uri.clone(), Document::new(1, source).unwrap());
+            task.state.documents.insert(
+                "untitled:deep-partial".to_string(),
+                Document::new(1, source).unwrap(),
+            );
             workers.submit(0, task).unwrap();
             let result = results.recv_timeout(Duration::from_secs(15)).unwrap();
             assert!(result.panicked, "{case}");
@@ -285,8 +313,7 @@ mod tests {
         let cancellation = Cancellation::default();
         workers.submit(0, Task {
             state,
-            uri: uri.to_string(),
-            query: Some(Request::parse("textDocument/rename", json!({
+            work: Work::Query(Request::parse("textDocument/rename", json!({
                 "textDocument": { "uri": uri }, "position": { "line": 2, "character": 8 }, "newName": "new"
             })).unwrap()),
             cancellation: cancellation.clone(),
@@ -299,8 +326,7 @@ mod tests {
         // A fresh task reuses the parsed source without re-entering the gate.
         workers.submit(0, Task {
             state: finished.state,
-            uri: uri.to_string(),
-            query: Some(Request::parse("textDocument/hover", json!({
+            work: Work::Query(Request::parse("textDocument/hover", json!({
                 "textDocument": { "uri": uri }, "position": { "line": 0, "character": 2 }
             })).unwrap()),
             cancellation: Cancellation::default(),

@@ -5,7 +5,7 @@ use yozora_ast_util::{collect_nodes, NodeMatcher};
 
 use crate::protocol::Range;
 
-const MAX_DIAGNOSTICS: usize = 1_000;
+pub const MAX_DIAGNOSTICS: usize = 1_000;
 
 #[derive(Debug)]
 pub struct DuplicateDefinition {

@@ -12,12 +12,12 @@ use crate::cancellation::Cancellation;
 use crate::document::{open_document, Document};
 use crate::files::Workspace;
 use crate::protocol::{
-    parse_params, DidChangeParams, DidChangeWorkspaceFoldersParams, DidOpenParams,
-    InitializeParams, ResponseError, TextDocumentParams,
+    parse_params, DidChangeParams, DidChangeWatchedFilesParams, DidChangeWorkspaceFoldersParams,
+    DidOpenParams, InitializeParams, RenameFilesParams, ResponseError, TextDocumentParams,
 };
-use crate::query::{format_diagnostics, Request};
+use crate::query::{format_diagnostics, Dependencies, Request};
 use crate::transport::{read_messages, write_message};
-use crate::worker::{self, Workers, WORKER_COUNT};
+use crate::worker::{self, Work, Workers, WORKER_COUNT};
 #[cfg(test)]
 use crate::{protocol::Position, query::document_start};
 
@@ -62,7 +62,9 @@ enum Reply {
 }
 
 struct RunningWork {
-    uri: String,
+    // A workspace query has no source document and shares one scheduling slot.
+    uri: Option<String>,
+    workspace: bool,
     reply: Option<Reply>,
     scope_epoch: u64,
     cancellation: Cancellation,
@@ -80,8 +82,11 @@ struct Server {
     state: State,
     #[cfg(test)]
     parser: YozoraParser,
+    #[cfg(test)]
+    index: crate::workspace_index::Index,
     query: crate::query::State,
     diagnostics_due: HashMap<String, Instant>,
+    diagnostic_dependencies: HashMap<String, Dependencies>,
     pending_queries: VecDeque<PendingQuery>,
     pending_query_bytes: usize,
     running: [Option<RunningWork>; WORKER_COUNT],
@@ -175,7 +180,7 @@ impl Server {
         let method = method.expect("method was validated");
         let params = message.get("params").cloned().unwrap_or(Value::Null);
         let response = if let Some(id) = id {
-            if self.state == State::Running && is_document_query(method) {
+            if self.state == State::Running && is_query(method) {
                 self.queue_query(id.clone(), method, params, Instant::now())
                     .err()
                     .map(|error| error.response(id))
@@ -220,7 +225,9 @@ impl Server {
         now: Instant,
     ) -> Result<(), ResponseError> {
         let request = Request::parse(method, params)?;
-        open_document(&mut self.query.documents, &request.uri)?;
+        if let Some(uri) = request.source_uri() {
+            open_document(&mut self.query.documents, uri)?;
+        }
         let query = PendingQuery {
             id,
             request,
@@ -240,11 +247,19 @@ impl Server {
         Ok(())
     }
 
-    fn reject_queries(&mut self, reject: impl Fn(&str, &Value) -> bool, error: ResponseError) {
+    fn reject_queries(
+        &mut self,
+        reject: impl Fn(Option<&str>, bool, &Value) -> bool,
+        error: ResponseError,
+    ) {
         let outgoing = &mut self.outgoing;
         let pending_bytes = &mut self.pending_query_bytes;
         self.pending_queries.retain(|query| {
-            if reject(&query.request.uri, &query.id) {
+            if reject(
+                query.request.source_uri(),
+                query.request.uses_workspace(),
+                &query.id,
+            ) {
                 *pending_bytes -= query.retained_bytes();
                 outgoing.push(error.response(query.id.clone()));
                 false
@@ -254,7 +269,7 @@ impl Server {
         });
         for work in self.running.iter_mut().flatten() {
             if let Some(Reply::Query(id)) = &work.reply {
-                if reject(&work.uri, id) {
+                if reject(work.uri.as_deref(), work.workspace, id) {
                     outgoing.push(error.response(id.clone()));
                     work.reply = None;
                     work.cancellation.cancel();
@@ -265,19 +280,66 @@ impl Server {
 
     fn invalidate_queries(&mut self, uri: &str) {
         self.reject_queries(
-            |source, _| source == uri,
-            ResponseError::new(-32801, "document changed before the query completed"),
+            |source, workspace, _| workspace || source == Some(uri),
+            ResponseError::new(
+                -32801,
+                "document or workspace changed before the query completed",
+            ),
         );
         for work in self.running.iter_mut().flatten() {
-            if work.uri == uri {
+            if work.uri.as_deref() == Some(uri) {
                 work.reply = None;
                 work.cancellation.cancel();
             }
         }
     }
 
-    fn busy(&self, uri: &str) -> bool {
-        self.running.iter().flatten().any(|work| work.uri == uri)
+    fn invalidate_workspace_queries(&mut self) {
+        self.reject_queries(
+            |_, workspace, _| workspace,
+            ResponseError::new(-32801, "workspace changed before the query completed"),
+        );
+    }
+
+    /// Only completed, current diagnostics replace dependency information. A
+    /// target edit refreshes its known referrers; file/scope events also refresh
+    /// missing targets and alias selections that have no open-buffer dependency.
+    fn refresh_link_diagnostics(&mut self, target: Option<&str>, now: Instant) {
+        let sources: Vec<_> = self
+            .diagnostic_dependencies
+            .iter()
+            .filter(|(uri, dependencies)| {
+                target.map_or(dependencies.files, |target| {
+                    uri.as_str() != target && dependencies.targets.contains(target)
+                })
+            })
+            .map(|(uri, _)| uri.clone())
+            .collect();
+        for uri in sources {
+            if !self
+                .query
+                .documents
+                .get(&uri)
+                .is_some_and(|document| document.text().is_ok())
+            {
+                continue;
+            }
+            for work in self.running.iter_mut().flatten() {
+                if work.uri.as_deref() == Some(&uri)
+                    && matches!(work.reply, Some(Reply::Diagnostics))
+                {
+                    work.reply = None;
+                    work.cancellation.cancel();
+                }
+            }
+            self.diagnostics_due.insert(uri, now + DIAGNOSTICS_DELAY);
+        }
+    }
+
+    fn busy(&self, uri: Option<&str>, workspace: bool) -> bool {
+        self.running.iter().flatten().any(|work| {
+            (uri.is_some() && work.uri.as_deref() == uri) || (workspace && work.workspace)
+        })
     }
 
     fn next_deadline(&self) -> Option<Instant> {
@@ -286,12 +348,12 @@ impl Server {
         }
         self.pending_queries
             .iter()
-            .filter(|query| !self.busy(&query.request.uri))
+            .filter(|query| !self.busy(query.request.source_uri(), query.request.uses_workspace()))
             .map(|query| query.deadline)
             .chain(
                 self.diagnostics_due
                     .iter()
-                    .filter(|(uri, _)| !self.busy(uri))
+                    .filter(|(uri, _)| !self.busy(Some(uri), false))
                     .map(|(_, deadline)| *deadline),
             )
             .min()
@@ -302,23 +364,26 @@ impl Server {
             return None;
         }
         let worker = self.running.iter().position(Option::is_none)?;
-        // One task per source prevents repeated queries or diagnostics for one
-        // slow document from occupying every worker. Older blocked work must
-        // not prevent an eligible request for another document from starting.
+        // One task per source, and at most one workspace scan, prevent repeated
+        // slow queries from occupying every worker. Older blocked work must not
+        // prevent an eligible request in another scope from starting.
         let query = self
             .pending_queries
             .iter()
             .enumerate()
-            .filter(|(_, query)| query.deadline <= now && !self.busy(&query.request.uri))
+            .filter(|(_, query)| {
+                query.deadline <= now
+                    && !self.busy(query.request.source_uri(), query.request.uses_workspace())
+            })
             .min_by_key(|(index, query)| (query.deadline, *index))
             .map(|(index, query)| (index, query.deadline));
         let diagnostic = self
             .diagnostics_due
             .iter()
-            .filter(|(uri, deadline)| **deadline <= now && !self.busy(uri))
+            .filter(|(uri, deadline)| **deadline <= now && !self.busy(Some(uri), false))
             .min_by_key(|(uri, deadline)| (**deadline, *uri))
             .map(|(uri, deadline)| (uri.clone(), *deadline));
-        let (uri, reply, query) = if let Some((index, _)) =
+        let (reply, work) = if let Some((index, _)) =
             query.filter(|(_, deadline)| diagnostic.as_ref().is_none_or(|(_, due)| deadline <= due))
         {
             let query = self
@@ -326,19 +391,16 @@ impl Server {
                 .remove(index)
                 .expect("selected query exists");
             self.pending_query_bytes -= query.retained_bytes();
-            (
-                query.request.uri.clone(),
-                Reply::Query(query.id),
-                Some(query.request),
-            )
+            (Reply::Query(query.id), Work::Query(query.request))
         } else {
             let (uri, _) = diagnostic?;
             self.diagnostics_due.remove(&uri);
-            (uri, Reply::Diagnostics, None)
+            (Reply::Diagnostics, Work::Diagnostics(uri))
         };
         let cancellation = Cancellation::default();
         self.running[worker] = Some(RunningWork {
-            uri: uri.clone(),
+            uri: work.source_uri().map(str::to_string),
+            workspace: work.uses_workspace(),
             reply: Some(reply),
             scope_epoch: self.scope_epoch,
             cancellation: cancellation.clone(),
@@ -347,8 +409,7 @@ impl Server {
             worker,
             worker::Task {
                 state: self.query.clone(),
-                uri,
-                query,
+                work,
                 cancellation,
             },
         ))
@@ -365,8 +426,14 @@ impl Server {
                 .zip(finished.state.documents.get(uri))
                 .is_some_and(|(live, snapshot)| live.matches(snapshot))
         };
-        let current = matches(&work.uri)
-            && finished.dependencies.targets.iter().all(|uri| matches(uri))
+        let current = work.uri.as_deref().is_none_or(matches)
+            && finished.dependencies.targets.iter().all(|uri| {
+                self.query
+                    .documents
+                    .get(uri)
+                    .zip(finished.state.documents.get(uri))
+                    .is_some_and(|(live, snapshot)| live.same_revision(snapshot))
+            })
             && (!finished.dependencies.files || work.scope_epoch == self.scope_epoch);
         for (uri, snapshot) in &mut finished.state.documents {
             if let Some(live) = self.query.documents.get_mut(uri) {
@@ -388,19 +455,45 @@ impl Server {
                     Err(error) => error.response(id),
                 });
             }
-            Some(Reply::Diagnostics) if current => match finished.result {
-                Ok(publication) => self.outgoing.push(publication),
-                Err(error) => {
-                    eprintln!("yozora-lsp: diagnostics: {}", error.message);
-                    let version = self.query.documents[&work.uri].version();
-                    self.outgoing.push(format_diagnostics(
-                        &work.uri,
-                        self.query.diagnostic_version.then_some(version),
-                        Vec::new(),
-                        false,
-                    ));
+            Some(Reply::Diagnostics) if current => {
+                let uri = work
+                    .uri
+                    .as_ref()
+                    .expect("diagnostics have a source document");
+                self.diagnostic_dependencies
+                    .insert(uri.clone(), finished.dependencies);
+                match finished.result {
+                    Ok(publication) => self.outgoing.push(publication),
+                    Err(error) => {
+                        eprintln!("yozora-lsp: diagnostics: {}", error.message);
+                        let uri = work
+                            .uri
+                            .as_ref()
+                            .expect("diagnostics have a source document");
+                        let version = self.query.documents[uri].version();
+                        self.outgoing.push(format_diagnostics(
+                            uri,
+                            self.query.diagnostic_version.then_some(version),
+                            Vec::new(),
+                            false,
+                        ));
+                    }
                 }
-            },
+            }
+            Some(Reply::Diagnostics) => {
+                if let Some(uri) = &work.uri {
+                    if self
+                        .query
+                        .documents
+                        .get(uri)
+                        .is_some_and(|document| document.text().is_ok())
+                    {
+                        self.diagnostics_due
+                            .entry(uri.clone())
+                            .or_insert_with(|| Instant::now() + DIAGNOSTICS_DELAY);
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -411,7 +504,8 @@ impl Server {
             return Ok(None);
         };
         let before = self.outgoing.len();
-        self.finish_work(worker::execute(worker, task, &self.parser));
+        let finished = worker::execute(worker, task, &self.parser, &mut self.index);
+        self.finish_work(finished);
         Ok((self.outgoing.len() > before).then(|| self.outgoing.pop().unwrap()))
     }
 
@@ -482,10 +576,17 @@ impl Server {
                     "positionEncoding": "utf-16",
                     "textDocumentSync": { "openClose": true, "change": 2 },
                     "documentSymbolProvider": true,
+                    "workspaceSymbolProvider": true,
                     "foldingRangeProvider": true,
                     "definitionProvider": true,
                     "documentLinkProvider": { "resolveProvider": false },
-                    "workspace": { "workspaceFolders": { "supported": true, "changeNotifications": true } },
+                    "workspace": {
+                        "workspaceFolders": { "supported": true, "changeNotifications": true },
+                        "fileOperations": {
+                            "willRename": { "filters": [{ "scheme": "file", "pattern": { "glob": "**/*", "matches": "file" } }] },
+                            "didRename": { "filters": [{ "scheme": "file", "pattern": { "glob": "**/*", "matches": "file" } }] },
+                        },
+                    },
                     "hoverProvider": true,
                     "referencesProvider": true,
                     "completionProvider": { "triggerCharacters": ["[", "^", "(", "/", "#"], "resolveProvider": false },
@@ -514,9 +615,10 @@ impl Server {
                 self.state = State::Shutdown;
                 self.query.documents.clear();
                 self.diagnostics_due.clear();
+                self.diagnostic_dependencies.clear();
                 self.outgoing.clear();
                 self.reject_queries(
-                    |_, _| true,
+                    |_, _, _| true,
                     ResponseError::new(-32800, "server is shutting down"),
                 );
                 for work in self.running.iter_mut().flatten() {
@@ -526,9 +628,10 @@ impl Server {
                 Ok(Value::Null)
             }
             #[cfg(test)]
-            method if is_document_query(method) => self.query.request(
+            method if is_query(method) => self.query.request(
                 Request::parse(method, params)?,
                 &self.parser,
+                &mut self.index,
                 &Cancellation::default(),
                 &mut crate::query::Dependencies::default(),
             ),
@@ -559,6 +662,20 @@ impl Server {
         now: Instant,
     ) -> Result<(), ResponseError> {
         match method {
+            "workspace/didRenameFiles" => {
+                let params: RenameFilesParams = parse_params(params)?;
+                for file in &params.files {
+                    validate_uri(&file.old_uri)?;
+                    validate_uri(&file.new_uri)?;
+                }
+                if !params.files.is_empty() {
+                    // File notifications invalidate snapshots; didClose/didOpen
+                    // remain the authority for renamed buffer text and versions.
+                    self.scope_epoch = self.scope_epoch.wrapping_add(1);
+                    self.invalidate_workspace_queries();
+                    self.refresh_link_diagnostics(None, now);
+                }
+            }
             "workspace/didChangeWorkspaceFolders" => {
                 let params: DidChangeWorkspaceFoldersParams = parse_params(params)?;
                 let added: Vec<_> = params
@@ -578,6 +695,24 @@ impl Server {
                 }
                 self.query.workspace.change(&removed, added);
                 self.scope_epoch = self.scope_epoch.wrapping_add(1);
+                self.invalidate_workspace_queries();
+                self.refresh_link_diagnostics(None, now);
+            }
+            "workspace/didChangeWatchedFiles" => {
+                let params: DidChangeWatchedFilesParams = parse_params(params)?;
+                for event in &params.changes {
+                    validate_uri(&event.uri)?;
+                    if !(1..=3).contains(&event.kind) {
+                        return Err(ResponseError::invalid_params("unknown file change type"));
+                    }
+                }
+                if !params.changes.is_empty() {
+                    // Queries revalidate disk without a watcher. Diagnostics
+                    // also refresh when a client supplies file notifications.
+                    self.scope_epoch = self.scope_epoch.wrapping_add(1);
+                    self.invalidate_workspace_queries();
+                    self.refresh_link_diagnostics(None, now);
+                }
             }
             "textDocument/didOpen" => {
                 let params: DidOpenParams = parse_params(params)?;
@@ -589,6 +724,7 @@ impl Server {
                     .insert(item.uri.clone(), now + DIAGNOSTICS_DELAY);
                 self.query.documents.insert(item.uri, document);
                 self.scope_epoch = self.scope_epoch.wrapping_add(1);
+                self.refresh_link_diagnostics(None, now);
             }
             "textDocument/didChange" => {
                 let params: DidChangeParams = parse_params(params)?;
@@ -605,7 +741,8 @@ impl Server {
                 if version != previous_version {
                     self.invalidate_queries(&uri);
                     if result.is_ok() {
-                        self.diagnostics_due.insert(uri, now + DIAGNOSTICS_DELAY);
+                        self.diagnostics_due
+                            .insert(uri.clone(), now + DIAGNOSTICS_DELAY);
                     } else {
                         // Text is now out of sync; retract the previous snapshot.
                         self.diagnostics_due.remove(&uri);
@@ -616,6 +753,7 @@ impl Server {
                             false,
                         ));
                     }
+                    self.refresh_link_diagnostics(Some(&uri), now);
                 }
                 result?;
             }
@@ -626,6 +764,8 @@ impl Server {
                     self.scope_epoch = self.scope_epoch.wrapping_add(1);
                     self.invalidate_queries(&uri);
                     self.diagnostics_due.remove(&uri);
+                    self.diagnostic_dependencies.remove(&uri);
+                    self.refresh_link_diagnostics(None, now);
                     self.outgoing
                         .push(format_diagnostics(&uri, None, Vec::new(), false));
                 }
@@ -635,7 +775,7 @@ impl Server {
                     .get("id")
                     .ok_or_else(|| ResponseError::invalid_params("cancelRequest requires an id"))?;
                 self.reject_queries(
-                    |_, query_id| query_id == id,
+                    |_, _, query_id| query_id == id,
                     ResponseError::new(-32800, "request cancelled"),
                 );
             }
@@ -659,16 +799,24 @@ impl Server {
         }
         let uri = uri.clone();
         self.diagnostics_due.remove(&uri);
-        self.query
-            .diagnostics(&uri, &self.parser, &Cancellation::default())
-            .map(Some)
+        let mut dependencies = Dependencies::default();
+        let publication = self.query.diagnostics(
+            &uri,
+            &self.parser,
+            &Cancellation::default(),
+            &mut dependencies,
+        )?;
+        self.diagnostic_dependencies.insert(uri, dependencies);
+        Ok(Some(publication))
     }
 }
 
-fn is_document_query(method: &str) -> bool {
+fn is_query(method: &str) -> bool {
     matches!(
         method,
-        "textDocument/documentSymbol"
+        "workspace/symbol"
+            | "workspace/willRenameFiles"
+            | "textDocument/documentSymbol"
             | "textDocument/foldingRange"
             | "textDocument/definition"
             | "textDocument/documentLink"
@@ -702,12 +850,15 @@ fn validate_uri(uri: &str) -> Result<(), ResponseError> {
 mod runtime_tests;
 
 #[cfg(test)]
+mod workspace_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
     const DUPLICATES: &str = "# 😀\n\n[ref]: /first\n[REF]: /second\n";
 
-    fn server() -> Server {
+    pub(super) fn server() -> Server {
         let mut server = Server::default();
         server
             .request(
@@ -721,7 +872,7 @@ mod tests {
         server
     }
 
-    fn open(server: &mut Server, uri: &str, text: &str, now: Instant) {
+    pub(super) fn open(server: &mut Server, uri: &str, text: &str, now: Instant) {
         server
             .notification(
                 "textDocument/didOpen",
@@ -733,7 +884,7 @@ mod tests {
             .unwrap();
     }
 
-    fn replace(
+    pub(super) fn replace(
         server: &mut Server,
         uri: &str,
         version: i32,
@@ -944,15 +1095,30 @@ mod tests {
         let (slow_worker, slow) = server.start_work(now + QUERY_DELAY).unwrap();
         let (fast_worker, fast) = server.start_work(now + QUERY_DELAY).unwrap();
         assert_ne!(slow_worker, fast_worker);
-        assert_eq!(fast.uri, "untitled:fast");
-        server.finish_work(worker::execute(fast_worker, fast, &server.parser));
+        assert_eq!(fast.work.source_uri(), Some("untitled:fast"));
+        server.finish_work(worker::execute(
+            fast_worker,
+            fast,
+            &server.parser,
+            &mut Default::default(),
+        ));
         assert_eq!(server.outgoing[0]["id"], 3);
         assert_eq!(server.outgoing[0]["result"][0]["name"], "Fast");
         assert!(server.start_work(now + QUERY_DELAY).is_none());
-        server.finish_work(worker::execute(slow_worker, slow, &server.parser));
+        server.finish_work(worker::execute(
+            slow_worker,
+            slow,
+            &server.parser,
+            &mut Default::default(),
+        ));
         let (worker, task) = server.start_work(now + QUERY_DELAY).unwrap();
-        assert_eq!(task.uri, "untitled:slow");
-        server.finish_work(worker::execute(worker, task, &server.parser));
+        assert_eq!(task.work.source_uri(), Some("untitled:slow"));
+        server.finish_work(worker::execute(
+            worker,
+            task,
+            &server.parser,
+            &mut Default::default(),
+        ));
         assert_eq!(server.outgoing[2]["id"], 2);
     }
 
@@ -970,9 +1136,19 @@ mod tests {
         assert_eq!(server.outgoing[0]["error"]["code"], -32800);
         queue(&mut server, json!(9), "untitled:second", now);
         let (new_worker, new) = server.start_work(now + QUERY_DELAY).unwrap();
-        server.finish_work(worker::execute(old_worker, old, &server.parser));
+        server.finish_work(worker::execute(
+            old_worker,
+            old,
+            &server.parser,
+            &mut Default::default(),
+        ));
         assert_eq!(server.outgoing.len(), 1);
-        server.finish_work(worker::execute(new_worker, new, &server.parser));
+        server.finish_work(worker::execute(
+            new_worker,
+            new,
+            &server.parser,
+            &mut Default::default(),
+        ));
         assert_eq!(server.outgoing.len(), 2);
         assert_eq!(server.outgoing[1]["id"], 9);
         assert_eq!(server.outgoing[1]["result"][0]["name"], "Second");
@@ -987,7 +1163,7 @@ mod tests {
         queue(&mut server, json!(1), uri, now);
         let (worker, task) = server.start_work(now + QUERY_DELAY).unwrap();
         // Completion can be waiting in the event channel when close/reopen arrives.
-        let finished = worker::execute(worker, task, &server.parser);
+        let finished = worker::execute(worker, task, &server.parser, &mut Default::default());
         server
             .notification(
                 "textDocument/didClose",
@@ -1044,7 +1220,8 @@ mod tests {
                     now,
                 )
                 .unwrap();
-                let finished = worker::execute(worker, task, &server.parser);
+                let finished =
+                    worker::execute(worker, task, &server.parser, &mut Default::default());
                 assert!(finished.dependencies.targets.contains(&target));
                 server.finish_work(finished);
                 if change_target {
@@ -1084,7 +1261,12 @@ mod tests {
                     now,
                 )
                 .unwrap();
-            server.finish_work(worker::execute(worker, task, &server.parser));
+            server.finish_work(worker::execute(
+                worker,
+                task,
+                &server.parser,
+                &mut Default::default(),
+            ));
             if method == "textDocument/documentLink" {
                 assert_eq!(server.outgoing[0]["error"]["code"], -32801);
             } else {
@@ -1100,13 +1282,18 @@ mod tests {
         let uri = "untitled:diagnostic-race";
         open(&mut server, uri, DUPLICATES, now);
         let (worker, task) = server.start_work(now + DIAGNOSTICS_DELAY).unwrap();
-        assert!(task.query.is_none());
-        let finished = worker::execute(worker, task, &server.parser);
+        assert!(matches!(task.work, Work::Diagnostics(_)));
+        let finished = worker::execute(worker, task, &server.parser, &mut Default::default());
         replace(&mut server, uri, 2, "# Clean", now + DIAGNOSTICS_DELAY).unwrap();
         server.finish_work(finished);
         assert!(server.outgoing.is_empty());
         let (worker, task) = server.start_work(now + DIAGNOSTICS_DELAY * 2).unwrap();
-        server.finish_work(worker::execute(worker, task, &server.parser));
+        server.finish_work(worker::execute(
+            worker,
+            task,
+            &server.parser,
+            &mut Default::default(),
+        ));
         assert_eq!(server.outgoing[0]["params"]["version"], 2);
         assert_eq!(server.outgoing[0]["params"]["diagnostics"], json!([]));
     }
@@ -1124,7 +1311,12 @@ mod tests {
             Value::Null
         );
         assert_eq!(server.outgoing[0]["error"]["code"], -32800);
-        server.finish_work(worker::execute(worker, task, &server.parser));
+        server.finish_work(worker::execute(
+            worker,
+            task,
+            &server.parser,
+            &mut Default::default(),
+        ));
         assert_eq!(server.outgoing.len(), 1);
         assert!(server.start_work(now + DIAGNOSTICS_DELAY).is_none());
         assert!(server.query.documents.is_empty());
@@ -1880,7 +2072,7 @@ mod tests {
             4
         );
         assert_eq!(navigate(&mut server, uri, 6).unwrap(), Value::Null);
-        assert!(is_document_query("textDocument/documentLink"));
+        assert!(is_query("textDocument/documentLink"));
         server
             .queue_query(json!(7), "textDocument/documentLink", params, now)
             .unwrap();

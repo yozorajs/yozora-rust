@@ -1,5 +1,7 @@
 use std::cmp::Reverse;
 
+use serde_json::{json, Value};
+
 use yozora_ast::{Definition, FootnoteDefinition, Heading, Node, Root};
 use yozora_ast_util::{collect_definitions, collect_footnote_definitions};
 
@@ -128,7 +130,7 @@ pub(super) fn heading_selection_range(heading: &Heading, range: Range) -> Range 
     }
 }
 
-fn plain_text(children: &[Node]) -> String {
+pub(super) fn plain_text(children: &[Node]) -> String {
     let mut text = String::new();
     for node in nodes(children) {
         if matches!(
@@ -382,6 +384,47 @@ pub(super) fn single_line_label(label: &str) -> String {
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+// Compare shallow payloads in source order. This avoids cloning or serializing
+// a recursive AST and keeps checks safe for deeply nested documents.
+pub(super) fn node_signature(node: &Node) -> Option<Value> {
+    let mut value = match node {
+        Node::Admonition(node) => {
+            json!({ "keyword": node.keyword, "titleCount": node.title.len() })
+        }
+        Node::Heading(node) => json!({ "depth": node.depth, "identifier": node.identifier }),
+        Node::Link(node) => json!({ "url": node.url, "title": node.title }),
+        Node::LinkReference(node) => {
+            json!({ "identifier": node.identifier, "label": node.label, "referenceType": node.reference_type })
+        }
+        Node::FootnoteDefinition(node) => {
+            json!({ "identifier": node.identifier, "label": node.label })
+        }
+        Node::List(node) => {
+            json!({ "ordered": node.ordered, "orderType": node.order_type, "start": node.start, "marker": node.marker, "spread": node.spread })
+        }
+        Node::ListItem(node) => json!({ "status": node.status }),
+        Node::Table(node) => json!({ "columns": node.columns }),
+        Node::Blockquote(_)
+        | Node::Delete(_)
+        | Node::Emphasis(_)
+        | Node::Footnote(_)
+        | Node::Paragraph(_)
+        | Node::Strong(_)
+        | Node::TableRow(_)
+        | Node::TableCell(_) => json!({}),
+        Node::Custom(_) => return None,
+        _ if node.children().is_none() => serde_json::to_value(node).ok()?,
+        _ => return None,
+    };
+    let object = value.as_object_mut()?;
+    object.remove("position");
+    object.insert("type".into(), Value::String(node.node_type().to_string()));
+    if let Some(children) = node.children() {
+        object.insert("childrenCount".into(), json!(children.len()));
+    }
+    Some(value)
 }
 
 #[cfg(test)]

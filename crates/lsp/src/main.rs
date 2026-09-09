@@ -4,14 +4,18 @@ mod completion;
 mod diagnostics;
 mod document;
 mod files;
+mod link_diagnostics;
 mod links;
 mod protocol;
 mod query;
+mod refactor;
 mod rename;
 mod resource_completion;
+mod resource_edit;
 mod server;
 mod transport;
 mod worker;
+mod workspace_index;
 
 use std::io;
 use std::process::ExitCode;

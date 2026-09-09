@@ -51,6 +51,17 @@ impl Document {
         self.version
     }
 
+    pub fn text(&self) -> Result<&str, ResponseError> {
+        self.ensure_synchronized()?;
+        Ok(&self.text)
+    }
+
+    /// Retain a disk snapshot for refactor validation without retaining its AST.
+    pub fn shared_text(&self) -> Result<Arc<String>, ResponseError> {
+        self.ensure_synchronized()?;
+        Ok(Arc::clone(&self.text))
+    }
+
     pub fn new(version: i32, text: String) -> Result<Self, ResponseError> {
         check_size(text.len())?;
         Ok(Self {
@@ -167,8 +178,13 @@ impl Document {
     /// Text identity also distinguishes close/reopen when the client reuses a
     /// version number. Only the live owner may adopt a worker's cache.
     pub fn matches(&self, snapshot: &Self) -> bool {
-        self.synchronized
-            && snapshot.synchronized
+        self.synchronized && snapshot.synchronized && self.same_revision(snapshot)
+    }
+
+    /// Diagnostics can observe an unavailable target without using its stale
+    /// text. Its version, identity and synchronization status must still match.
+    pub fn same_revision(&self, snapshot: &Self) -> bool {
+        self.synchronized == snapshot.synchronized
             && self.version == snapshot.version
             && Arc::ptr_eq(&self.text, &snapshot.text)
     }

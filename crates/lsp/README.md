@@ -38,7 +38,7 @@ local navigation is limited to the source file's directory.
 
 - `textDocument/didOpen`, `didChange`, and `didClose`: in-memory document sync,
   with both incremental edits and full replacements. Positions use UTF-16.
-- `$/cancelRequest`: cancel pending or running document queries.
+- `$/cancelRequest`: cancel pending or running document and workspace queries.
   Each cancelled request receives `RequestCancelled`; unknown or completed IDs
   are ignored. Newer edits, close, and reopen invalidate pending and running queries
   for that document with `ContentModified`. A running
@@ -50,6 +50,12 @@ local navigation is limited to the source file's directory.
   and do not change the hierarchy of subsequent headings outside the container.
   Outline nesting is capped at 32 levels for client JSON compatibility; deeper
   sections are flattened while retaining every heading.
+- `workspace/symbol`: search headings in open buffers and unopened Markdown files
+  under the local workspace roots. Results are flat `SymbolInformation` entries
+  with heading selection ranges and parent names, including nested headings.
+  Matching uses a trimmed query and Unicode lowercase substrings; an empty query
+  matches every heading. Results are ordered by URI and source position. In Neovim,
+  use `vim.lsp.buf.workspace_symbol('intro')` to search and navigate from the list.
 - `textDocument/foldingRange`: heading sections, code, math, admonitions,
   blockquotes, lists, tables, HTML, and multiline definitions. Heading sections
   end at the next heading of equal or lower depth in the same block container,
@@ -71,7 +77,14 @@ local navigation is limited to the source file's directory.
   HTTPS, and mailto links are returned without fetching their contents. Local
   fragments are preserved as URI fragments for the client; heading validation
   and exact source positions are provided by `textDocument/definition`.
-- `workspace/didChangeWorkspaceFolders`: update the local navigation roots.
+- `workspace/didChangeWorkspaceFolders`: update local file access and indexing
+  roots, and refresh link diagnostics.
+- `workspace/didChangeWatchedFiles`: invalidate pending and running workspace
+  queries and refresh link diagnostics when the client supplies file changes.
+  Each workspace query discovers files and validates cached content afresh. The
+  server does not register a watcher; without file notifications, external disk
+  changes reach diagnostics when they next run, for example after a source edit,
+  or when a buffer/scope event triggers a refresh.
 - `textDocument/hover`: links and images show their destination and title;
   footnotes show a text summary. Resolved references and their active definitions
   use the same information. Previews are limited to 2,000 Unicode characters,
@@ -122,34 +135,62 @@ local navigation is limited to the source file's directory.
   Existing multiline labels are supported; the new name must be a valid single-line
   Markdown label spelling, at most 999 characters, without surrounding whitespace.
   Required escapes are part of the spelling, for example `A\]B`.
+  At heading text, these methods also rename ATX and setext headings, preserving
+  their markers. The new name is plain text, at most 1,000 characters, nonempty
+  and single-line without surrounding whitespace; Markdown punctuation is escaped
+  automatically. The server updates same-document and workspace links to every
+  heading whose ID changes, including duplicate-suffix shifts. For example,
+  renaming the first `Intro` heading to `Other` changes IDs
+  `intro, intro-2, other` to `other, intro, other-2`; links continue to identify
+  the same headings. References within heading text retain label-rename priority.
+- `workspace/willRenameFiles`: update links when regular files move within
+  explicit local workspace roots, including Markdown files and linked assets.
+  Incoming links and moved documents' relative outgoing links are rewritten;
+  query strings and fragments are preserved. Up to 128 files can move in one
+  request, including swaps. Directory moves are not supported, and the advertised
+  file-operation filter matches files only.
+  `workspace/didRenameFiles` invalidates workspace analysis and refreshes link
+  diagnostics; buffer identities still follow `didClose`/`didOpen`.
 - `textDocument/publishDiagnostics`: warnings for duplicate link and footnote
   definitions, following the same identifier normalization and declaration scope
   as navigation. The first definition remains active; later declarations produce
   `duplicate-link-definition` or `duplicate-footnote-definition`. Locations use
   the parser's definition ranges. Clients supporting `relatedInformation` receive
   a location pointing to the active definition; clients supporting `versionSupport`
-  receive the document version. Up to 1,000 warnings are published in source order.
+  receive the document version. Written local destinations also report
+  `missing-file` for nonexistent targets and `missing-anchor` for absent heading
+  IDs in known Markdown text. Links, images, and reference definitions are checked;
+  a definition's destination is diagnosed once, irrespective of its reference count.
+  Target buffers use unsaved text. Unreadable, out-of-sync, invalid UTF-8,
+  oversized, and over-budget targets are treated as unknown and produce no link
+  warning. Fragments in closed non-Markdown files, external URLs, and disallowed
+  paths are skipped.
+  Up to 1,000 combined warnings are published in source order.
   Publications are debounced by 150 ms per document, so intermediate edit versions
-  can be skipped during continuous typing.
+  can be skipped during continuous typing. Editing a target refreshes its known
+  referrers without changing their source versions; opening/closing buffers and
+  file/scope notifications also refresh sources with local file destinations.
 
-Queries start from open buffers, including unsaved documents. Target buffers use
+Document queries start from open buffers, including unsaved documents. Target buffers use
 their unsaved text; closed Markdown files are read on demand for anchor navigation.
-Workspace indexing, heading rename, and formatting are
-outside the current capabilities. Unresolved references remain ordinary text,
-following the parser's fallback behavior.
+Formatting, semantic tokens, code actions, and cross-document heading-reference
+queries are outside the current capabilities. Unresolved reference labels remain
+ordinary text, following the parser's fallback behavior.
 
 ## Implementation contracts
 
 The server owns each document's text, version, line index, and cached AST. Edits
 are processed serially and each batch is applied atomically. Opening a document
 or accepting a change schedules diagnostics with a 150 ms delay. Further edits to
-that document reset its deadline. Document queries enter a short 5 ms queue so
+that document reset its deadline. Queries enter a short 5 ms queue so
 already-arriving edits and cancellations can retire obsolete work before parsing.
 They do not wait for the diagnostic deadline. An accepted newer change invalidates
 pending and running queries for that URI, including when its edit batch is malformed. Stale
 changes leave waiting queries intact. Reopening also invalidates them when the
 version number is reused. Queries and diagnostics reuse the same AST until the
 next edit invalidates it.
+Open, accepted changes, close, workspace-folder changes, and valid watched-file
+or file-rename notifications also retire workspace queries with `ContentModified`.
 Text, line indexes, and parsed ASTs are shared through `Arc`. Each analysis gets
 a snapshot of open buffers, workspace roots, and client capabilities. Workers
 only update their snapshot's AST caches; the server adopts those caches only
@@ -163,10 +204,11 @@ Other batches retain sequential coordinates, including touching ranges, clamped
 positions, and edits that join CR/LF boundaries. Every intermediate document must
 fit the size limit, even when a later edit would shrink it.
 
-Document requests are decoded into typed parameters before scheduling; unused
+Query requests are decoded into typed parameters before scheduling; unused
 client extension fields are discarded. The pending queue admits at most 128
 requests with a combined 1 MiB accounting budget for request records and their
-owned strings, including IDs, URIs, and rename text. The two active worker tasks
+owned strings, including IDs, URIs, rename text, file-operation paths, and workspace
+query text. The two active worker tasks
 are outside this pending budget. An over-budget request receives JSON-RPC error
 `-32000` immediately and may be retried after outstanding queries complete.
 Dispatch, cancellation, document invalidation, and shutdown release queue capacity.
@@ -176,24 +218,29 @@ The message loop checks deadlines after each input or completed analysis and
 while idle. Two bounded workers execute queries and diagnostics, including their
 parsing and filesystem access. Each worker owns its parser. One task per source
 document prevents repeated requests for one slow buffer from occupying both
-workers; eligible work for other documents can proceed. Queries and diagnostics
-share deadline order among eligible tasks. Editing one buffer does not reset
-another buffer's deadline.
+workers. Workspace symbol searches and all rename requests share a separate scope
+with at most one active operation, so other document queries can use the second
+worker. A rename reserves this scope before its subject is resolved by a worker.
+Queries and diagnostics share deadline order among eligible tasks. Editing a
+buffer resets its own diagnostic deadline and those of its known link referrers.
 
 Cancellation and shutdown do not wait for workers. Each task has an independent
 cancellation flag written by the server when its response is retired, its source
 changes or closes, or the server stops. Workers check it before analysis, after
-parsing a document, between completion context/candidate probes, and while building
-and validating rename edits. Cancelled work stops at the next check without
+parsing a document, during workspace traversal and symbol collection, between
+completion context/candidate probes, and while building and validating rename edits.
+Cancelled work stops at the next check without
 returning partial results. Completed document ASTs can still be adopted when their
 live revisions match. Running parser calls and filesystem operations are not
 preempted; when both workers are busy, further analysis waits. Results are published only
 while their request remains active and the source plus any target buffers actually
 read by the query still match their snapshots. File queries also check an epoch
-for workspace-folder changes and open/close events that could change URI alias
+for workspace-folder changes, watched-file hints, and open/close events that could change URI alias
 selection. Stale query results return `ContentModified`; stale diagnostics are
-discarded. A worker catches an analysis panic, returns `InternalError` for the
-query, and recreates its parser before taking more work. Failed diagnostics are
+discarded and rescheduled if the source remains synchronized. Only current
+diagnostic results replace the source's target dependencies, including unavailable
+target revisions so recovery can refresh referrers. A worker catches an analysis panic, returns `InternalError` for the
+query, recreates its parser, and clears its workspace cache before taking more work. Failed diagnostics are
 cleared and logged to stderr.
 
 Built-in inline containers yield child token lists to an explicit parse stack,
@@ -215,7 +262,8 @@ percent-decoded once and matched exactly, without further case folding.
 
 Local navigation accepts file URIs with an empty authority or `localhost`.
 Relative paths use the source file's directory. Untitled/non-file buffers support
-same-buffer anchors and external document links. Paths and fragments support
+same-buffer anchors, external document links, and absolute local paths or file URIs
+inside explicit workspace roots; no relative base is inferred. Paths and fragments support
 percent-encoded Unicode and delimiters; `+` remains a literal plus. File queries
 are separated from the path and preserved in document links. Paths must remain
 within `workspaceFolders` (or `rootUri` when folders are absent); without a
@@ -228,11 +276,46 @@ the existing ancestors of unsaved files. Sensitive paths such as `.ssh`, `.env*`
 Open file buffers are matched by requested URI first, then normalized lexical
 path, then canonical aliases, retaining the selected buffer's original URI.
 An out-of-sync target returns `ContentModified`
-without falling back to disk. Closed targets are never cached: anchor lookup reads
+for navigation and completion, while link diagnostics omit uncertain anchors;
+neither falls back to disk. Anchor lookup reads closed targets afresh, using
 only regular UTF-8 `.md`, `.markdown`, `.mdown`, `.mkd`, `.mkdn`, or `.yozora` files,
 case-insensitively, with the same 16 MiB limit as open buffers. Navigation without
 a fragment only checks file metadata. No extensions, directory index files, or
 website routes are inferred. External URLs are never fetched.
+
+Workspace indexing scans only explicit local roots; without them it searches open
+buffers, including untitled and remote buffers. Open buffers also participate
+outside the configured roots, using their client-supplied text. Local buffer URIs
+follow the same sensitive-path and URI restrictions as navigation. Open text
+overrides disk text. Aliases inside the roots are grouped by canonical path,
+preferring the canonical URI, then an equivalent lexical path, then the first URI
+in lexical order. Results preserve the selected buffer's original URI. An
+out-of-sync selected buffer makes the query return `ContentModified`.
+
+Disk discovery deduplicates overlapping roots and symlink cycles. The navigation
+access boundary applies, and paths are checked again before reading in case they
+changed after discovery. In addition to sensitive paths, indexing skips `target`,
+`node_modules`, `.cache`, and `.venv` directory trees below each explicit root.
+A root placed inside one of these directories remains searchable. It does not interpret
+`.gitignore`. Each query rediscovers files and reads eligible contents; creation,
+modification, renaming, and deletion are visible on the next query without watcher
+registration. The filesystem is sampled during a request; subsequent queries
+revalidate external changes.
+Each worker caches disk text and heading summaries after comparing the full text,
+so unchanged files avoid parsing even when timestamps are unreliable. Disk ASTs
+are released after summarization. Open buffers reuse their document AST caches.
+
+One workspace query permits up to 128 roots, 20,000 directory entries (including
+skipped names), 2,000 candidate files/buffers, 32 MiB of source text and attempted
+reads (including invalid UTF-8), and 8 MiB of
+heading summary payload. The existing 16 MiB per-document reader limit applies;
+ineligible, unreadable, oversized, or non-UTF-8 files are omitted. Unreadable
+directories and exceeded scan budgets return error `-32000`; narrow the roots or
+close buffers before retrying. Each worker's disk cache has a 40 MiB payload budget
+and may evict entries without affecting results. A response is limited to 1,000
+symbols and a conservative 1 MiB budget for result strings, structure, and JSON
+escaping. Exceeding a response budget returns `-32000` with a request to narrow
+the query, never a silently truncated success response.
 
 Completion reads the source text and AST through one immutable snapshot of the
 document version. Its lexical context handles unfinished syntax, while AST
@@ -260,11 +343,36 @@ out-of-sync open target instead of using disk contents.
 
 Rename returns a WorkspaceEdit and leaves server text unchanged until the client
 sends `didChange`. Clients advertising `workspace.workspaceEdit.documentChanges`
-receive edits tied to the document version; other clients receive `changes`.
+receive versioned edits for open buffers and null versions for closed files;
+other clients receive `changes`. File-operation edits address the old URIs: apply
+the edits before moving files, then send `didRenameFiles` and synchronize renamed
+buffers through `didClose`/`didOpen`. The server never writes or moves files itself.
 Before returning any edits, the server reparses the proposed text and checks AST
 structure, display content, resources, and reference bindings. Conflicting names,
 unintended activation of plain text references, syntax changes, and edits exceeding
 the document size limit are rejected as a whole.
+
+Heading ID changes in local files require an explicit root containing the source;
+changes that retain IDs, including nested headings, can remain local. Untitled
+headings update same-buffer anchors. Renames reject new IDs that would activate
+existing unresolved anchor links, and reject removal of an addressable ID.
+Workspace refactors share index discovery and open-buffer overlay rules, but
+reject ambiguous open URI aliases and any unreadable eligible Markdown source.
+File operations require canonical paths, reject symlink operations, and reject
+overwriting a destination outside the same batch. File autolinks whose visible
+text would change are also rejected. A rejected operation returns no partial edits.
+Before replying, the server rediscovers files, rechecks roots and aliases, and
+rereads closed sources to detect changes during analysis with `ContentModified`.
+External changes after this final check remain the client's responsibility.
+
+Workspace refactors allow 128 roots, 20,000 directory entries, 2,000 candidate
+files/buffers, and 32 MiB of source text. They also limit total parse input to
+128 MiB, written resources to 20,000, top-level headings in the renamed document
+to 20,000, edits to 10,000, and conservative edit output to 4 MiB. Exceeding a
+budget rejects the whole operation. Link diagnostics separately inspect at most
+1,000 written destinations with 1 MiB of URL input and 32 MiB of target text per
+source analysis. Each target is parsed at most once per analysis; targets with
+more than 20,000 top-level headings are unknown for anchor validation.
 
 Versions must increase within an open session. Stale changes are ignored. An
 invalid newer edit leaves the previous text intact but suspends queries with
@@ -304,12 +412,16 @@ It requires Neovim 0.11 or later in `PATH` and is ignored by default:
 
 ```sh
 cargo test -p yozora-lsp --test neovim -- --ignored
+cargo test --release -p yozora-lsp --test neovim -- --ignored
 ```
 
 The test uses factory defaults and a temporary workspace with spaces and Unicode
 in its path. It covers `.yozora` attachment, workspace roots, unsaved target
-navigation, UTF-16 completion edits, native rename and incremental synchronization,
-diagnostic updates, a 2,001-edit rename, deep documents, cancellation, close/reopen,
+navigation, native workspace symbol lists and disk refresh, UTF-16 completion
+edits, label and heading rename, file-operation edits followed by a native file
+move, and incremental synchronization. It also checks link diagnostic refresh
+after unsaved target edits and watched file creation/edit/deletion, a 2,001-edit
+rename, deep documents, cancellation, close/reopen,
 and graceful shutdown. It exercises native client APIs and edit application;
 interactive UI rendering and user plugin configurations are outside its coverage.
 
@@ -336,3 +448,16 @@ Queue tests cover unknown parameter fields, count and byte budgets, and capacity
 release. A blocked-worker test fills the queue and verifies overload responses,
 cancellation, recovery for another buffer, and shutdown. Panic recovery also
 includes already-materialized deep inline and block results.
+Workspace tests cover unopened and unsaved files, URI aliases, Unicode and nested
+headings, content-cache reuse, edits with unchanged lengths, create/rename/delete,
+root changes, symlink cycles and replacements, scan/cache/response budgets, and
+out-of-sync buffers. A framed-message test blocks disk parsing to verify that
+document requests, cancellation, buffer changes, and shutdown remain responsive.
+Refactor tests cover duplicate heading ID shifts, Markdown preservation, nested
+and multiline headings, file swaps, relative-link rebasing, canonical-path and
+alias restrictions, cancellation, disk changes during analysis, and both
+WorkspaceEdit formats. Diagnostic tests cover exact anchors, shared target parsing,
+written definitions, uncertainty, target-buffer lifecycle, and watched files. A
+framed-message test changes a target while the first source analysis is blocked,
+verifying that stale warnings are discarded and diagnostics recover without a
+source edit.

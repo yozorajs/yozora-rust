@@ -1,6 +1,6 @@
 use std::ops::Range as ByteRange;
 
-use serde_json::{json, Value};
+use serde_json::Value;
 use yozora_ast::{Node, ReferenceType, Root};
 use yozora_core_parser::ParseOptions;
 use yozora_parser::YozoraParser;
@@ -357,44 +357,9 @@ fn preserves_semantics(
     }
 }
 
-// Compare shallow payloads in source order. This avoids cloning or serializing
-// a recursive AST and keeps checks safe for deeply nested documents.
 fn signature(node: &Node, affected: bool) -> Option<Value> {
-    let mut value = match node {
-        Node::Admonition(node) => {
-            json!({ "keyword": node.keyword, "titleCount": node.title.len() })
-        }
-        Node::Heading(node) => json!({ "depth": node.depth, "identifier": node.identifier }),
-        Node::Link(node) => json!({ "url": node.url, "title": node.title }),
-        Node::LinkReference(node) => {
-            json!({ "identifier": node.identifier, "label": node.label, "referenceType": node.reference_type })
-        }
-        Node::FootnoteDefinition(node) => {
-            json!({ "identifier": node.identifier, "label": node.label })
-        }
-        Node::List(node) => {
-            json!({ "ordered": node.ordered, "orderType": node.order_type, "start": node.start, "marker": node.marker, "spread": node.spread })
-        }
-        Node::ListItem(node) => json!({ "status": node.status }),
-        Node::Table(node) => json!({ "columns": node.columns }),
-        Node::Blockquote(_)
-        | Node::Delete(_)
-        | Node::Emphasis(_)
-        | Node::Footnote(_)
-        | Node::Paragraph(_)
-        | Node::Strong(_)
-        | Node::TableRow(_)
-        | Node::TableCell(_) => json!({}),
-        Node::Custom(_) => return None,
-        _ if node.children().is_none() => serde_json::to_value(node).ok()?,
-        _ => return None,
-    };
+    let mut value = crate::analysis::node_signature(node)?;
     let object = value.as_object_mut()?;
-    object.remove("position");
-    object.insert("type".into(), Value::String(node.node_type().to_string()));
-    if let Some(children) = node.children() {
-        object.insert("childrenCount".into(), json!(children.len()));
-    }
     if affected {
         object.remove("identifier");
         object.remove("label");

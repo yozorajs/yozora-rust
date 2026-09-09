@@ -1,9 +1,11 @@
 use std::collections::VecDeque;
+use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
+use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 
@@ -104,6 +106,15 @@ impl Client {
         notification["params"].clone()
     }
 
+    fn diagnostics_for(&mut self, uri: &str) -> Value {
+        loop {
+            let publication = self.diagnostics();
+            if publication["uri"] == uri {
+                return publication;
+            }
+        }
+    }
+
     fn notify(&mut self, method: &str, params: Value) {
         self.send(json!({ "jsonrpc": "2.0", "method": method, "params": params }));
     }
@@ -163,6 +174,326 @@ impl Drop for Client {
 
 fn document(uri: &str) -> Value {
     json!({ "textDocument": { "uri": uri } })
+}
+
+fn edit_text(source: &str, edits: &[Value]) -> String {
+    fn offset(text: &str, position: &Value) -> usize {
+        let mut start = 0;
+        for _ in 0..position["line"].as_u64().unwrap() {
+            start += text[start..].find('\n').unwrap() + 1;
+        }
+        let expected = position["character"].as_u64().unwrap() as usize;
+        let mut units = 0;
+        for (index, character) in text[start..].char_indices() {
+            if units == expected {
+                return start + index;
+            }
+            assert!(!matches!(character, '\r' | '\n'));
+            units += character.len_utf16();
+            assert!(units <= expected, "edit split a surrogate pair");
+        }
+        assert_eq!(units, expected);
+        text.len()
+    }
+    let mut edits: Vec<_> = edits.iter().collect();
+    edits.sort_by_key(|edit| {
+        (
+            edit["range"]["start"]["line"].as_u64().unwrap(),
+            edit["range"]["start"]["character"].as_u64().unwrap(),
+        )
+    });
+    let mut text = source.to_string();
+    for edit in edits.into_iter().rev() {
+        let start = offset(&text, &edit["range"]["start"]);
+        let end = offset(&text, &edit["range"]["end"]);
+        text.replace_range(start..end, edit["newText"].as_str().unwrap());
+    }
+    text
+}
+
+fn workspace_changes(edit: &Value) -> Vec<(&str, Option<i32>, &[Value])> {
+    if let Some(documents) = edit["documentChanges"].as_array() {
+        documents
+            .iter()
+            .map(|document| {
+                (
+                    document["textDocument"]["uri"].as_str().unwrap(),
+                    document["textDocument"]["version"]
+                        .as_i64()
+                        .map(|version| version as i32),
+                    document["edits"].as_array().unwrap().as_slice(),
+                )
+            })
+            .collect()
+    } else {
+        edit["changes"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(uri, edits)| (uri.as_str(), None, edits.as_array().unwrap().as_slice()))
+            .collect()
+    }
+}
+
+struct TestDirectory(PathBuf);
+
+impl TestDirectory {
+    fn new() -> Self {
+        let path = std::env::temp_dir().join(format!(
+            "yozora-lsp-stdio-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&path).unwrap();
+        Self(path.canonicalize().unwrap())
+    }
+
+    fn uri(&self, relative: &str) -> String {
+        let path = self.0.join(relative).to_string_lossy().replace('\\', "/");
+        let encoded: String = path
+            .bytes()
+            .map(|byte| {
+                if byte.is_ascii_alphanumeric() || b"/-._~:".contains(&byte) {
+                    (byte as char).to_string()
+                } else {
+                    format!("%{byte:02X}")
+                }
+            })
+            .collect();
+        format!(
+            "file://{}{encoded}",
+            if encoded.starts_with('/') { "" } else { "/" }
+        )
+    }
+}
+
+impl Drop for TestDirectory {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+#[test]
+fn workspace_symbols_refresh_disk_and_buffer_lifecycles_over_stdio() {
+    let directory = TestDirectory::new();
+    fs::create_dir(directory.0.join("docs")).unwrap();
+    let relative = "docs/指南 %.MD";
+    let uri = directory.uri(relative);
+    fs::write(directory.0.join(relative), "# Disk 😀\r\n").unwrap();
+    let mut client = Client::start();
+    let initialized = client.request("initialize", json!({
+        "capabilities": {}, "workspaceFolders": [{ "uri": directory.uri(""), "name": "workspace" }]
+    }));
+    assert_eq!(
+        initialized["result"]["capabilities"]["workspaceSymbolProvider"],
+        true
+    );
+    client.notify("initialized", json!({}));
+    assert_eq!(
+        client.request("workspace/symbol", json!({}))["error"]["code"],
+        -32602
+    );
+    let result = client.request("workspace/symbol", json!({ "query": "dISK" }));
+    assert_eq!(result["result"].as_array().unwrap().len(), 1);
+    assert_eq!(result["result"][0]["name"], "Disk 😀");
+    assert_eq!(
+        result["result"][0]["location"],
+        json!({
+            "uri": uri, "range": { "start": { "line": 0, "character": 2 }, "end": { "line": 0, "character": 9 } }
+        })
+    );
+    client.open(&uri, "# Unsaved 😀");
+    assert_eq!(
+        client.request("workspace/symbol", json!({ "query": "Disk" }))["result"],
+        json!([])
+    );
+    assert_eq!(
+        client.request("workspace/symbol", json!({ "query": "" }))["result"][0]["name"],
+        "Unsaved 😀"
+    );
+    client.notify("textDocument/didChange", json!({
+        "textDocument": { "uri": uri, "version": 2 }, "contentChanges": [{ "text": "# New buffer" }]
+    }));
+    assert_eq!(
+        client.request("workspace/symbol", json!({ "query": "new" }))["result"][0]["name"],
+        "New buffer"
+    );
+    client.notify(
+        "textDocument/didChange",
+        json!({
+            "textDocument": { "uri": uri, "version": 3 }, "contentChanges": null
+        }),
+    );
+    assert_eq!(
+        client.request("workspace/symbol", json!({ "query": "" }))["error"]["code"],
+        -32801
+    );
+    client.notify("textDocument/didChange", json!({
+        "textDocument": { "uri": uri, "version": 4 }, "contentChanges": [{ "text": "# Recovered" }]
+    }));
+    assert_eq!(
+        client.request("workspace/symbol", json!({ "query": "" }))["result"][0]["name"],
+        "Recovered"
+    );
+    client.notify("textDocument/didClose", document(&uri));
+    assert_eq!(
+        client.request("workspace/symbol", json!({ "query": "" }))["result"][0]["name"],
+        "Disk 😀"
+    );
+
+    // Disk refresh does not rely on watched-file notifications or mtime precision.
+    fs::write(directory.0.join(relative), "# Note 😀\r\n").unwrap();
+    assert_eq!(
+        client.request("workspace/symbol", json!({ "query": "note" }))["result"][0]["name"],
+        "Note 😀"
+    );
+    fs::write(directory.0.join("created.yozora"), "# Created").unwrap();
+    assert_eq!(
+        client.request("workspace/symbol", json!({ "query": "created" }))["result"][0]["location"]
+            ["uri"],
+        directory.uri("created.yozora")
+    );
+    fs::rename(
+        directory.0.join("created.yozora"),
+        directory.0.join("moved.markdown"),
+    )
+    .unwrap();
+    let moved = client.request("workspace/symbol", json!({ "query": "created" }));
+    assert_eq!(moved["result"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        moved["result"][0]["location"]["uri"],
+        directory.uri("moved.markdown")
+    );
+    fs::remove_file(directory.0.join("moved.markdown")).unwrap();
+    assert_eq!(
+        client.request("workspace/symbol", json!({ "query": "created" }))["result"],
+        json!([])
+    );
+    client.notify(
+        "workspace/didChangeWorkspaceFolders",
+        json!({ "event": {
+            "added": [], "removed": [{ "uri": directory.uri(""), "name": "workspace" }]
+        }}),
+    );
+    assert_eq!(
+        client.request("workspace/symbol", json!({ "query": "" }))["result"],
+        json!([])
+    );
+    client.shutdown();
+}
+
+#[test]
+fn heading_and_file_renames_round_trip_through_both_workspace_edit_formats() {
+    for versioned in [false, true] {
+        let directory = TestDirectory::new();
+        let uri = directory.uri("guide 中文.md");
+        let referrer_uri = directory.uri("source.md");
+        let mut target_text =
+            "# Intro 😀\r\n\r\n## Intro 😀\r\n\r\n[peer](peer.md#peer)\r\n".to_string();
+        let mut referrer_text = "😀 [first](guide%20%E4%B8%AD%E6%96%87.md#intro-%F0%9F%98%80 \"Title\")\r\n[second](guide%20%E4%B8%AD%E6%96%87.md#intro-%F0%9F%98%80-2)\r\n".to_string();
+        fs::write(directory.0.join("guide 中文.md"), "# Stale disk title").unwrap();
+        fs::write(directory.0.join("source.md"), &referrer_text).unwrap();
+        fs::write(directory.0.join("peer.md"), "# Peer").unwrap();
+        let mut client = Client::start();
+        let initialized = client.request("initialize", json!({
+            "rootUri": directory.uri(""), "capabilities": { "workspace": { "workspaceEdit": { "documentChanges": versioned } } }
+        }));
+        assert_eq!(
+            initialized["result"]["capabilities"]["workspace"]["fileOperations"]["willRename"]
+                ["filters"][0]["pattern"]["matches"],
+            "file"
+        );
+        client.notify("initialized", json!({}));
+        client.open(&uri, &target_text);
+        let params =
+            json!({ "textDocument": { "uri": uri }, "position": { "line": 0, "character": 3 } });
+        let prepared = client.request("textDocument/prepareRename", params.clone());
+        assert_eq!(prepared["result"]["placeholder"], "Intro 😀");
+        assert_eq!(prepared["result"]["range"]["end"]["character"], 10);
+        let mut params = params;
+        params["newName"] = json!("重命名 🦀");
+        let response = client.request("textDocument/rename", params);
+        assert!(response.get("error").is_none(), "{response}");
+        let changes = workspace_changes(&response["result"]);
+        assert_eq!(changes.len(), 2);
+        for (changed_uri, version, edits) in changes {
+            if changed_uri == uri {
+                assert_eq!(version, versioned.then_some(1));
+                target_text = edit_text(&target_text, edits);
+                client.notify("textDocument/didChange", json!({
+                    "textDocument": { "uri": uri, "version": 2 },
+                    "contentChanges": edits.iter().rev().map(|edit| json!({ "range": edit["range"], "text": edit["newText"] })).collect::<Vec<_>>()
+                }));
+            } else {
+                assert_eq!(changed_uri, referrer_uri);
+                assert!(
+                    version.is_none(),
+                    "closed file edits must use a null version"
+                );
+                referrer_text = edit_text(&referrer_text, edits);
+                fs::write(directory.0.join("source.md"), &referrer_text).unwrap();
+            }
+        }
+        assert!(target_text.starts_with("# 重命名 🦀\r\n"));
+        assert!(referrer_text.contains("#%E9%87%8D%E5%91%BD%E5%90%8D-%F0%9F%A6%80"));
+        assert!(!referrer_text.contains("%F0%9F%98%80-2"));
+        client.open(&referrer_uri, &referrer_text);
+        for (line, character, target_line) in [(0, 5, 0), (1, 3, 2)] {
+            let definition = client.request("textDocument/definition", json!({
+                "textDocument": { "uri": referrer_uri }, "position": { "line": line, "character": character }
+            }));
+            assert_eq!(definition["result"]["uri"], uri);
+            assert_eq!(definition["result"]["range"]["start"]["line"], target_line);
+        }
+
+        let moved_uri = directory.uri("docs/moved 中文.md");
+        let files = json!({ "files": [{ "oldUri": uri, "newUri": moved_uri }] });
+        let response = client.request("workspace/willRenameFiles", files.clone());
+        assert!(response.get("error").is_none(), "{response}");
+        for (changed_uri, version, edits) in workspace_changes(&response["result"]) {
+            let next_version = if changed_uri == uri {
+                assert_eq!(version, versioned.then_some(2));
+                target_text = edit_text(&target_text, edits);
+                3
+            } else {
+                assert_eq!(changed_uri, referrer_uri);
+                assert_eq!(version, versioned.then_some(1));
+                referrer_text = edit_text(&referrer_text, edits);
+                2
+            };
+            client.notify("textDocument/didChange", json!({
+                "textDocument": { "uri": changed_uri, "version": next_version },
+                "contentChanges": edits.iter().rev().map(|edit| json!({ "range": edit["range"], "text": edit["newText"] })).collect::<Vec<_>>()
+            }));
+        }
+        assert!(target_text.contains("[peer](../peer.md#peer)"));
+        assert!(referrer_text.contains("docs/moved%20%E4%B8%AD%E6%96%87.md#"));
+        client.notify("textDocument/didClose", document(&uri));
+        fs::write(directory.0.join("guide 中文.md"), &target_text).unwrap();
+        fs::create_dir(directory.0.join("docs")).unwrap();
+        fs::rename(
+            directory.0.join("guide 中文.md"),
+            directory.0.join("docs/moved 中文.md"),
+        )
+        .unwrap();
+        client.notify("workspace/didRenameFiles", files);
+        client.open(&moved_uri, &target_text);
+        let definition = client.request(
+            "textDocument/definition",
+            json!({
+                "textDocument": { "uri": referrer_uri }, "position": { "line": 0, "character": 5 }
+            }),
+        );
+        assert_eq!(definition["result"]["uri"], moved_uri);
+        assert_eq!(definition["result"]["range"]["start"]["line"], 0);
+        let symbols = client.request("workspace/symbol", json!({ "query": "重命名" }));
+        assert_eq!(symbols["result"].as_array().unwrap().len(), 1);
+        assert_eq!(symbols["result"][0]["location"]["uri"], moved_uri);
+        client.shutdown();
+    }
 }
 
 #[test]
@@ -441,6 +772,94 @@ fn heading_navigation_and_document_links_follow_utf16_edits_over_stdio() {
 }
 
 #[test]
+fn link_diagnostics_follow_target_lifecycle_without_source_edits() {
+    let directory = TestDirectory::new();
+    let source = directory.uri("source.md");
+    let target = directory.uri("target.md");
+    let mut client = Client::start();
+    let initialized = client.request(
+        "initialize",
+        json!({
+            "rootUri": directory.uri(""),
+            "capabilities": { "textDocument": { "publishDiagnostics": { "versionSupport": true } } }
+        }),
+    );
+    assert!(initialized.get("error").is_none(), "{initialized}");
+    client.notify("initialized", json!({}));
+    client.open(
+        &source,
+        "😀 [go](target.md#intro)\n\n[ref]: https://example.test/one\n[REF]: https://example.test/two\n",
+    );
+    let expect = |client: &mut Client, link_code: Option<&str>| {
+        let publication = client.diagnostics_for(&source);
+        assert_eq!(publication["version"], 1, "source version must not change");
+        let diagnostics = publication["diagnostics"].as_array().unwrap();
+        let codes: Vec<_> = diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic["code"].as_str().unwrap())
+            .collect();
+        let expected: Vec<_> = link_code
+            .into_iter()
+            .chain(["duplicate-link-definition"])
+            .collect();
+        assert_eq!(codes, expected, "{publication}");
+        if link_code.is_some() {
+            assert_eq!(
+                diagnostics[0]["range"]["start"],
+                json!({ "line": 0, "character": 3 })
+            );
+        }
+    };
+    expect(&mut client, Some("missing-file"));
+    client.open(&target, "# Other");
+    expect(&mut client, Some("missing-anchor"));
+    for (version, text, issue) in [(2, "# Intro", None), (3, "# Other", Some("missing-anchor"))] {
+        client.notify(
+            "textDocument/didChange",
+            json!({
+                "textDocument": { "uri": target, "version": version },
+                "contentChanges": [{ "text": text }]
+            }),
+        );
+        expect(&mut client, issue);
+    }
+    client.notify("textDocument/didChange", json!({
+        "textDocument": { "uri": target, "version": 4 },
+        "contentChanges": [{ "range": { "start": { "line": 0, "character": 0 } }, "text": "broken" }]
+    }));
+    expect(&mut client, None);
+    client.notify(
+        "textDocument/didChange",
+        json!({
+            "textDocument": { "uri": target, "version": 5 },
+            "contentChanges": [{ "text": "# Intro" }]
+        }),
+    );
+    expect(&mut client, None);
+    client.notify("textDocument/didClose", document(&target));
+    expect(&mut client, Some("missing-file"));
+    for (kind, text, issue) in [
+        (1, Some("# Other"), Some("missing-anchor")),
+        (2, Some("# Intro"), None),
+        (3, None, Some("missing-file")),
+    ] {
+        if let Some(text) = text {
+            fs::write(directory.0.join("target.md"), text).unwrap();
+        } else {
+            fs::remove_file(directory.0.join("target.md")).unwrap();
+        }
+        client.notify(
+            "workspace/didChangeWatchedFiles",
+            json!({
+                "changes": [{ "uri": target, "type": kind }]
+            }),
+        );
+        expect(&mut client, issue);
+    }
+    client.shutdown();
+}
+
+#[test]
 fn publishes_duplicate_diagnostics_on_open_edit_close_and_reopen() {
     let mut client = Client::start();
     client.initialize(json!({ "textDocument": { "publishDiagnostics": {
@@ -475,9 +894,13 @@ fn publishes_duplicate_diagnostics_on_open_edit_close_and_reopen() {
     }
 
     client.open("untitled:other-diagnostics", "[ref]: /other");
-    let other = client.diagnostics();
-    assert_eq!(other["uri"], "untitled:other-diagnostics");
-    assert_eq!(other["diagnostics"], json!([]));
+    // Opening a buffer also refreshes sources whose local target selection
+    // could change. The two workers may publish these documents in either order.
+    let mut publications = [client.diagnostics(), client.diagnostics()];
+    publications.sort_by(|left, right| left["uri"].as_str().cmp(&right["uri"].as_str()));
+    assert_eq!(publications[0], published);
+    assert_eq!(publications[1]["uri"], "untitled:other-diagnostics");
+    assert_eq!(publications[1]["diagnostics"], json!([]));
 
     // Removing the active definition promotes the next declaration.
     client.notify("textDocument/didChange", json!({
@@ -529,10 +952,10 @@ fn publishes_duplicate_diagnostics_on_open_edit_close_and_reopen() {
     assert_eq!(restored["diagnostics"], published["diagnostics"]);
 
     client.notify("textDocument/didClose", document(uri));
-    let closed = client.diagnostics();
+    let closed = client.diagnostics_for(uri);
     assert_eq!(closed, json!({ "uri": uri, "diagnostics": [] }));
     client.open(uri, text);
-    assert_eq!(client.diagnostics(), published);
+    assert_eq!(client.diagnostics_for(uri), published);
     client.shutdown();
 }
 

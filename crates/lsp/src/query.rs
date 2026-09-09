@@ -9,10 +9,15 @@ use crate::cancellation::Cancellation;
 use crate::document::{open_document, Document, Snapshot};
 use crate::files::{self, FileScope, Target, Workspace};
 use crate::protocol::{
-    parse_params, DocumentSymbol, Position, Range, ReferencesParams, RenameParams, ResponseError,
-    TextDocumentParams, TextDocumentPositionParams,
+    parse_params, DocumentSymbol, FileRename, Position, Range, ReferencesParams, RenameFilesParams,
+    RenameParams, ResponseError, TextDocumentParams, TextDocumentPositionParams,
+    WorkspaceSymbolParams,
 };
-use crate::{analysis, completion, diagnostics, links, rename, resource_completion};
+use crate::workspace_index::Index;
+use crate::{
+    analysis, completion, diagnostics, link_diagnostics, links, refactor, rename,
+    resource_completion,
+};
 
 /// The server owns live text and versions. Clones share immutable document data
 /// while each analysis task owns its AST cache updates.
@@ -37,8 +42,14 @@ pub struct Dependencies {
 
 /// Decode the supported parameters at the input boundary. Queues and workers
 /// retain only data used by the request, never client extension fields.
-pub struct Request {
-    pub uri: String,
+pub enum Request {
+    Document(DocumentRequest),
+    WorkspaceSymbols(String),
+    RenameFiles(Vec<FileRename>),
+}
+
+pub struct DocumentRequest {
+    uri: String,
     kind: RequestKind,
 }
 
@@ -62,6 +73,19 @@ enum RequestKind {
 
 impl Request {
     pub fn parse(method: &str, params: Value) -> Result<Self, ResponseError> {
+        if method == "workspace/symbol" {
+            let params: WorkspaceSymbolParams = parse_params(params)?;
+            return Ok(Self::WorkspaceSymbols(params.query));
+        }
+        if method == "workspace/willRenameFiles" {
+            let params: RenameFilesParams = parse_params(params)?;
+            if params.files.len() > 128 {
+                return Err(ResponseError::invalid_params(
+                    "a file rename batch permits at most 128 files",
+                ));
+            }
+            return Ok(Self::RenameFiles(params.files));
+        }
         let (uri, kind) = match method {
             "textDocument/documentSymbol"
             | "textDocument/foldingRange"
@@ -115,15 +139,49 @@ impl Request {
             }
             _ => return Err(ResponseError::new(-32601, "Method not found")),
         };
-        Ok(Self { uri, kind })
+        Ok(Self::Document(DocumentRequest { uri, kind }))
+    }
+
+    /// None means the request has no source document.
+    pub fn source_uri(&self) -> Option<&str> {
+        match self {
+            Self::Document(request) => Some(&request.uri),
+            Self::WorkspaceSymbols(_) | Self::RenameFiles(_) => None,
+        }
+    }
+
+    /// A rename may need workspace reads after its subject is resolved by a
+    /// worker. Reserve its scope before dispatch, including pending renames.
+    pub fn uses_workspace(&self) -> bool {
+        matches!(
+            self,
+            Self::WorkspaceSymbols(_)
+                | Self::RenameFiles(_)
+                | Self::Document(DocumentRequest {
+                    kind: RequestKind::Rename { .. },
+                    ..
+                })
+        )
     }
 
     pub fn owned_bytes(&self) -> usize {
-        self.uri.capacity()
-            + match &self.kind {
-                RequestKind::Rename { new_name, .. } => new_name.capacity(),
-                _ => 0,
+        match self {
+            Self::WorkspaceSymbols(query) => query.capacity(),
+            Self::RenameFiles(files) => {
+                files.capacity() * std::mem::size_of::<FileRename>()
+                    + files
+                        .iter()
+                        .map(|file| file.old_uri.capacity() + file.new_uri.capacity())
+                        .sum::<usize>()
             }
+            Self::Document(request) => {
+                request.uri.capacity()
+                    + match &request.kind {
+                        RequestKind::Rename { new_name, .. } => new_name.capacity(),
+                        _ => 0,
+                    }
+            }
+        }
     }
 }
 
@@ -132,11 +190,40 @@ impl State {
         &mut self,
         request: Request,
         parser: &YozoraParser,
+        index: &mut Index,
         cancellation: &Cancellation,
         dependencies: &mut Dependencies,
     ) -> Result<Value, ResponseError> {
         cancellation.check()?;
-        let Request { uri, kind } = request;
+        let DocumentRequest { uri, kind } = match request {
+            Request::Document(request) => request,
+            Request::WorkspaceSymbols(query) => {
+                dependencies.files = true;
+                return index
+                    .symbols(
+                        &query,
+                        &self.workspace,
+                        &mut self.documents,
+                        parser,
+                        cancellation,
+                        &mut dependencies.targets,
+                    )
+                    .map(|symbols| json!(symbols));
+            }
+            Request::RenameFiles(files) => {
+                dependencies.files = true;
+                let edits = refactor::Context {
+                    workspace: &self.workspace,
+                    documents: &mut self.documents,
+                    parser,
+                    cancellation,
+                    used_buffers: &mut dependencies.targets,
+                    heading_id_prefix: &self.heading_id_prefix,
+                }
+                .files(&files)?;
+                return Ok(workspace_edit(edits, self.versioned_edits));
+            }
+        };
         match kind {
             RequestKind::DocumentSymbol => {
                 let document = open_document(&mut self.documents, &uri)?;
@@ -179,7 +266,7 @@ impl State {
                         } => {
                             let target_uri = match file {
                                 None => uri.clone(),
-                                Some(file) => match open_file_uri(&open_uris, &file) {
+                                Some(file) => match files::open_file_uri(&open_uris, &file) {
                                     Some(uri) => uri.to_string(),
                                     None if files::is_file(&file.path) => {
                                         files::path_uri(&file.path)?
@@ -221,11 +308,25 @@ impl State {
             RequestKind::PrepareRename(position) => {
                 let document = open_document(&mut self.documents, &uri)?;
                 let snapshot = document_snapshot(document, parser, position, cancellation)?;
-                Ok(json!(rename::prepare(&snapshot, position)))
+                Ok(json!(rename::prepare(&snapshot, position)
+                    .or_else(|| refactor::prepare(&snapshot, position))))
             }
             RequestKind::Rename { position, new_name } => {
                 let document = open_document(&mut self.documents, &uri)?;
                 let snapshot = document_snapshot(document, parser, position, cancellation)?;
+                if rename::prepare(&snapshot, position).is_none() {
+                    dependencies.files = true;
+                    let edits = refactor::Context {
+                        workspace: &self.workspace,
+                        documents: &mut self.documents,
+                        parser,
+                        cancellation,
+                        used_buffers: &mut dependencies.targets,
+                        heading_id_prefix: &self.heading_id_prefix,
+                    }
+                    .heading(&uri, position, &new_name)?;
+                    return Ok(workspace_edit(edits, self.versioned_edits));
+                }
                 let edits = rename::rename(&snapshot, position, &new_name, parser, cancellation)?;
                 if self.versioned_edits {
                     Ok(json!({ "documentChanges": [{
@@ -243,17 +344,48 @@ impl State {
         uri: &str,
         parser: &YozoraParser,
         cancellation: &Cancellation,
+        dependencies: &mut Dependencies,
     ) -> Result<Value, ResponseError> {
         cancellation.check()?;
         let document = open_document(&mut self.documents, uri)?;
         let root = document_ast(document, parser, cancellation)?;
         let duplicates = diagnostics::duplicate_definitions(root);
-        Ok(format_diagnostics(
+        let resources = link_diagnostics::resources(root, cancellation)?;
+        let mut publication = format_diagnostics(
             uri,
             self.diagnostic_version.then_some(document.version()),
             duplicates,
             self.diagnostic_related_information,
-        ))
+        );
+        if !resources.is_empty() {
+            let scope = self.workspace.scope(uri);
+            let links = link_diagnostics::Context {
+                source_uri: uri,
+                documents: &mut self.documents,
+                scope: &scope,
+                parser,
+                cancellation,
+                heading_id_prefix: &self.heading_id_prefix,
+                used_buffers: &mut dependencies.targets,
+                uses_files: &mut dependencies.files,
+            }
+            .inspect(resources)?;
+            let diagnostics = publication["params"]["diagnostics"]
+                .as_array_mut()
+                .expect("diagnostics are an array");
+            diagnostics.extend(links);
+            diagnostics.sort_by_key(|diagnostic| {
+                (
+                    diagnostic["range"]["start"]["line"].as_u64(),
+                    diagnostic["range"]["start"]["character"].as_u64(),
+                    diagnostic["range"]["end"]["line"].as_u64(),
+                    diagnostic["range"]["end"]["character"].as_u64(),
+                )
+            });
+            diagnostics.truncate(diagnostics::MAX_DIAGNOSTICS);
+        }
+        cancellation.check()?;
+        Ok(publication)
     }
 
     fn definition(
@@ -284,7 +416,7 @@ impl State {
         let mut disk_document;
         let document = if let Some(file) = file {
             if let Some(open_uri) =
-                open_file_uri(&self.open_file_uris(&scope, uri, cancellation)?, &file)
+                files::open_file_uri(&self.open_file_uris(&scope, uri, cancellation)?, &file)
             {
                 target_uri = open_uri.to_string();
                 dependencies.targets.insert(target_uri.clone());
@@ -364,7 +496,7 @@ impl State {
                     Some(Target::Local {
                         file: Some(file), ..
                     }) => {
-                        if let Some(uri) = open_file_uri(&open_uris, &file) {
+                        if let Some(uri) = files::open_file_uri(&open_uris, &file) {
                             dependencies.targets.insert(uri.to_string());
                             let document = open_document(&mut self.documents, uri)?;
                             let root = document_ast(document, parser, cancellation)?;
@@ -392,40 +524,26 @@ impl State {
         source_uri: &str,
         cancellation: &Cancellation,
     ) -> Result<HashMap<PathBuf, Vec<String>>, ResponseError> {
-        cancellation.check()?;
-        let mut uris: Vec<_> = self.documents.keys().collect();
-        // Preserve all aliases. Prefer the source only when no exact target
-        // URI or lexical path selects a more specific buffer.
-        uris.sort_by_key(|uri| (uri.as_str() != source_uri, *uri));
-        let mut result: HashMap<PathBuf, Vec<String>> = HashMap::new();
-        for uri in uris {
-            cancellation.check()?;
-            if let Some(path) = files::file_uri_path(uri).and_then(|path| scope.resolve(&path)) {
-                result.entry(path).or_default().push(uri.clone());
-            }
-        }
-        Ok(result)
+        scope.open_file_uris(
+            self.documents.keys().map(String::as_str),
+            source_uri,
+            cancellation,
+        )
     }
 }
 
-fn open_file_uri<'a>(
-    open_uris: &'a HashMap<PathBuf, Vec<String>>,
-    file: &files::LocalFile,
-) -> Option<&'a str> {
-    let aliases = open_uris.get(&file.path)?;
-    // Buffer identity is the requested URI, then its normalized lexical path.
-    // Canonical aliases are a fallback, never an override of a matching buffer.
-    aliases
-        .iter()
-        .find(|uri| *uri == &file.uri)
-        .or_else(|| {
-            let lexical = files::file_uri_path(&file.uri)?;
-            aliases
-                .iter()
-                .find(|uri| files::file_uri_path(uri).as_ref() == Some(&lexical))
-        })
-        .or_else(|| aliases.first())
-        .map(String::as_str)
+fn workspace_edit(documents: Vec<refactor::DocumentEdits>, versioned: bool) -> Value {
+    if versioned {
+        json!({ "documentChanges": documents.into_iter().map(|document| json!({
+            "textDocument": { "uri": document.uri, "version": document.version }, "edits": document.edits
+        })).collect::<Vec<_>>() })
+    } else {
+        let changes: serde_json::Map<_, _> = documents
+            .into_iter()
+            .map(|document| (document.uri, json!(document.edits)))
+            .collect();
+        json!({ "changes": changes })
+    }
 }
 
 pub(super) fn document_start() -> Range {

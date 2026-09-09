@@ -50,6 +50,51 @@ pub struct DocumentSymbol {
     pub children: Vec<DocumentSymbol>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct Location {
+    pub uri: String,
+    pub range: Range,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SymbolInformation {
+    pub name: String,
+    pub kind: u32,
+    pub location: Location,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub container_name: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct WorkspaceSymbolParams {
+    pub query: String,
+}
+
+#[derive(Deserialize)]
+pub struct FileEvent {
+    pub uri: String,
+    #[serde(rename = "type")]
+    pub kind: u32,
+}
+
+#[derive(Deserialize)]
+pub struct DidChangeWatchedFilesParams {
+    pub changes: Vec<FileEvent>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileRename {
+    pub old_uri: String,
+    pub new_uri: String,
+}
+
+#[derive(Deserialize)]
+pub struct RenameFilesParams {
+    pub files: Vec<FileRename>,
+}
+
 #[derive(Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FoldingRange {

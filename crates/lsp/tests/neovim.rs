@@ -13,7 +13,7 @@ impl Drop for TestDirectory {
 
 #[test]
 #[ignore = "requires Neovim 0.11 or later in PATH"]
-fn native_client_round_trips_document_features() {
+fn native_client_round_trips_document_and_workspace_features() {
     let directory = TestDirectory(std::env::temp_dir().join(format!(
         "yozora-neovim-{}-{}",
         std::process::id(),

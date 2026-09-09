@@ -277,6 +277,72 @@ impl Drop for TestDirectory {
 }
 
 #[test]
+fn acknowledged_event_caches_refresh_references_and_varied_refactors_over_stdio() {
+    for accept_watch in [true, false] {
+        let directory = TestDirectory::new();
+        let target = directory.uri("target.md");
+        let referrer = directory.uri("referrer.md");
+        fs::write(directory.0.join("target.md"), "# Old\n").unwrap();
+        fs::write(directory.0.join("referrer.md"), "[go](target.md#old)\n").unwrap();
+        let mut client = Client::start();
+        let initialized = client.request("initialize", json!({
+            "rootUri": directory.uri(""),
+            "initializationOptions": {"refactorFileEventCache": true},
+            "capabilities": {"workspace": {
+                "workspaceEdit": {"documentChanges": true},
+                "didChangeWatchedFiles": {"dynamicRegistration": true, "relativePatternSupport": true}
+            }}
+        }));
+        assert!(initialized.get("error").is_none(), "{initialized}");
+        client.notify("initialized", json!({}));
+        let watch = client.receive();
+        assert_eq!(watch["method"], "client/registerCapability");
+        client.send(if accept_watch {
+            json!({"jsonrpc": "2.0", "id": watch["id"], "result": null})
+        } else {
+            json!({"jsonrpc": "2.0", "id": watch["id"], "error": {"code": -32601, "message": "not supported"}})
+        });
+        client.open(&target, "# Old\n");
+        for (index, name) in ["First", "Second", "Third"].into_iter().enumerate() {
+            let text = format!("{}[go](target.md#old)\n", "\n".repeat(index));
+            fs::write(directory.0.join("referrer.md"), &text).unwrap();
+            if accept_watch {
+                client.notify(
+                    "workspace/didChangeWatchedFiles",
+                    json!({"changes": [{"uri": referrer, "type": 2}]}),
+                );
+            }
+            let references = client.request(
+                "textDocument/references",
+                json!({
+                    "textDocument": {"uri": target}, "position": {"line": 0, "character": 3},
+                    "context": {"includeDeclaration": false}
+                }),
+            );
+            assert!(references.get("error").is_none(), "{references}");
+            assert_eq!(references["result"].as_array().unwrap().len(), 1);
+            assert_eq!(references["result"][0]["uri"], referrer);
+            assert_eq!(references["result"][0]["range"]["start"]["line"], index);
+            let renamed = client.request("textDocument/rename", json!({
+                "textDocument": {"uri": target}, "position": {"line": 0, "character": 3}, "newName": name
+            }));
+            assert!(renamed.get("error").is_none(), "{renamed}");
+            let changes = renamed["result"]["documentChanges"].as_array().unwrap();
+            assert_eq!(changes.len(), 2);
+            let changed = changes
+                .iter()
+                .find(|change| change["textDocument"]["uri"] == referrer)
+                .unwrap();
+            assert_eq!(
+                edit_text(&text, changed["edits"].as_array().unwrap()),
+                text.replace("#old", &format!("#{}", name.to_lowercase()))
+            );
+        }
+        client.shutdown();
+    }
+}
+
+#[test]
 fn workspace_symbols_refresh_disk_and_buffer_lifecycles_over_stdio() {
     let directory = TestDirectory::new();
     fs::create_dir(directory.0.join("docs")).unwrap();

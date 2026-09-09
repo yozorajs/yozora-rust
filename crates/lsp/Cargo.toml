@@ -11,7 +11,7 @@ repository.workspace = true
 
 [dependencies]
 serde.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
 yozora-ast = { version = "0.1.0", path = "../ast" }
 yozora-ast-util = { version = "0.1.0", path = "../ast-util" }
 yozora-core-parser = { version = "0.1.0", path = "../core-parser" }

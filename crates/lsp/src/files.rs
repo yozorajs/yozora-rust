@@ -2,25 +2,186 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 use crate::document::MAX_DOCUMENT_BYTES;
-use crate::{cancellation::Cancellation, protocol::ResponseError};
+use crate::{
+    cancellation::Cancellation,
+    protocol::{FileEvent, ResponseError},
+};
 
 pub const MAX_WORKSPACE_ROOTS: usize = 128;
 pub const MAX_WORKSPACE_ENTRIES: usize = 20_000;
 pub const MAX_WORKSPACE_FILES: usize = 2_000;
 pub const MAX_WORKSPACE_BYTES: usize = 32 * 1024 * 1024;
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SourceBuffer {
     pub uri: String,
     pub path: Option<PathBuf>,
     pub ambiguous: bool,
 }
 
+#[derive(Clone)]
 pub struct Sources {
     pub files: Vec<PathBuf>,
     pub buffers: Vec<SourceBuffer>,
+}
+
+/// A bounded journal shared by immutable worker snapshots. Missing history,
+/// structural events, or oversized batches require complete rediscovery.
+#[derive(Clone, Default)]
+pub struct FileEvents {
+    floor: u64,
+    latest: u64,
+    paths: HashMap<PathBuf, u64>,
+    bytes: usize,
+}
+
+impl FileEvents {
+    pub fn record(&mut self, revision: u64, changes: Option<&[FileEvent]>) {
+        let reset = |events: &mut Self| {
+            *events = Self {
+                floor: revision,
+                latest: revision,
+                ..Self::default()
+            };
+        };
+        let Some(changes) = changes.filter(|_| revision > self.latest) else {
+            reset(self);
+            return;
+        };
+        self.latest = revision;
+        for change in changes {
+            let Some(path) = (change.kind == 2)
+                .then(|| file_uri_path(&change.uri))
+                .flatten()
+            else {
+                reset(self);
+                return;
+            };
+            if !self.paths.contains_key(&path) {
+                self.bytes += path.capacity();
+                if self.paths.len() == 256 || self.bytes > 64 * 1024 {
+                    reset(self);
+                    return;
+                }
+            }
+            self.paths.insert(path, revision);
+        }
+    }
+
+    fn changed_paths(&self, before: u64, after: u64) -> Option<impl Iterator<Item = &Path>> {
+        (before >= self.floor && before <= after && after == self.latest).then(|| {
+            self.paths
+                .iter()
+                .filter_map(move |(path, revision)| (*revision > before).then_some(path.as_path()))
+        })
+    }
+
+    fn contents_unchanged(&self, path: &Path, before: u64, after: u64) -> bool {
+        before == after
+            || (before >= self.floor
+                && before < after
+                && after == self.latest
+                && self
+                    .paths
+                    .get(path)
+                    .is_none_or(|revision| *revision <= before))
+    }
+}
+
+#[derive(Default)]
+pub struct Catalog {
+    snapshot: Option<CatalogSnapshot>,
+    generation: u64,
+    pub events: Arc<FileEvents>,
+}
+
+struct CatalogSnapshot {
+    revision: u64,
+    scope: FileScope,
+    uris: Vec<String>,
+    limits: (usize, usize),
+    sources: Sources,
+}
+
+impl Catalog {
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub fn contents_unchanged(&self, path: &Path, before: Option<u64>, after: Option<u64>) -> bool {
+        match (before, after) {
+            (Some(before), Some(after)) => self.events.contents_unchanged(path, before, after),
+            _ => false,
+        }
+    }
+
+    pub fn sources<'a>(
+        &mut self,
+        scope: &FileScope,
+        uris: impl Iterator<Item = &'a str>,
+        cancellation: &Cancellation,
+        max_entries: usize,
+        max_files: usize,
+        revision: Option<u64>,
+    ) -> Result<(Sources, bool), ResponseError> {
+        cancellation.check()?;
+        let mut uris: Vec<_> = uris.map(str::to_string).collect();
+        uris.sort_unstable();
+        if let Some(revision) = revision {
+            if let Some(snapshot) = &mut self.snapshot {
+                let unchanged_inventory = snapshot.revision == revision
+                    || self
+                        .events
+                        .changed_paths(snapshot.revision, revision)
+                        .is_some_and(|mut paths| {
+                            paths.all(|path| {
+                                !cancellation.is_cancelled()
+                                    && (snapshot
+                                        .sources
+                                        .files
+                                        .binary_search_by(|candidate| candidate.as_path().cmp(path))
+                                        .is_ok()
+                                        || snapshot
+                                            .sources
+                                            .buffers
+                                            .iter()
+                                            .any(|buffer| buffer.path.as_deref() == Some(path)))
+                                    && scope.resolve(path).as_deref() == Some(path)
+                                    && is_file(path)
+                            })
+                        });
+                if unchanged_inventory
+                    && snapshot.scope == *scope
+                    && snapshot.uris == uris
+                    && snapshot.limits == (max_entries, max_files)
+                {
+                    snapshot.revision = revision;
+                    return Ok((snapshot.sources.clone(), true));
+                }
+            }
+        }
+        self.snapshot = None;
+        self.generation = self.generation.wrapping_add(1);
+        let sources = scope.sources(
+            uris.iter().map(String::as_str),
+            cancellation,
+            max_entries,
+            max_files,
+        )?;
+        if let Some(revision) = revision {
+            self.snapshot = Some(CatalogSnapshot {
+                revision,
+                scope: scope.clone(),
+                uris,
+                limits: (max_entries, max_files),
+                sources: sources.clone(),
+            });
+        }
+        Ok((sources, false))
+    }
 }
 
 /// URI roots belong to the server. Resolve paths afresh for each query so moved
@@ -31,6 +192,14 @@ pub struct Workspace {
 }
 
 impl Workspace {
+    pub fn watch_roots(&self) -> Vec<String> {
+        self.folders
+            .iter()
+            .filter(|uri| file_uri_path(uri).is_some_and(|path| !blocked_path(&path)))
+            .cloned()
+            .collect()
+    }
+
     pub fn new(folders: Vec<String>) -> Self {
         Self { folders }
     }
@@ -81,9 +250,42 @@ impl Workspace {
     }
 }
 
-#[derive(Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct FileScope {
     roots: Vec<(PathBuf, PathBuf)>,
+    identities: Vec<Option<RootIdentity>>,
+}
+
+#[derive(Clone, Eq, PartialEq)]
+struct RootIdentity {
+    modified: Option<std::time::SystemTime>,
+    created: Option<std::time::SystemTime>,
+    readonly: bool,
+    #[cfg(unix)]
+    unix: (u64, u64, i64, i64, u32, u32, u32),
+}
+
+impl RootIdentity {
+    fn read(path: &Path) -> Option<Self> {
+        let metadata = fs::metadata(path).ok()?;
+        #[cfg(unix)]
+        use std::os::unix::fs::MetadataExt;
+        Some(Self {
+            modified: metadata.modified().ok(),
+            created: metadata.created().ok(),
+            readonly: metadata.permissions().readonly(),
+            #[cfg(unix)]
+            unix: (
+                metadata.dev(),
+                metadata.ino(),
+                metadata.ctime(),
+                metadata.ctime_nsec(),
+                metadata.mode(),
+                metadata.uid(),
+                metadata.gid(),
+            ),
+        })
+    }
 }
 
 impl FileScope {
@@ -106,11 +308,14 @@ impl FileScope {
     }
 
     fn new(roots: impl Iterator<Item = PathBuf>) -> Self {
-        Self {
-            roots: roots
-                .filter_map(|path| canonical_path(&path).map(|canonical| (path, canonical)))
-                .collect(),
-        }
+        let roots: Vec<_> = roots
+            .filter_map(|path| canonical_path(&path).map(|canonical| (path, canonical)))
+            .collect();
+        let identities = roots
+            .iter()
+            .map(|(_, path)| RootIdentity::read(path))
+            .collect();
+        Self { roots, identities }
     }
 
     pub fn resolve(&self, path: &Path) -> Option<PathBuf> {
@@ -331,6 +536,51 @@ pub enum Target {
 }
 
 pub fn resolve(source_uri: &str, destination: &str, scope: &FileScope) -> Option<Target> {
+    resolve_with(source_uri, destination, |path| scope.resolve(path))
+}
+
+/// Repeated references often resolve the same target. This memo is query-local
+/// and only caches path resolution, never permission to read file contents.
+pub struct Resolver<'a> {
+    scope: &'a FileScope,
+    paths: HashMap<PathBuf, Option<PathBuf>>,
+}
+
+impl<'a> Resolver<'a> {
+    pub fn new(scope: &'a FileScope) -> Self {
+        Self {
+            scope,
+            paths: HashMap::new(),
+        }
+    }
+
+    pub fn resolve(&mut self, source_uri: &str, destination: &str) -> Option<Target> {
+        resolve_with(source_uri, destination, |path| {
+            if let Some(resolved) = self.paths.get(path) {
+                return resolved.clone();
+            }
+            let resolved = self.scope.resolve(path);
+            self.paths.insert(path.to_path_buf(), resolved.clone());
+            resolved
+        })
+    }
+
+    pub fn unchanged(&self, cancellation: &Cancellation) -> Result<bool, ResponseError> {
+        for (path, expected) in &self.paths {
+            cancellation.check()?;
+            if self.scope.resolve(path).as_ref() != expected.as_ref() {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+}
+
+fn resolve_with(
+    source_uri: &str,
+    destination: &str,
+    mut resolve_path: impl FnMut(&Path) -> Option<PathBuf>,
+) -> Option<Target> {
     if destination.chars().any(char::is_control) || destination.contains('\\') {
         return None;
     }
@@ -379,7 +629,7 @@ pub fn resolve(source_uri: &str, destination: &str, scope: &FileScope) -> Option
             return None;
         }
         let lexical = normalize_path(&local_path(source_uri, resource)?)?;
-        let path = scope.resolve(&lexical)?;
+        let path = resolve_path(&lexical)?;
         let uri = if resource
             .split_once(':')
             .is_some_and(|(scheme, _)| valid_scheme(scheme))
@@ -684,6 +934,52 @@ pub fn read_markdown_budgeted(
     let Ok(file) = File::open(path) else {
         return Ok(None);
     };
+    read_open_markdown(file, remaining)
+}
+
+/// Final refactor reads must address the same scoped file. On Linux, checking
+/// the opened descriptor's canonical name avoids resolving every ancestor for
+/// every file and also detects retargets between path inspection and opening.
+/// Other platforms (or unavailable procfs) retain ordinary path validation.
+pub fn read_scoped_markdown_budgeted(
+    path: &Path,
+    scope: &FileScope,
+    remaining: &mut usize,
+) -> Result<Option<String>, ResponseError> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::AsRawFd;
+        if !is_markdown(path)
+            || blocked_path(path)
+            || !scope.roots.iter().any(|(_, root)| path.starts_with(root))
+        {
+            return Ok(None);
+        }
+        // A discovered canonical file cannot become a symlink or special file
+        // and still identify the same source. Check without following the leaf.
+        let Ok(metadata) = fs::symlink_metadata(path) else {
+            return Ok(None);
+        };
+        if !metadata.is_file() || metadata.len() > MAX_DOCUMENT_BYTES as u64 {
+            return Ok(None);
+        }
+        let Ok(file) = File::open(path) else {
+            return Ok(None);
+        };
+        if let Ok(actual) = fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd())) {
+            if actual != path {
+                return Ok(None);
+            }
+            return read_open_markdown(file, remaining);
+        }
+    }
+    if scope.resolve(path).as_deref() != Some(path) {
+        return Ok(None);
+    }
+    read_markdown_budgeted(path, remaining)
+}
+
+fn read_open_markdown(file: File, remaining: &mut usize) -> Result<Option<String>, ResponseError> {
     let Ok(metadata) = file.metadata() else {
         return Ok(None);
     };
@@ -696,7 +992,10 @@ pub fn read_markdown_budgeted(
     if metadata.len() > *remaining as u64 {
         return Err(exhausted());
     }
-    let mut bytes = Vec::new();
+    // `Take<File>` uses generic read_to_end growth. Reserving the known size
+    // avoids a chain of tiny reads for every workspace file; the extra byte
+    // still detects a file growing beyond the query's remaining budget.
+    let mut bytes = Vec::with_capacity(metadata.len() as usize + 1);
     let read = file
         .take((MAX_DOCUMENT_BYTES.min(*remaining) + 1) as u64)
         .read_to_end(&mut bytes);
@@ -901,6 +1200,92 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn event_history_is_bounded_and_unknown_changes_force_complete_refresh() {
+        let mut events = FileEvents::default();
+        let event = |name: &str, kind| FileEvent {
+            uri: format!("file:///workspace/{name}.md"),
+            kind,
+        };
+        events.record(1, None);
+        events.record(2, Some(&[event("a", 2)]));
+        assert!(!events.contents_unchanged(Path::new("/workspace/a.md"), 1, 2));
+        assert!(events.contents_unchanged(Path::new("/workspace/b.md"), 1, 2));
+        events.record(3, Some(&[event("b", 2)]));
+        assert!(!events.contents_unchanged(Path::new("/workspace/a.md"), 1, 3));
+        assert!(events.contents_unchanged(Path::new("/workspace/a.md"), 2, 3));
+        events.record(4, Some(&[event("new", 1)]));
+        assert!(events.changed_paths(3, 4).is_none());
+        let many: Vec<_> = (0..257).map(|index| event(&index.to_string(), 2)).collect();
+        events.record(5, Some(&many));
+        assert!(events.changed_paths(4, 5).is_none());
+        assert!(events.paths.is_empty());
+        events.record(6, Some(&[event(&"x".repeat(65 * 1024), 2)]));
+        assert!(events.changed_paths(5, 6).is_none());
+        assert_eq!(events.bytes, 0);
+    }
+
+    #[test]
+    fn scoped_reads_preserve_byte_limits_and_reject_unreadable_sources() {
+        let directory = TestDir::new();
+        let path = directory.0.join("source.md");
+        let scope = Workspace::new(vec![directory.uri("")])
+            .index_scope(&Cancellation::default(), MAX_WORKSPACE_ROOTS)
+            .unwrap();
+        fs::write(&path, "# 中文😀").unwrap();
+        let mut remaining = 1024;
+        assert_eq!(
+            read_scoped_markdown_budgeted(&path, &scope, &mut remaining)
+                .unwrap()
+                .as_deref(),
+            Some("# 中文😀")
+        );
+        assert_eq!(remaining, 1024 - "# 中文😀".len());
+        assert_eq!(
+            read_scoped_markdown_budgeted(&path, &scope, &mut 1)
+                .unwrap_err()
+                .code,
+            -32000
+        );
+        fs::write(&path, [0xff]).unwrap();
+        let mut remaining = 10;
+        assert!(read_scoped_markdown_budgeted(&path, &scope, &mut remaining)
+            .unwrap()
+            .is_none());
+        assert_eq!(remaining, 9);
+        fs::remove_file(&path).unwrap();
+        assert!(read_scoped_markdown_budgeted(&path, &scope, &mut remaining)
+            .unwrap()
+            .is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scoped_reads_reject_retargeted_leaves_and_moved_ancestors() {
+        use std::os::unix::fs::symlink;
+        let directory = TestDir::new();
+        let outside = TestDir::new();
+        fs::create_dir(directory.0.join("docs")).unwrap();
+        let path = directory.0.join("docs/source.md");
+        fs::write(&path, "# Original").unwrap();
+        let scope = Workspace::new(vec![directory.uri("")])
+            .index_scope(&Cancellation::default(), MAX_WORKSPACE_ROOTS)
+            .unwrap();
+        fs::rename(directory.0.join("docs"), outside.0.join("moved")).unwrap();
+        symlink(outside.0.join("moved"), directory.0.join("docs")).unwrap();
+        let mut remaining = 1024;
+        assert!(read_scoped_markdown_budgeted(&path, &scope, &mut remaining)
+            .unwrap()
+            .is_none());
+        assert_eq!(remaining, 1024);
+        let leaf = directory.0.join("leaf.md");
+        symlink(outside.0.join("moved/source.md"), &leaf).unwrap();
+        assert!(read_scoped_markdown_budgeted(&leaf, &scope, &mut remaining)
+            .unwrap()
+            .is_none());
+        assert_eq!(remaining, 1024);
+    }
+
+    #[test]
     fn decodes_paths_once_without_treating_plus_or_encoded_delimiters_as_syntax() {
         let directory = TestDir::new();
         let source = directory.uri("source.md");
@@ -942,7 +1327,10 @@ pub(super) mod tests {
 
     #[test]
     fn rejects_invalid_uris_and_execution_schemes_without_filesystem_access() {
-        let scope = FileScope { roots: Vec::new() };
+        let scope = FileScope {
+            roots: Vec::new(),
+            identities: Vec::new(),
+        };
         for uri in [
             "file://host/docs/a.md",
             "file:relative.md",
@@ -1180,6 +1568,7 @@ pub(super) mod tests {
         let root = std::env::temp_dir().join("yozora-lsp-no-io");
         let scope = FileScope {
             roots: vec![(root.clone(), root.clone())],
+            identities: vec![None],
         };
         for relative in [
             ".ssh/guide.md",

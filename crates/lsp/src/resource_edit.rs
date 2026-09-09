@@ -12,6 +12,7 @@ use crate::document::{check_size, Snapshot};
 use crate::files;
 use crate::protocol::{Position, Range, ResponseError, TextEdit};
 
+#[derive(Clone)]
 pub struct Budget {
     pub parse_bytes: usize,
     pub resources: usize,
@@ -66,8 +67,205 @@ pub struct Replacement {
 
 pub struct HeadingChange {
     pub node_start: Position,
+    pub range: Range,
     pub replacement: Replacement,
     pub name: String,
+}
+
+struct LiteralResource {
+    url: Box<str>,
+    node_range: ByteRange<usize>,
+    span: Option<(ByteRange<usize>, Range)>,
+}
+
+/// Immutable destinations from one parsed source. A literal URI can be replaced
+/// without reparsing when its delimiters are unambiguous and neither URI can
+/// introduce Markdown syntax. Everything else uses the full structural check.
+pub struct Summary {
+    resources: Box<[LiteralResource]>,
+    bytes: usize,
+}
+
+impl Summary {
+    pub fn new(
+        snapshot: &Snapshot<'_>,
+        cancellation: &Cancellation,
+    ) -> Result<Option<Self>, ResponseError> {
+        let mut resources = Vec::new();
+        let mut bytes = std::mem::size_of::<Self>();
+        for node in nodes(&snapshot.root.children) {
+            cancellation.check()?;
+            let Some(url) = destination(node) else {
+                continue;
+            };
+            if resources.len() == 20_000 {
+                return Err(limit(
+                    "rename exceeds the resource count limit; use narrower workspace roots",
+                ));
+            }
+            bytes += std::mem::size_of::<LiteralResource>() + url.len();
+            if bytes > 8 * 1024 * 1024 {
+                return Ok(None);
+            }
+            let position = node
+                .position()
+                .ok_or_else(|| failed("a resource has no source position"))?;
+            let start = snapshot
+                .lines
+                .byte_offset(snapshot.text, position.start.into())?;
+            let end = snapshot
+                .lines
+                .byte_offset(snapshot.text, position.end.into())?;
+            let span = literal_span(&snapshot.text[start..end], node).map(|span| {
+                let span = start + span.start..start + span.end;
+                let range = Range {
+                    start: snapshot
+                        .lines
+                        .position(snapshot.text, span.start)
+                        .expect("a literal destination starts on a character boundary"),
+                    end: snapshot
+                        .lines
+                        .position(snapshot.text, span.end)
+                        .expect("a literal destination ends on a character boundary"),
+                };
+                (span, range)
+            });
+            resources.push(LiteralResource {
+                url: url.into(),
+                node_range: start..end,
+                span,
+            });
+        }
+        Ok(Some(Self {
+            resources: resources.into_boxed_slice(),
+            bytes,
+        }))
+    }
+
+    pub fn owned_bytes(&self) -> usize {
+        self.bytes
+    }
+
+    pub fn rewrite(
+        &self,
+        text: &str,
+        heading: Option<&HeadingChange>,
+        mut transform: impl FnMut(&str) -> Result<Option<String>, ResponseError>,
+        cancellation: &Cancellation,
+        budget: &mut Budget,
+    ) -> Result<Option<Vec<TextEdit>>, ResponseError> {
+        // A fallback must see the original budget, including resources visited
+        // before the first nonliteral destination was encountered.
+        let mut candidate = budget.clone();
+        let mut replacements = Vec::new();
+        // The heading plan has already validated this replacement in its source
+        // context. Literal URL edits outside it cannot alter that structure.
+        if let Some(heading) = heading {
+            let replacement = Replacement {
+                range: heading.replacement.range.clone(),
+                text: heading.replacement.text.clone(),
+            };
+            candidate.edit(&replacement)?;
+            replacements.push((replacement, heading.range));
+        }
+        for resource in &self.resources {
+            cancellation.check()?;
+            candidate.resources = candidate.resources.checked_sub(1).ok_or_else(|| {
+                limit("rename exceeds the resource count limit; use narrower workspace roots")
+            })?;
+            if heading.is_some_and(|heading| {
+                heading.replacement.range.start <= resource.node_range.start
+                    && resource.node_range.end <= heading.replacement.range.end
+            }) {
+                continue;
+            }
+            let Some(url) = transform(&resource.url)? else {
+                continue;
+            };
+            if url == resource.url.as_ref() {
+                continue;
+            }
+            let url = files::encode_uri(&url)
+                .ok_or_else(|| failed("the renamed destination cannot form a URI"))?;
+            let Some((span, range)) = resource.span.as_ref().filter(|_| literal_uri(&url)) else {
+                return Ok(None);
+            };
+            let replacement = Replacement {
+                range: span.clone(),
+                text: url,
+            };
+            candidate.edit(&replacement)?;
+            replacements.push((replacement, *range));
+        }
+        replacements.sort_unstable_by_key(|(replacement, _)| replacement.range.start);
+        let mut previous = 0;
+        let mut length = text.len();
+        let mut growth = 0;
+        for (replacement, _) in &replacements {
+            if replacement.range.start < previous || replacement.range.end > text.len() {
+                return Err(failed("rename edits overlap or have invalid source ranges"));
+            }
+            previous = replacement.range.end;
+            length = length - replacement.range.len() + replacement.text.len();
+            growth += replacement
+                .text
+                .len()
+                .saturating_sub(replacement.range.len());
+        }
+        check_size(text.len() + growth)?;
+        if !replacements.is_empty() {
+            // Retain the same work limits as full validation, even though this
+            // proof avoids constructing and parsing the complete preview.
+            candidate.parse(length)?;
+        }
+        *budget = candidate;
+        Ok(Some(
+            replacements
+                .into_iter()
+                .map(|(replacement, range)| TextEdit {
+                    range,
+                    new_text: replacement.text,
+                })
+                .collect(),
+        ))
+    }
+}
+
+fn literal_uri(url: &str) -> bool {
+    !url.is_empty()
+        && url.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'-' | b'.' | b'_' | b'~' | b'/' | b'%' | b'#' | b'?' | b'=' | b':' | b'+'
+                )
+        })
+}
+
+fn literal_span(text: &str, node: &Node) -> Option<ByteRange<usize>> {
+    let url = destination(node)?;
+    if !literal_uri(url) {
+        return None;
+    }
+    let definition = matches!(node, Node::Definition(_));
+    let prefix = if matches!(node, Node::Image(_)) {
+        "!["
+    } else {
+        "["
+    };
+    if !text.starts_with(prefix) {
+        return None;
+    }
+    let mut delimiters = text.match_indices(if definition { "]:" } else { "](" });
+    let (offset, _) = delimiters.next()?;
+    if delimiters.next().is_some() {
+        return None;
+    }
+    let (span, end) = destination_span(text, offset + 2)?;
+    if text[span.clone()] != *url || (!definition && !link_tail(&text[end..])) {
+        return None;
+    }
+    Some(span)
 }
 
 pub fn parse(
@@ -118,6 +316,96 @@ pub fn apply(text: &str, replacements: &[Replacement]) -> Result<String, Respons
     }
     result.push_str(&text[cursor..]);
     Ok(result)
+}
+
+/// Validate a heading once while preparing its anchor plan. A plain, top-level
+/// ATX heading occupies one line, so its unchanged block delimiters isolate the
+/// edit from the rest of the document. More involved headings use full parsing.
+pub fn heading_preview(
+    snapshot: &Snapshot<'_>,
+    change: &HeadingChange,
+    parser: &YozoraParser,
+    cancellation: &Cancellation,
+    budget: &mut Budget,
+) -> Result<Root, ResponseError> {
+    let headings: Vec<_> = snapshot
+        .root
+        .children
+        .iter()
+        .filter(|node| matches!(node, Node::Heading(_)))
+        .collect();
+    let plain = headings.iter().all(|node| {
+        matches!(node, Node::Heading(heading)
+        if heading.children.iter().all(|node| matches!(node, Node::Text(_))))
+    });
+    if plain {
+        if let Some((index, node)) = headings.iter().enumerate().find(|(_, node)| {
+            node.position()
+                .is_some_and(|position| Position::from(position.start) == change.node_start)
+        }) {
+            let position = node.position().unwrap();
+            let start = snapshot
+                .lines
+                .byte_offset(snapshot.text, position.start.into())?;
+            let end = snapshot
+                .lines
+                .byte_offset(snapshot.text, position.end.into())?;
+            let raw = &snapshot.text[start..end];
+            if raw.starts_with('#')
+                && !raw.trim_end_matches(['\r', '\n']).contains(['\r', '\n'])
+                && start <= change.replacement.range.start
+                && change.replacement.range.end <= end
+                && !change.replacement.text.contains(['\r', '\n'])
+            {
+                let replacement = Replacement {
+                    range: change.replacement.range.start - start
+                        ..change.replacement.range.end - start,
+                    text: change.replacement.text.clone(),
+                };
+                check_size(
+                    snapshot.text.len()
+                        + replacement
+                            .text
+                            .len()
+                            .saturating_sub(replacement.range.len()),
+                )?;
+                let text = apply(raw, &[replacement])?;
+                let mut candidate_budget = budget.clone();
+                let mut parsed = parse(&text, parser, cancellation, &mut candidate_budget)?;
+                candidate_budget.parse(snapshot.text.len() - raw.len())?;
+                let mut before = Root::default();
+                before.children = vec![(**node).clone()];
+                if preserves(
+                    &before,
+                    &parsed,
+                    Some(change),
+                    &BTreeMap::new(),
+                    cancellation,
+                )? {
+                    let mut children: Vec<_> = headings.into_iter().cloned().collect();
+                    children[index] = parsed.children.pop().expect("validated ATX heading");
+                    *budget = candidate_budget;
+                    let mut root = Root::default();
+                    root.children = children;
+                    return Ok(root);
+                }
+            }
+        }
+    }
+    let text = apply(snapshot.text, std::slice::from_ref(&change.replacement))?;
+    let root = parse(&text, parser, cancellation, budget)?;
+    if !preserves(
+        snapshot.root,
+        &root,
+        Some(change),
+        &BTreeMap::new(),
+        cancellation,
+    )? {
+        return Err(failed(
+            "heading rename would change other Markdown content or structure",
+        ));
+    }
+    Ok(root)
 }
 
 /// Locate only affected destinations, then validate the complete edited document.
@@ -432,6 +720,179 @@ mod tests {
     use super::*;
     use crate::document::Document;
     use crate::protocol::ContentChange;
+
+    #[test]
+    fn isolated_heading_validation_skips_body_parsing_and_matches_full_preview_ids() {
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+        use yozora_core_parser::DefaultParserProps;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&calls);
+        let parser = YozoraParser::new(DefaultParserProps {
+            default_parse_options: Some(ParseOptions {
+                format_url: Some(Arc::new(move |url| {
+                    counted.fetch_add(1, Ordering::Relaxed);
+                    url.to_string()
+                })),
+                ..ParseOptions::default()
+            }),
+            ..DefaultParserProps::default()
+        });
+        let cancellation = Cancellation::default();
+        for ending in ["\n", "\r\n"] {
+            let source =
+                format!("# Old{ending}{ending}[body](count){ending}{ending}## Old{ending}");
+            let mut document = Document::new(1, source).unwrap();
+            let snapshot = document.snapshot(&parser, Position::default()).unwrap();
+            let calls_before = calls.load(Ordering::Relaxed);
+            let change = HeadingChange {
+                node_start: Position::default(),
+                range: Range {
+                    start: Position {
+                        line: 0,
+                        character: 2,
+                    },
+                    end: Position {
+                        line: 0,
+                        character: 5,
+                    },
+                },
+                replacement: Replacement {
+                    range: 2..5,
+                    text: "New".into(),
+                },
+                name: "New".into(),
+            };
+            let mut quick_budget = Budget::default();
+            let quick = heading_preview(
+                &snapshot,
+                &change,
+                &parser,
+                &cancellation,
+                &mut quick_budget,
+            )
+            .unwrap();
+            assert_eq!(
+                calls.load(Ordering::Relaxed),
+                calls_before,
+                "body must not be reparsed for a literal ATX heading"
+            );
+            let text = apply(snapshot.text, std::slice::from_ref(&change.replacement)).unwrap();
+            let mut full_budget = Budget::default();
+            let full = parse(&text, &parser, &cancellation, &mut full_budget).unwrap();
+            assert!(preserves(
+                snapshot.root,
+                &full,
+                Some(&change),
+                &BTreeMap::new(),
+                &cancellation
+            )
+            .unwrap());
+            assert_eq!(
+                yozora_ast_util::calc_heading_identifiers(&quick, "h-"),
+                yozora_ast_util::calc_heading_identifiers(&full, "h-")
+            );
+            assert_eq!(quick_budget.parse_bytes, full_budget.parse_bytes);
+        }
+    }
+
+    #[test]
+    fn literal_summaries_match_complete_parsing_for_varied_destinations_and_contexts() {
+        let parser = YozoraParser::default();
+        let cancellation = Cancellation::default();
+        for source in [
+            "😀 [shown](old.md#intro \"title\") [self](#intro)",
+            "![alt](<old.md#intro> 'title')",
+            "[shown][r]\n\n[r]: old.md#intro \"title\"\n[R]: other.md#intro",
+            "[r]:\n  <old.md#intro>\n  \"title\"\n\n[r]",
+            "> [go](\n> old.md#intro\n> \"title\")",
+            ":::note [go](old.md#intro)\nbody\n:::",
+            "| A | B |\n| - | - |\n| [go](old.md#intro) | other |",
+            "[real](old.md#intro) `[code](old.md#intro)`",
+            "## [heading](old.md#intro)\r\n\r\n[go](old.md#intro)",
+        ] {
+            let mut document = Document::new(1, source.to_string()).unwrap();
+            let snapshot = document.snapshot(&parser, Position::default()).unwrap();
+            let summary = Summary::new(&snapshot, &cancellation).unwrap().unwrap();
+            for replacement in ["new", "new-2", "%E4%B8%AD%E6%96%87", "new_3.4~5"] {
+                let transform = |url: &str| Ok(Some(url.replace("intro", replacement)));
+                let mut quick_budget = Budget::default();
+                let mut full_budget = Budget::default();
+                let quick = summary
+                    .rewrite(source, None, transform, &cancellation, &mut quick_budget)
+                    .unwrap()
+                    .unwrap_or_else(|| panic!("literal fallback: {source}"));
+                let full = rewrite(
+                    &snapshot,
+                    None,
+                    transform,
+                    &parser,
+                    &cancellation,
+                    &mut full_budget,
+                )
+                .unwrap_or_else(|error| panic!("{source}: {}", error.message));
+                assert_eq!(
+                    serde_json::to_value(quick).unwrap(),
+                    serde_json::to_value(full).unwrap(),
+                    "{source}"
+                );
+                assert_eq!(
+                    (
+                        quick_budget.parse_bytes,
+                        quick_budget.resources,
+                        quick_budget.edits,
+                        quick_budget.edit_bytes
+                    ),
+                    (
+                        full_budget.parse_bytes,
+                        full_budget.resources,
+                        full_budget.edits,
+                        full_budget.edit_bytes
+                    ),
+                    "{source}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn nonliteral_and_ambiguous_destinations_fall_back_without_spending_the_budget() {
+        let parser = YozoraParser::default();
+        let cancellation = Cancellation::default();
+        for source in [
+            "[go](old\\(x\\).md)",
+            "[go](old&#46;md)",
+            "[go](<old 中文.md>)",
+            "[outer ![inner](old.md)](old.md)",
+            "![`x](wrong)`](old.md \"title ](wrong)\")",
+            "[first](old.md) <file:///tmp/old.md>",
+        ] {
+            let mut document = Document::new(1, source.to_string()).unwrap();
+            let snapshot = document.snapshot(&parser, Position::default()).unwrap();
+            let summary = Summary::new(&snapshot, &cancellation).unwrap().unwrap();
+            let mut budget = Budget::default();
+            assert!(
+                summary
+                    .rewrite(
+                        source,
+                        None,
+                        |url| Ok(Some(url.replace("old", "new"))),
+                        &cancellation,
+                        &mut budget
+                    )
+                    .unwrap()
+                    .is_none(),
+                "{source}"
+            );
+            let expected = Budget::default();
+            assert_eq!(
+                (budget.resources, budget.edits, budget.edit_bytes),
+                (expected.resources, expected.edits, expected.edit_bytes)
+            );
+        }
+    }
 
     fn edited(source: &str) -> Result<String, ResponseError> {
         let parser = YozoraParser::default();

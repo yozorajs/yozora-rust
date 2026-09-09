@@ -15,6 +15,7 @@ struct TestIndex {
     documents: HashMap<String, Document>,
     parser: YozoraParser,
     used: HashSet<String>,
+    revision: Option<u64>,
 }
 
 impl TestIndex {
@@ -25,6 +26,7 @@ impl TestIndex {
             documents: HashMap::new(),
             parser: YozoraParser::default(),
             used: HashSet::new(),
+            revision: None,
         }
     }
 
@@ -37,6 +39,7 @@ impl TestIndex {
             &self.parser,
             &Cancellation::default(),
             &mut self.used,
+            self.revision,
         )
     }
 
@@ -52,6 +55,86 @@ impl TestIndex {
         self.documents
             .insert(uri, Document::new(1, text.to_string()).unwrap());
     }
+}
+
+#[test]
+fn content_events_refresh_only_changed_sources_and_keep_inventory_generation() {
+    let directory = TestDir::new();
+    fs::write(directory.0.join("a.md"), "# Before\n\n[go](count)").unwrap();
+    fs::write(directory.0.join("b.md"), "# Steady\n\n[go](count)").unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&calls);
+    let mut test = TestIndex::new(&directory);
+    test.parser = YozoraParser::new(DefaultParserProps {
+        default_parse_options: Some(ParseOptions {
+            format_url: Some(Arc::new(move |url| {
+                counted.fetch_add(1, Ordering::Relaxed);
+                url.to_string()
+            })),
+            ..ParseOptions::default()
+        }),
+        ..DefaultParserProps::default()
+    });
+    test.revision = Some(1);
+    Arc::make_mut(&mut test.index.catalog.events).record(1, None);
+    assert_eq!(test.names(""), ["Before", "Steady"]);
+    assert_eq!(calls.load(Ordering::Relaxed), 2);
+    let generation = test.index.catalog.generation();
+    for (revision, file, text, expected) in [
+        (2, "a.md", "# Latest\n\n[go](count)", ["Latest", "Steady"]),
+        (3, "b.md", "# Second\n\n[go](count)", ["Latest", "Second"]),
+    ] {
+        fs::write(directory.0.join(file), text).unwrap();
+        Arc::make_mut(&mut test.index.catalog.events).record(
+            revision,
+            Some(&[crate::protocol::FileEvent {
+                uri: directory.uri(file),
+                kind: 2,
+            }]),
+        );
+        test.revision = Some(revision);
+        assert_eq!(test.names(""), expected);
+        assert_eq!(test.index.catalog.generation(), generation);
+        assert_eq!(calls.load(Ordering::Relaxed), revision as usize + 1);
+    }
+}
+
+#[test]
+fn acknowledged_file_generations_invalidate_content_and_shared_catalog_views() {
+    let directory = TestDir::new();
+    fs::write(directory.0.join("guide.md"), "# Before").unwrap();
+    let mut test = TestIndex::new(&directory);
+    test.revision = Some(1);
+    assert_eq!(test.names(""), ["Before"]);
+    assert_eq!(test.names(""), ["Before"]);
+    fs::write(directory.0.join("guide.md"), "# Latest").unwrap();
+    test.revision = Some(2);
+    assert_eq!(test.names(""), ["Latest"]);
+
+    fs::write(directory.0.join("guide.md"), "# Update").unwrap();
+    fs::write(directory.0.join("extra.md"), "# Extra").unwrap();
+    // Another provider can refresh the shared catalog before workspace/symbol.
+    // Force that refresh explicitly; directory timestamp precision must not
+    // determine whether this test exercises a new catalog generation.
+    let cancellation = Cancellation::default();
+    let scope = test
+        .workspace
+        .index_scope(&cancellation, files::MAX_WORKSPACE_ROOTS)
+        .unwrap();
+    for revision in [None, Some(2)] {
+        test.index
+            .catalog
+            .sources(
+                &scope,
+                std::iter::empty(),
+                &cancellation,
+                files::MAX_WORKSPACE_ENTRIES,
+                files::MAX_WORKSPACE_FILES,
+                revision,
+            )
+            .unwrap();
+    }
+    assert_eq!(test.names(""), ["Extra", "Update"]);
 }
 
 #[test]
@@ -290,7 +373,8 @@ fn cache_eviction_never_changes_results_or_exceeds_its_payload_budget() {
     // Equal paths can have different allocation capacities across discoveries.
     // Removing an entry must release the budget charged for its owned key.
     test.index.limits.cache_bytes = 4_096;
-    let (path, entry) = test.index.cache.pop_first().unwrap();
+    let key = test.index.cache.keys().next().unwrap().clone();
+    let (path, entry) = test.index.cache.remove_entry(&key).unwrap();
     let mut padded = PathBuf::with_capacity(path.capacity() + 1_024);
     padded.push(path);
     test.index.cache.insert(padded, entry);
@@ -371,6 +455,7 @@ fn cancellation_before_and_during_disk_parsing_prevents_later_file_analysis() {
             &parser,
             &token,
             &mut test.used,
+            None,
         );
         assert_eq!(result.unwrap_err().code, -32800);
     }

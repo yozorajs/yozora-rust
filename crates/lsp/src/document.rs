@@ -5,7 +5,7 @@ use yozora_ast::Root;
 use yozora_core_parser::ParseOptions;
 use yozora_parser::YozoraParser;
 
-use crate::protocol::{ContentChange, Position, ResponseError};
+use crate::protocol::{ContentChange, Json, Position, ResponseError};
 
 pub(super) const MAX_DOCUMENT_BYTES: usize = 16 * 1024 * 1024;
 const LINE_CHECKPOINT_BYTES: usize = 128;
@@ -19,6 +19,7 @@ pub struct Document {
     lines: Arc<LineIndex>,
     synchronized: bool,
     ast: Option<Arc<Root>>,
+    symbols: Option<Json>,
 }
 
 pub struct Snapshot<'a> {
@@ -56,7 +57,7 @@ impl Document {
         Ok(&self.text)
     }
 
-    /// Retain a disk snapshot for refactor validation without retaining its AST.
+    /// Semantic summaries use this immutable identity across worker snapshots.
     pub fn shared_text(&self) -> Result<Arc<String>, ResponseError> {
         self.ensure_synchronized()?;
         Ok(Arc::clone(&self.text))
@@ -70,6 +71,7 @@ impl Document {
             text: Arc::new(text),
             synchronized: true,
             ast: None,
+            symbols: None,
         })
     }
 
@@ -83,6 +85,7 @@ impl Document {
         let result = self.apply_changes(changes);
         self.version = version;
         self.ast = None;
+        self.symbols = None;
         match result {
             Ok((text, lines)) => {
                 self.text = Arc::new(text);
@@ -103,6 +106,7 @@ impl Document {
         self.check_version(version)?;
         self.version = version;
         self.ast = None;
+        self.symbols = None;
         self.synchronized = false;
         Ok(())
     }
@@ -190,8 +194,25 @@ impl Document {
     }
 
     pub fn adopt_ast(&mut self, snapshot: &mut Self) {
-        if self.ast.is_none() && self.matches(snapshot) {
-            self.ast = snapshot.ast.take();
+        if self.matches(snapshot) {
+            if self.ast.is_none() {
+                self.ast = snapshot.ast.take();
+            }
+            if self.symbols.is_none() {
+                self.symbols = snapshot.symbols.take();
+            }
+        }
+    }
+
+    pub fn cached_symbols(&self) -> Option<Json> {
+        self.symbols.clone()
+    }
+
+    pub fn cache_symbols(&mut self, symbols: Json) {
+        // Caching is optional; unusually large outlines retain the original
+        // behavior without adding an unbounded per-buffer response cache.
+        if symbols.as_bytes().len() <= 1024 * 1024 {
+            self.symbols = Some(symbols);
         }
     }
 
@@ -419,11 +440,19 @@ mod tests {
         let mut worker = live.clone();
         assert!(live.matches(&worker));
         assert!(Arc::ptr_eq(&live.lines, &worker.lines));
-        worker.ast(&parser).unwrap();
+        let symbols = Json::encode(&crate::analysis::document_symbols(
+            worker.ast(&parser).unwrap(),
+        ));
+        worker.cache_symbols(symbols.clone());
         assert!(live.ast.is_none());
         live.adopt_ast(&mut worker);
         assert!(live.ast.is_some());
         assert!(worker.ast.is_none());
+        assert!(std::ptr::eq(
+            live.cached_symbols().unwrap().as_bytes(),
+            symbols.as_bytes()
+        ));
+        assert!(worker.cached_symbols().is_none());
         let mut stale = live.clone();
         live.change(
             2,
@@ -436,6 +465,7 @@ mod tests {
         assert!(!live.matches(&stale));
         live.adopt_ast(&mut stale);
         assert!(live.ast.is_none());
+        assert!(live.cached_symbols().is_none());
         assert!(stale.ast.is_some());
         assert_eq!(
             stale.snapshot(&parser, Position::default()).unwrap().text,
@@ -444,7 +474,10 @@ mod tests {
         let mut reopened = Document::new(1, "# Before".to_string()).unwrap();
         reopened.adopt_ast(&mut stale);
         assert!(reopened.ast.is_none());
+        assert!(reopened.cached_symbols().is_none());
         assert!(!reopened.matches(&stale));
+        stale.invalidate(2).unwrap();
+        assert!(stale.cached_symbols().is_none());
     }
 
     #[test]

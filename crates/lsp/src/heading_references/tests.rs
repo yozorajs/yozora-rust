@@ -15,6 +15,8 @@ struct Project {
     used: HashSet<String>,
     prefix: String,
     cancellation: Cancellation,
+    index: Index,
+    catalog: files::Catalog,
 }
 
 impl Project {
@@ -29,6 +31,8 @@ impl Project {
             used: HashSet::new(),
             prefix: String::new(),
             cancellation: Cancellation::default(),
+            index: Index::default(),
+            catalog: files::Catalog::default(),
         }
     }
 
@@ -53,6 +57,9 @@ impl Project {
         include_declaration: bool,
     ) -> Result<Vec<Location>, ResponseError> {
         Context {
+            index: &mut self.index,
+            catalog: &mut self.catalog,
+            revision: None,
             workspace: &self.workspace,
             documents: &mut self.documents,
             parser: &self.parser,
@@ -62,6 +69,25 @@ impl Project {
         }
         .find(uri, Position { line, character }, include_declaration)
     }
+}
+
+#[test]
+fn cached_disk_references_observe_same_length_edits_and_buffer_overlays() {
+    let mut project = Project::new();
+    let target = project.open("target.md", "# Target");
+    project.disk("incoming.md", "[a](target.md#target)");
+    for _ in 0..2 {
+        assert_eq!(project.references(&target, 0, 3, false).unwrap().len(), 1);
+    }
+    project.disk("incoming.md", "[a](target.md#absent)");
+    assert!(project.references(&target, 0, 3, false).unwrap().is_empty());
+    project.disk("incoming.md", "[a](target.md#target)");
+    let incoming = project.open("incoming.md", "No unsaved link");
+    assert!(project.references(&target, 0, 3, false).unwrap().is_empty());
+    project.documents.remove(&incoming);
+    assert_eq!(project.references(&target, 0, 3, false).unwrap().len(), 1);
+    fs::remove_file(project.directory.0.join("incoming.md")).unwrap();
+    assert!(project.references(&target, 0, 3, false).unwrap().is_empty());
 }
 
 #[test]
@@ -347,12 +373,12 @@ fn resource_and_result_budgets_reject_partial_reference_lists() {
     ] {
         let mut search = Search {
             subject: &subject,
-            scope: &scope,
+            resolver: files::Resolver::new(&scope),
             open_uris: &HashMap::new(),
             cancellation: &cancellation,
             budget,
             locations: Vec::new(),
         };
-        assert_eq!(search.collect(uri, root).unwrap_err().code, -32000);
+        assert_eq!(search.collect(uri, root, None).unwrap_err().code, -32000);
     }
 }

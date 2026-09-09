@@ -1,6 +1,79 @@
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::sync::Arc;
+
+/// Immutable, already encoded JSON. Workers serialize results before publishing
+/// them; document caches can share those bytes without rebuilding JSON trees.
+#[derive(Clone, Debug)]
+pub struct Json {
+    raw: Arc<serde_json::value::RawValue>,
+    #[cfg(test)]
+    value: Arc<std::sync::OnceLock<Value>>,
+}
+
+impl Json {
+    pub fn encode(value: &impl Serialize) -> Self {
+        Self {
+            raw: Arc::from(
+                serde_json::value::to_raw_value(value).expect("LSP values serialize to JSON"),
+            ),
+            #[cfg(test)]
+            value: Arc::new(std::sync::OnceLock::new()),
+        }
+    }
+
+    pub fn response(id: &Value, result: &Self) -> Self {
+        #[derive(Serialize)]
+        struct Response<'a> {
+            jsonrpc: &'static str,
+            id: &'a Value,
+            result: &'a serde_json::value::RawValue,
+        }
+        Self::encode(&Response {
+            jsonrpc: "2.0",
+            id,
+            result: &result.raw,
+        })
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        self.raw.get().as_bytes()
+    }
+
+    #[cfg(test)]
+    pub fn into_value(self) -> Value {
+        serde_json::from_str(self.raw.get()).expect("encoded JSON is valid")
+    }
+}
+
+impl From<Value> for Json {
+    fn from(value: Value) -> Self {
+        Self::encode(&value)
+    }
+}
+
+impl Serialize for Json {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.raw.serialize(serializer)
+    }
+}
+
+#[cfg(test)]
+impl std::ops::Deref for Json {
+    type Target = Value;
+
+    fn deref(&self) -> &Value {
+        self.value.get_or_init(|| self.clone().into_value())
+    }
+}
+
+#[cfg(test)]
+impl PartialEq<Value> for Json {
+    fn eq(&self, other: &Value) -> bool {
+        &**self == other
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct Position {
@@ -118,6 +191,9 @@ pub struct WorkspaceFolder {
 pub struct InitializationOptions {
     #[serde(default)]
     pub heading_id_prefix: String,
+    pub file_event_cache: Option<bool>,
+    #[serde(default)]
+    pub refactor_file_event_cache: bool,
 }
 
 #[derive(Deserialize)]

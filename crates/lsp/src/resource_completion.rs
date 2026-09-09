@@ -310,22 +310,33 @@ impl Context {
     }
 
     pub fn anchors(&self, root: &Root, heading_prefix: &str) -> Vec<Candidate> {
+        self.identifiers(links::headings(root, heading_prefix).map(|(identifier, _)| identifier))
+    }
+
+    pub fn identifiers<T: AsRef<str>>(
+        &self,
+        identifiers: impl Iterator<Item = T>,
+    ) -> Vec<Candidate> {
         let Some(Target::Anchor { resource, prefix }) = self.target() else {
             return Vec::new();
         };
         let Some(prefix) = files::component_prefix(prefix) else {
             return Vec::new();
         };
-        links::headings(root, heading_prefix)
-            .filter(|(identifier, _)| {
+        identifiers
+            .filter(|identifier| {
+                let identifier = identifier.as_ref();
                 !identifier.is_empty() && files::encode_component(identifier).starts_with(&prefix)
             })
             .take(200)
-            .map(|(identifier, _)| Candidate {
-                uri: format!("{resource}#{}", files::encode_component(&identifier)),
-                label: identifier,
-                kind: 18,
-                detail: "Heading",
+            .map(|identifier| {
+                let identifier = identifier.as_ref();
+                Candidate {
+                    uri: format!("{resource}#{}", files::encode_component(identifier)),
+                    label: identifier.to_string(),
+                    kind: 18,
+                    detail: "Heading",
+                }
             })
             .collect()
     }

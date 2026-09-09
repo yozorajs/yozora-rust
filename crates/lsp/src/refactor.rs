@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 use yozora_ast::Node;
 use yozora_ast_util::calc_heading_identifiers;
@@ -27,6 +28,60 @@ pub struct Context<'a> {
     pub cancellation: &'a Cancellation,
     pub used_buffers: &'a mut HashSet<String>,
     pub heading_id_prefix: &'a str,
+    pub index: &'a mut Index,
+    pub catalog: &'a mut files::Catalog,
+    pub revision: Option<u64>,
+    pub validate_disk: bool,
+}
+
+struct CachedSource {
+    uri: String,
+    text: Arc<String>,
+    summary: resource_edit::Summary,
+}
+
+impl CachedSource {
+    fn owned_bytes(&self, path: &PathBuf) -> usize {
+        std::mem::size_of::<Self>()
+            + path.capacity()
+            + self.uri.capacity()
+            + self.text.capacity()
+            + self.summary.owned_bytes()
+    }
+}
+
+/// Worker-owned source summaries, independent of the selected heading, file
+/// move, and replacement name. Final disk reads are the default; confirmed file
+/// events can validate snapshots when the client explicitly opts in.
+#[derive(Default)]
+pub struct Index {
+    entries: HashMap<PathBuf, CachedSource>,
+    bytes: usize,
+    revision: Option<u64>,
+    catalog: u64,
+}
+
+impl Index {
+    fn take(&mut self, path: &Path) -> Option<CachedSource> {
+        self.entries.remove_entry(path).map(|(path, source)| {
+            self.bytes -= source.owned_bytes(&path);
+            source
+        })
+    }
+
+    fn insert(&mut self, path: PathBuf, source: CachedSource) {
+        let bytes = source.owned_bytes(&path);
+        let capacity = 40 * 1024 * 1024;
+        if bytes > capacity {
+            return;
+        }
+        if self.bytes + bytes > capacity {
+            self.entries.clear();
+            self.bytes = 0;
+        }
+        self.bytes += bytes;
+        self.entries.insert(path, source);
+    }
 }
 
 struct HeadingSubject {
@@ -115,10 +170,9 @@ impl Plan {
         &self,
         source: &SourceBuffer,
         url: &str,
-        scope: &FileScope,
+        resolver: &mut files::Resolver<'_>,
     ) -> Result<Option<String>, ResponseError> {
-        let Some(files::Target::Local { file, fragment, .. }) =
-            files::resolve(&source.uri, url, scope)
+        let Some(files::Target::Local { file, fragment, .. }) = resolver.resolve(&source.uri, url)
         else {
             return Ok(None);
         };
@@ -160,7 +214,7 @@ impl Plan {
                     .find(|item| source.path.as_ref() == Some(&item.old));
                 let new_source_uri =
                     new_source.map_or(source.uri.as_str(), |item| item.new_uri.as_str());
-                if matches!(files::resolve(new_source_uri, url, scope), Some(files::Target::Local { file: Some(file), .. }) if &file.path == target)
+                if matches!(resolver.resolve(new_source_uri, url), Some(files::Target::Local { file: Some(file), .. }) if &file.path == target)
                 {
                     return Ok(None);
                 }
@@ -246,6 +300,7 @@ impl Context<'_> {
         }
         let change = HeadingChange {
             node_start: subject.node_start,
+            range: subject.range,
             replacement: Replacement {
                 range: snapshot
                     .lines
@@ -258,20 +313,13 @@ impl Context<'_> {
             name: name.to_string(),
         };
         let mut budget = Budget::default();
-        let preview =
-            resource_edit::apply(snapshot.text, std::slice::from_ref(&change.replacement))?;
-        let root = resource_edit::parse(&preview, self.parser, self.cancellation, &mut budget)?;
-        if !resource_edit::preserves(
-            snapshot.root,
-            &root,
-            Some(&change),
-            &BTreeMap::new(),
+        let root = resource_edit::heading_preview(
+            &snapshot,
+            &change,
+            self.parser,
             self.cancellation,
-        )? {
-            return Err(failed(
-                "heading rename would change other Markdown content or structure",
-            ));
-        }
+            &mut budget,
+        )?;
         let before = calc_heading_identifiers(snapshot.root, self.heading_id_prefix);
         let after = calc_heading_identifiers(&root, self.heading_id_prefix);
         let changed = before != after;
@@ -306,10 +354,11 @@ impl Context<'_> {
                 path: None,
                 ambiguous: false,
             };
+            let mut resolver = files::Resolver::new(&scope);
             let edits = resource_edit::rewrite(
                 &snapshot,
                 plan.heading(uri),
-                |url| plan.destination(&source, url, &scope),
+                |url| plan.destination(&source, url, &mut resolver),
                 self.parser,
                 self.cancellation,
                 &mut budget,
@@ -388,24 +437,45 @@ impl Context<'_> {
         plan: Plan,
         mut budget: Budget,
     ) -> Result<Vec<DocumentEdits>, ResponseError> {
-        let sources = scope.sources(
+        let validate_disk = self.validate_disk || self.revision.is_none();
+        let (sources, reused) = self.catalog.sources(
+            &scope,
             self.documents.keys().map(String::as_str),
             self.cancellation,
             files::MAX_WORKSPACE_ENTRIES,
             files::MAX_WORKSPACE_FILES,
+            self.revision,
         )?;
+        let generation = self.catalog.generation();
+        let previous_revision = self.index.revision;
+        let reuse_contents = reused
+            && self.revision.is_some()
+            && previous_revision.is_some()
+            && self.index.catalog == generation;
+        self.index.revision = None;
         if sources.buffers.iter().any(|buffer| buffer.ambiguous) {
             return Err(failed(
                 "close duplicate URI aliases before a workspace rename",
             ));
         }
         let initial_files: BTreeSet<_> = sources.files.iter().cloned().collect();
+        if !reuse_contents {
+            self.index
+                .entries
+                .retain(|path, _| initial_files.contains(path));
+            self.index.bytes = self
+                .index
+                .entries
+                .iter()
+                .map(|(path, source)| source.owned_bytes(path))
+                .sum();
+        }
         let mut remaining = files::MAX_WORKSPACE_BYTES;
         let mut result = Vec::new();
         let mut snapshots = Vec::new();
         let mut operation = Operation {
             plan: &plan,
-            scope: &scope,
+            resolver: files::Resolver::new(&scope),
             parser: self.parser,
             cancellation: self.cancellation,
             budget: &mut budget,
@@ -443,55 +513,119 @@ impl Context<'_> {
         }
         for path in sources.files {
             self.cancellation.check()?;
-            if scope.resolve(&path).as_ref() != Some(&path) {
-                return Err(modified());
-            }
-            let text = files::read_markdown_budgeted(&path, &mut remaining)?.ok_or_else(|| {
-                failed("cannot read every Markdown file required for this rename")
-            })?;
-            let mut document = Document::new(0, text)?;
-            let uri = files::path_uri(&path).expect("scoped paths form file URIs");
+            let cached = self.index.take(&path);
+            let text = if let Some(cached) = cached.as_ref().filter(|_| {
+                reuse_contents
+                    && self
+                        .catalog
+                        .contents_unchanged(&path, previous_revision, self.revision)
+            }) {
+                let text = Arc::clone(&cached.text);
+                remaining = remaining
+                    .checked_sub(text.len())
+                    .ok_or_else(|| failed("workspace rename exceeds the source byte limit"))?;
+                text
+            } else {
+                if scope.resolve(&path).as_ref() != Some(&path) {
+                    return Err(modified());
+                }
+                Arc::new(
+                    files::read_markdown_budgeted(&path, &mut remaining)?.ok_or_else(|| {
+                        failed("cannot read every Markdown file required for this rename")
+                    })?,
+                )
+            };
+            let cached = cached.filter(|source| source.text.as_str() == text.as_str());
+            let uri = cached.as_ref().map_or_else(
+                || files::path_uri(&path).expect("scoped paths form file URIs"),
+                |source| source.uri.clone(),
+            );
             let source = SourceBuffer {
                 uri: uri.clone(),
                 path: Some(path.clone()),
                 ambiguous: false,
             };
-            let edits = operation.edit(&mut document, &source)?;
+            operation.budget.parse(text.len())?;
+            let mut summary = cached.map(|source| source.summary);
+            let mut document = None;
+            if summary.is_none() {
+                let mut parsed = Document::new(0, text.as_ref().clone())?;
+                summary = resource_edit::Summary::new(
+                    &parsed.snapshot(self.parser, Position::default())?,
+                    self.cancellation,
+                )?;
+                document = Some(parsed);
+            }
+            let edits = match summary
+                .as_ref()
+                .map(|summary| {
+                    summary.rewrite(
+                        &text,
+                        None,
+                        |url| {
+                            operation
+                                .plan
+                                .destination(&source, url, &mut operation.resolver)
+                        },
+                        self.cancellation,
+                        operation.budget,
+                    )
+                })
+                .transpose()?
+                .flatten()
+            {
+                Some(edits) => edits,
+                None => {
+                    let document = match &mut document {
+                        Some(document) => document,
+                        None => document.insert(Document::new(0, text.as_ref().clone())?),
+                    };
+                    operation.rewrite(document, &source)?
+                }
+            };
             if !edits.is_empty() {
                 operation.budget.document(&uri)?;
                 result.push(DocumentEdits {
-                    uri,
+                    uri: uri.clone(),
                     version: None,
                     edits,
                 });
             }
-            snapshots.push((path, document.shared_text()?));
+            if validate_disk {
+                snapshots.push((path.clone(), Arc::clone(&text)));
+            }
+            if let Some(summary) = summary {
+                self.index.insert(path, CachedSource { uri, text, summary });
+            }
         }
-        // Refactors cannot silently miss a new referrer or overwrite contents
-        // changed during analysis. Closed files are revalidated as a whole.
+        // Inventory follows the acknowledged watch contract. By default, closed
+        // text is additionally reread; only an explicit option can skip that read.
         let current_scope = self
             .workspace
             .index_scope(self.cancellation, files::MAX_WORKSPACE_ROOTS)?;
         if current_scope != scope {
             return Err(modified());
         }
-        let current = scope.sources(
-            self.documents.keys().map(String::as_str),
-            self.cancellation,
-            files::MAX_WORKSPACE_ENTRIES,
-            files::MAX_WORKSPACE_FILES,
-        )?;
-        if current.files.into_iter().collect::<BTreeSet<_>>() != initial_files
-            || current.buffers != sources.buffers
-        {
-            return Err(modified());
+        // With an acknowledged watch, the server rejects results if an event
+        // changed the workspace epoch. Strict clients also rediscover inventory.
+        if self.revision.is_none() {
+            let current = scope.sources(
+                self.documents.keys().map(String::as_str),
+                self.cancellation,
+                files::MAX_WORKSPACE_ENTRIES,
+                files::MAX_WORKSPACE_FILES,
+            )?;
+            if current.files.into_iter().collect::<BTreeSet<_>>() != initial_files
+                || current.buffers != sources.buffers
+            {
+                return Err(modified());
+            }
         }
         let mut remaining = files::MAX_WORKSPACE_BYTES;
         for (path, expected) in snapshots {
             self.cancellation.check()?;
-            if scope.resolve(&path).as_ref() != Some(&path)
-                || files::read_markdown_budgeted(&path, &mut remaining)?.as_deref()
-                    != Some(expected.as_str())
+            if files::read_scoped_markdown_budgeted(&path, &scope, &mut remaining)?.as_deref()
+                != Some(expected.as_str())
             {
                 return Err(modified());
             }
@@ -508,15 +642,20 @@ impl Context<'_> {
                 }
             }
         }
+        if !operation.resolver.unchanged(self.cancellation)? {
+            return Err(modified());
+        }
         self.cancellation.check()?;
         result.sort_by(|left, right| left.uri.cmp(&right.uri));
+        self.index.revision = self.revision;
+        self.index.catalog = generation;
         Ok(result)
     }
 }
 
 struct Operation<'a> {
     plan: &'a Plan,
-    scope: &'a FileScope,
+    resolver: files::Resolver<'a>,
     parser: &'a YozoraParser,
     cancellation: &'a Cancellation,
     budget: &'a mut Budget,
@@ -531,11 +670,31 @@ impl Operation<'_> {
         self.cancellation.check()?;
         self.budget.parse(document.text()?.len())?;
         let snapshot = document.snapshot(self.parser, Position::default())?;
+        if let Some(summary) = resource_edit::Summary::new(&snapshot, self.cancellation)? {
+            if let Some(edits) = summary.rewrite(
+                snapshot.text,
+                self.plan.heading(&source.uri),
+                |url| self.plan.destination(source, url, &mut self.resolver),
+                self.cancellation,
+                self.budget,
+            )? {
+                return Ok(edits);
+            }
+        }
+        self.rewrite(document, source)
+    }
+
+    fn rewrite(
+        &mut self,
+        document: &mut Document,
+        source: &SourceBuffer,
+    ) -> Result<Vec<TextEdit>, ResponseError> {
+        let snapshot = document.snapshot(self.parser, Position::default())?;
         self.cancellation.check()?;
         resource_edit::rewrite(
             &snapshot,
             self.plan.heading(&source.uri),
-            |url| self.plan.destination(source, url, self.scope),
+            |url| self.plan.destination(source, url, &mut self.resolver),
             self.parser,
             self.cancellation,
             self.budget,

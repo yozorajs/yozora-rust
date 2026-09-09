@@ -213,6 +213,13 @@ fn heading_reference_scans_remain_responsive_and_retire_on_cancel_edits_and_shut
         "context": { "includeDeclaration": false }
     });
     for action in ["cancel", "edit", "shutdown"] {
+        // Force real parsing for each cancellation scenario; an unchanged
+        // disk document may now reuse its cached semantic reference summary.
+        std::fs::write(
+            directory.0.join("slow.md"),
+            format!("[gate](blocked)\n{action}\n"),
+        )
+        .unwrap();
         arm.store(true, Ordering::Relaxed);
         let id = format!("scan-{action}");
         session.send(Some(&id), "textDocument/references", params.clone());

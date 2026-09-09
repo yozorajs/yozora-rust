@@ -81,10 +81,11 @@ local navigation is limited to the source file's directory.
   roots, and refresh link diagnostics.
 - `workspace/didChangeWatchedFiles`: invalidate pending and running workspace
   queries and refresh link diagnostics when the client supplies file changes.
-  Each workspace query discovers files and validates cached content afresh. The
-  server does not register a watcher; without file notifications, external disk
-  changes reach diagnostics when they next run, for example after a source edit,
-  or when a buffer/scope event triggers a refresh.
+  When the client supports dynamic registration and relative patterns, the
+  server registers watches under explicit local roots. Event-based reuse starts
+  only after a successful registration response. Unsupported or rejected watches
+  retain query-time discovery and content validation. Without notifications,
+  external changes reach diagnostics when those diagnostics next run.
 - `textDocument/hover`: links and images show their destination and title;
   footnotes show a text summary. Resolved references and their active definitions
   use the same information. Previews are limited to 2,000 Unicode characters,
@@ -188,12 +189,12 @@ behavior.
 
 ## Implementation contracts
 
-The server owns each document's text, version, line index, and cached AST. Edits
+The server owns each document's text, version, line index, and cached AST/outline. Edits
 are processed serially and each batch is applied atomically. Opening a document
 or accepting a change schedules diagnostics with a 150 ms delay. Further edits to
-that document reset its deadline. Queries enter a short 5 ms queue so
-already-arriving edits and cancellations can retire obsolete work before parsing.
-They do not wait for the diagnostic deadline. An accepted newer change invalidates
+that document reset its deadline. Eligible queries run immediately, without a
+fixed debounce interval. Queued cancellation and revision checks still retire
+obsolete work before parsing or publication. An accepted newer change invalidates
 pending and running queries for that URI, including when its edit batch is malformed. Stale
 changes leave waiting queries intact. Reopening also invalidates them when the
 version number is reused. Queries and diagnostics reuse the same AST until the
@@ -202,9 +203,14 @@ Open, accepted changes, close, workspace-folder changes, and valid watched-file
 or file-rename notifications also retire workspace queries with `ContentModified`.
 Text, line indexes, and parsed ASTs are shared through `Arc`. Each analysis gets
 a snapshot of open buffers, workspace roots, and client capabilities. Workers
-only update their snapshot's AST caches; the server adopts those caches only
+only update their snapshot's AST and outline caches; the server adopts those caches only
 when text identity and version still match the live document. Text identity also
 distinguishes close/reopen when the client reuses a version number.
+Workers encode query results once. Hierarchical outlines reuse immutable JSON
+bytes for the same document revision, with at most 1 MiB of cached outline bytes
+per buffer. The server attaches each request's ID after freshness checks and
+writes the encoded response without rebuilding its JSON tree. Large outlines
+remain available when they exceed the cache limit; only their reuse is skipped.
 The line index keeps sparse UTF-16 checkpoints on long lines, bounding coordinate
 scans for dense reference edits. Rename constructs the proposed source in one pass
 before validating its semantics. Descending `didChange` edits with strictly
@@ -307,13 +313,25 @@ access boundary applies, and paths are checked again before reading in case they
 changed after discovery. In addition to sensitive paths, indexing skips `target`,
 `node_modules`, `.cache`, and `.venv` directory trees below each explicit root.
 A root placed inside one of these directories remains searchable. It does not interpret
-`.gitignore`. Each query rediscovers files and reads eligible contents; creation,
-modification, renaming, and deletion are visible on the next query without watcher
-registration. The filesystem is sampled during a request; subsequent queries
-revalidate external changes.
-Each worker caches disk text and heading summaries after comparing the full text,
-so unchanged files avoid parsing even when timestamps are unreliable. Disk ASTs
-are released after summarization. Open buffers reuse their document AST caches.
+`.gitignore`. Each query rediscovers files and reads eligible contents when
+`initializationOptions.fileEventCache` is `false`, or no watch was confirmed.
+Creation, modification, renaming, and deletion are then visible without notifications.
+Otherwise, inventory and semantic summaries reuse the client's file-event
+revision. Content changes to known regular files refresh only those sources;
+creation, deletion, directory/alias changes, unavailable event history, and root
+changes rebuild the inventory. The event journal retains at most 256 paths and
+64 KiB of path bytes before requiring a full refresh. Open buffers always use
+their current text identity and version.
+
+`fileEventCache` defaults to automatic watch negotiation. Event caching assumes
+the client delivers changes under the registered roots; missed events can leave
+read-query results stale. Setting it to `false` forces complete discovery and
+byte comparison on every workspace query, including refactors. Cached contents
+avoid repeated parsing in either mode; timestamp equality alone never validates
+changed content. Each worker releases closed ASTs after extracting summaries.
+Workspace symbols also cache open-buffer summaries by immutable text identity.
+Closed-target definition and completion share heading summaries after checking
+the target's current contents and access scope.
 
 One workspace query permits up to 128 roots, 20,000 directory entries (including
 skipped names), 2,000 candidate files/buffers, 32 MiB of source text and attempted
@@ -321,8 +339,10 @@ reads (including invalid UTF-8), and 8 MiB of
 heading summary payload. The existing 16 MiB per-document reader limit applies;
 ineligible, unreadable, oversized, or non-UTF-8 files are omitted. Unreadable
 directories and exceeded scan budgets return error `-32000`; narrow the roots or
-close buffers before retrying. Each worker's disk cache has a 40 MiB payload budget
-and may evict entries without affecting results. A response is limited to 1,000
+close buffers before retrying. Each worker's workspace-symbol cache has a 40 MiB
+payload budget across disk and buffer entries. Reference and refactor summaries
+have separate 40 MiB budgets, and closed-target heading summaries have 20 MiB.
+These caches may evict entries without affecting results. A response is limited to 1,000
 symbols and a conservative 1 MiB budget for result strings, structure, and JSON
 escaping. Exceeding a response budget returns `-32000` with a request to narrow
 the query, never a silently truncated success response.
@@ -357,8 +377,9 @@ receive versioned edits for open buffers and null versions for closed files;
 other clients receive `changes`. File-operation edits address the old URIs: apply
 the edits before moving files, then send `didRenameFiles` and synchronize renamed
 buffers through `didClose`/`didOpen`. The server never writes or moves files itself.
-Before returning any edits, the server reparses the proposed text and checks AST
-structure, display content, resources, and reference bindings. Conflicting names,
+Before returning edits, the server validates AST structure, display content,
+resources, and reference bindings through parsing or proven literal replacements.
+Conflicting names,
 unintended activation of plain text references, syntax changes, and edits exceeding
 the document size limit are rejected as a whole.
 
@@ -371,9 +392,28 @@ reject ambiguous open URI aliases and any unreadable eligible Markdown source.
 File operations require canonical paths, reject symlink operations, and reject
 overwriting a destination outside the same batch. File autolinks whose visible
 text would change are also rejected. A rejected operation returns no partial edits.
-Before replying, the server rediscovers files, rechecks roots and aliases, and
-rereads closed sources to detect changes during analysis with `ContentModified`.
-External changes after this final check remain the client's responsibility.
+Refactors always recheck roots, resolved aliases, participating buffer revisions,
+and the file-event epoch before publishing. By default, they also reread every
+closed source at the end, detecting changed text with `ContentModified` even when
+its file event has not arrived. On Linux, these reads check the opened file's
+canonical descriptor path before reading; other platforms retain path-based
+validation. Inventory follows the `fileEventCache` mode above.
+
+`initializationOptions.refactorFileEventCache: true` also lets refactors trust
+the acknowledged file-event revision for closed source text, matching the usual
+event-cache consistency model. This option defaults to `false` and has no effect
+without a confirmed watch. It removes the final whole-workspace text read; missed
+events can therefore produce edits for an older disk snapshot. Set
+`fileEventCache: false` for complete discovery and content revalidation regardless
+of this option. Changes after any final check remain the client's responsibility.
+
+Refactor caches store source text and destination spans, independently of the
+requested target and new name. Unambiguous literal URI replacements preserve
+their Markdown delimiters without reparsing the full preview; nonliteral or
+ambiguous destinations retain full structural validation. A plain top-level ATX
+heading can similarly be validated in isolation, preserving the global heading
+ID and duplicate-suffix calculation. Resource, edit, source-size, and analysis
+budgets apply to cached and uncached paths alike.
 
 Workspace refactors allow 128 roots, 20,000 directory entries, 2,000 candidate
 files/buffers, and 32 MiB of source text. They also limit total parse input to
@@ -390,9 +430,10 @@ scope, only same-buffer anchors are searched. Open buffers override disk text.
 Every scoped open URI alias participates with its own unsaved contents, and each
 link selects its target by the same exact-URI, lexical-path, and canonical-alias
 precedence as navigation. A closed target is parsed once and reused while scanning
-its self references; other closed ASTs are released after each file. Queries read
-current disk content without requiring watched-file notifications. Filesystem
-contents are sampled during the request, and later queries revalidate them.
+its self references; other closed ASTs are released after each file. Reference
+summaries cache both raw destinations and resolved targets. Their reuse follows
+the same acknowledged event revision and inventory generation as indexing;
+without event caching, each query compares current disk bytes before reuse.
 
 A heading-reference query permits 128 roots, 20,000 directory entries, 2,000
 candidate files/buffers, 32 MiB of source/target reads, and 20,000 resource

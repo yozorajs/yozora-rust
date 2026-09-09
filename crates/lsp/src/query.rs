@@ -1,6 +1,8 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::Arc;
 
+use serde::Serialize;
 use serde_json::{json, Value};
 use yozora_ast::Root;
 use yozora_parser::YozoraParser;
@@ -9,9 +11,9 @@ use crate::cancellation::Cancellation;
 use crate::document::{open_document, Document, Snapshot};
 use crate::files::{self, FileScope, Target, Workspace};
 use crate::protocol::{
-    parse_params, DocumentSymbol, FileRename, Position, Range, ReferencesParams, RenameFilesParams,
-    RenameParams, ResponseError, TextDocumentParams, TextDocumentPositionParams,
-    WorkspaceSymbolParams,
+    parse_params, DocumentSymbol, FileRename, Json, Location, Position, Range, ReferencesParams,
+    RenameFilesParams, RenameParams, ResponseError, TextDocumentParams, TextDocumentPositionParams,
+    TextEdit, WorkspaceSymbolParams,
 };
 use crate::workspace_index::Index;
 use crate::{
@@ -25,6 +27,11 @@ use crate::{
 pub struct State {
     pub documents: HashMap<String, Document>,
     pub workspace: Workspace,
+    /// Set only after the client confirms a filesystem watch registration.
+    /// None retains content-based validation on every query.
+    pub file_revision: Option<u64>,
+    pub file_events: Arc<files::FileEvents>,
+    pub refactor_file_event_cache: bool,
     pub heading_id_prefix: String,
     pub hierarchical_symbols: bool,
     pub folding_range_limit: Option<usize>,
@@ -186,6 +193,18 @@ impl Request {
 }
 
 impl State {
+    /// Only source-local immutable results may bypass worker dispatch. Their
+    /// cache is owned and invalidated by the live document's writer.
+    pub fn cached_request(&self, request: &Request) -> Option<crate::protocol::Json> {
+        match request {
+            Request::Document(DocumentRequest {
+                uri,
+                kind: RequestKind::DocumentSymbol,
+            }) if self.hierarchical_symbols => self.documents.get(uri)?.cached_symbols(),
+            _ => None,
+        }
+    }
+
     pub fn request(
         &mut self,
         request: Request,
@@ -193,8 +212,26 @@ impl State {
         index: &mut Index,
         cancellation: &Cancellation,
         dependencies: &mut Dependencies,
-    ) -> Result<Value, ResponseError> {
+    ) -> Result<Json, ResponseError> {
         cancellation.check()?;
+        if let Request::Document(DocumentRequest {
+            uri,
+            kind: RequestKind::DocumentSymbol,
+        }) = &request
+        {
+            if self.hierarchical_symbols {
+                let document = open_document(&mut self.documents, uri)?;
+                if let Some(symbols) = document.cached_symbols() {
+                    return Ok(symbols);
+                }
+                let root = document_ast(document, parser, cancellation)?;
+                let symbols = Json::encode(&analysis::document_symbols(root));
+                cancellation.check()?;
+                document.cache_symbols(symbols.clone());
+                return Ok(symbols);
+            }
+        }
+        index.catalog.events = Arc::clone(&self.file_events);
         let DocumentRequest { uri, kind } = match request {
             Request::Document(request) => request,
             Request::WorkspaceSymbols(query) => {
@@ -207,12 +244,17 @@ impl State {
                         parser,
                         cancellation,
                         &mut dependencies.targets,
+                        self.file_revision,
                     )
-                    .map(|symbols| json!(symbols));
+                    .map(|symbols| Json::encode(&symbols));
             }
             Request::RenameFiles(files) => {
                 dependencies.files = true;
                 let edits = refactor::Context {
+                    validate_disk: !self.refactor_file_event_cache || self.file_revision.is_none(),
+                    index: &mut index.refactors,
+                    catalog: &mut index.catalog,
+                    revision: self.file_revision,
                     workspace: &self.workspace,
                     documents: &mut self.documents,
                     parser,
@@ -229,11 +271,9 @@ impl State {
                 let document = open_document(&mut self.documents, &uri)?;
                 let root = document_ast(document, parser, cancellation)?;
                 let symbols = analysis::document_symbols(root);
-                if self.hierarchical_symbols {
-                    Ok(json!(symbols))
-                } else {
-                    Ok(flat_symbols(&symbols, &uri))
-                }
+                // Hierarchical outlines use the immutable cache above. Flat
+                // symbols also contain the request URI, so build that view here.
+                Ok(flat_symbols(&symbols, &uri).into())
             }
             RequestKind::FoldingRange => {
                 let document = open_document(&mut self.documents, &uri)?;
@@ -242,11 +282,18 @@ impl State {
                 if let Some(limit) = self.folding_range_limit {
                     ranges.truncate(limit);
                 }
-                Ok(json!(ranges))
+                Ok(Json::encode(&ranges))
             }
-            RequestKind::Definition(position) => {
-                self.definition(&uri, position, parser, cancellation, dependencies)
-            }
+            RequestKind::Definition(position) => self
+                .definition(
+                    &uri,
+                    position,
+                    parser,
+                    cancellation,
+                    dependencies,
+                    &mut index.targets,
+                )
+                .map(Json::from),
             RequestKind::DocumentLink => {
                 dependencies.files = true;
                 let scope = self.workspace.scope(&uri);
@@ -279,7 +326,7 @@ impl State {
                     }
                 });
                 cancellation.check()?;
-                Ok(json!(links))
+                Ok(Json::encode(&links))
             }
             RequestKind::Hover(position) => {
                 let document = open_document(&mut self.documents, &uri)?;
@@ -287,7 +334,8 @@ impl State {
                 let root = document_ast(document, parser, cancellation)?;
                 Ok(analysis::hover(root, position)
                     .map(|info| format_hover(info, self.hover_markdown))
-                    .unwrap_or(Value::Null))
+                    .unwrap_or(Value::Null)
+                    .into())
             }
             RequestKind::References {
                 position,
@@ -301,6 +349,9 @@ impl State {
                 {
                     dependencies.files = true;
                     return heading_references::Context {
+                        index: &mut index.references,
+                        catalog: &mut index.catalog,
+                        revision: self.file_revision,
                         workspace: &self.workspace,
                         documents: &mut self.documents,
                         parser,
@@ -309,22 +360,34 @@ impl State {
                         heading_id_prefix: &self.heading_id_prefix,
                     }
                     .find(&uri, position, include_declaration)
-                    .map(|locations| json!(locations));
+                    .map(|locations| Json::encode(&locations));
                 }
                 let locations: Vec<_> = analysis::references(root, position, include_declaration)
                     .into_iter()
-                    .map(|range| json!({ "uri": uri, "range": range }))
+                    .map(|range| Location {
+                        uri: uri.clone(),
+                        range,
+                    })
                     .collect();
-                Ok(json!(locations))
+                Ok(Json::encode(&locations))
             }
-            RequestKind::Completion(position) => {
-                self.complete(&uri, position, parser, cancellation, dependencies)
-            }
+            RequestKind::Completion(position) => self
+                .complete(
+                    &uri,
+                    position,
+                    parser,
+                    cancellation,
+                    dependencies,
+                    &mut index.targets,
+                )
+                .map(Json::from),
             RequestKind::PrepareRename(position) => {
                 let document = open_document(&mut self.documents, &uri)?;
                 let snapshot = document_snapshot(document, parser, position, cancellation)?;
-                Ok(json!(rename::prepare(&snapshot, position)
-                    .or_else(|| refactor::prepare(&snapshot, position))))
+                Ok(Json::encode(
+                    &rename::prepare(&snapshot, position)
+                        .or_else(|| refactor::prepare(&snapshot, position)),
+                ))
             }
             RequestKind::Rename { position, new_name } => {
                 let document = open_document(&mut self.documents, &uri)?;
@@ -332,6 +395,11 @@ impl State {
                 if rename::prepare(&snapshot, position).is_none() {
                     dependencies.files = true;
                     let edits = refactor::Context {
+                        validate_disk: !self.refactor_file_event_cache
+                            || self.file_revision.is_none(),
+                        index: &mut index.refactors,
+                        catalog: &mut index.catalog,
+                        revision: self.file_revision,
                         workspace: &self.workspace,
                         documents: &mut self.documents,
                         parser,
@@ -343,13 +411,14 @@ impl State {
                     return Ok(workspace_edit(edits, self.versioned_edits));
                 }
                 let edits = rename::rename(&snapshot, position, &new_name, parser, cancellation)?;
-                if self.versioned_edits {
-                    Ok(json!({ "documentChanges": [{
-                        "textDocument": { "uri": uri, "version": snapshot.version }, "edits": edits
-                    }] }))
-                } else {
-                    Ok(json!({ "changes": { uri: edits } }))
-                }
+                Ok(workspace_edit(
+                    vec![refactor::DocumentEdits {
+                        uri,
+                        version: Some(snapshot.version),
+                        edits,
+                    }],
+                    self.versioned_edits,
+                ))
             }
         }
     }
@@ -410,6 +479,7 @@ impl State {
         parser: &YozoraParser,
         cancellation: &Cancellation,
         dependencies: &mut Dependencies,
+        index: &mut crate::heading_index::Index,
     ) -> Result<Value, ResponseError> {
         let document = open_document(&mut self.documents, uri)?;
         document.validate_position(position)?;
@@ -428,7 +498,6 @@ impl State {
         };
         let fragment = fragment.as_deref().filter(|value| !value.is_empty());
         let target_uri;
-        let mut disk_document;
         let document = if let Some(file) = file {
             if let Some(open_uri) =
                 files::open_file_uri(&self.open_file_uris(&scope, cancellation)?, &file, uri)
@@ -448,12 +517,22 @@ impl State {
                         Value::Null
                     });
                 }
-                let Some(text) = files::read_markdown(&file.path) else {
-                    return Ok(Value::Null);
-                };
-                cancellation.check()?;
-                disk_document = Document::new(0, text)?;
-                &mut disk_document
+                let headings = index.headings(
+                    &file.path,
+                    &scope,
+                    &self.heading_id_prefix,
+                    parser,
+                    cancellation,
+                )?;
+                return Ok(headings
+                    .as_ref()
+                    .and_then(|headings| {
+                        headings
+                            .iter()
+                            .find(|(identifier, _)| Some(identifier.as_str()) == fragment)
+                    })
+                    .map(|(_, range)| json!({ "uri": target_uri, "range": range }))
+                    .unwrap_or(Value::Null));
             }
         } else {
             target_uri = uri.to_string();
@@ -480,6 +559,7 @@ impl State {
         parser: &YozoraParser,
         cancellation: &Cancellation,
         dependencies: &mut Dependencies,
+        index: &mut crate::heading_index::Index,
     ) -> Result<Value, ResponseError> {
         let document = open_document(&mut self.documents, uri)?;
         let snapshot = document_snapshot(document, parser, position, cancellation)?;
@@ -516,11 +596,16 @@ impl State {
                             let document = open_document(&mut self.documents, uri)?;
                             let root = document_ast(document, parser, cancellation)?;
                             context.anchors(root, &self.heading_id_prefix)
-                        } else if let Some(text) = files::read_markdown(&file.path) {
-                            cancellation.check()?;
-                            let mut document = Document::new(0, text)?;
-                            let root = document_ast(&mut document, parser, cancellation)?;
-                            context.anchors(root, &self.heading_id_prefix)
+                        } else if let Some(headings) = index.headings(
+                            &file.path,
+                            &scope,
+                            &self.heading_id_prefix,
+                            parser,
+                            cancellation,
+                        )? {
+                            context.identifiers(
+                                headings.iter().map(|(identifier, _)| identifier.as_str()),
+                            )
                         } else {
                             Vec::new()
                         }
@@ -542,17 +627,36 @@ impl State {
     }
 }
 
-fn workspace_edit(documents: Vec<refactor::DocumentEdits>, versioned: bool) -> Value {
+fn workspace_edit(documents: Vec<refactor::DocumentEdits>, versioned: bool) -> Json {
+    #[derive(Serialize)]
+    struct TextDocument<'a> {
+        uri: &'a str,
+        version: Option<i32>,
+    }
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Edit<'a> {
+        text_document: TextDocument<'a>,
+        edits: &'a [TextEdit],
+    }
     if versioned {
-        json!({ "documentChanges": documents.into_iter().map(|document| json!({
-            "textDocument": { "uri": document.uri, "version": document.version }, "edits": document.edits
-        })).collect::<Vec<_>>() })
-    } else {
-        let changes: serde_json::Map<_, _> = documents
-            .into_iter()
-            .map(|document| (document.uri, json!(document.edits)))
+        let changes: Vec<_> = documents
+            .iter()
+            .map(|document| Edit {
+                text_document: TextDocument {
+                    uri: &document.uri,
+                    version: document.version,
+                },
+                edits: &document.edits,
+            })
             .collect();
-        json!({ "changes": changes })
+        Json::encode(&BTreeMap::from([("documentChanges", changes)]))
+    } else {
+        let changes: BTreeMap<_, _> = documents
+            .iter()
+            .map(|document| (document.uri.as_str(), &document.edits))
+            .collect();
+        Json::encode(&BTreeMap::from([("changes", changes)]))
     }
 }
 

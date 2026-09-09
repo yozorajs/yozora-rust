@@ -16,6 +16,10 @@ struct Project {
     used: HashSet<String>,
     prefix: String,
     cancellation: Cancellation,
+    index: Index,
+    catalog: files::Catalog,
+    revision: Option<u64>,
+    validate_disk: bool,
 }
 
 impl Project {
@@ -30,6 +34,10 @@ impl Project {
             used: HashSet::new(),
             prefix: String::new(),
             cancellation: Cancellation::default(),
+            index: Index::default(),
+            catalog: files::Catalog::default(),
+            revision: None,
+            validate_disk: true,
         }
     }
 
@@ -48,6 +56,10 @@ impl Project {
 
     fn context(&mut self) -> Context<'_> {
         Context {
+            validate_disk: self.validate_disk,
+            index: &mut self.index,
+            catalog: &mut self.catalog,
+            revision: self.revision,
             workspace: &self.workspace,
             documents: &mut self.documents,
             parser: &self.parser,
@@ -411,6 +423,85 @@ fn cancellation_before_analysis_does_not_change_sources() {
         -32800
     );
     assert_eq!(project.documents[&uri].text().unwrap(), "# Old");
+}
+
+#[test]
+fn cached_refactors_accept_different_names_and_recheck_closed_source_text() {
+    let mut project = Project::new();
+    project.revision = Some(1);
+    let uri = project.open("target.md", "# Old\n\n## Other");
+    project.disk("a.md", "[go](target.md#old) [other](target.md#other)");
+    for name in ["First", "Second", "中文", "Fourth"] {
+        let edits = project.heading(&uri, at(0, 3), name).unwrap();
+        let texts = project.texts(edits);
+        assert_eq!(texts[&uri], format!("# {name}\n\n## Other"));
+        assert!(texts[&project.directory.uri("a.md")].contains(&format!(
+            "target.md#{}",
+            files::encode_component(&name.to_lowercase())
+        )));
+        assert!(texts[&project.directory.uri("a.md")].contains("target.md#other"));
+    }
+    assert_eq!(project.index.entries.len(), 1);
+
+    // Even an edit without a delivered file event must never yield a stale
+    // WorkspaceEdit. A later event then refreshes the cached source summary.
+    project.disk("a.md", "[changed](target.md#old) [other](target.md#other)");
+    assert_eq!(
+        project.heading(&uri, at(0, 3), "Fifth").err().unwrap().code,
+        -32801
+    );
+    project.revision = Some(2);
+    let edits = project.heading(&uri, at(0, 3), "Fifth").unwrap();
+    let texts = project.texts(edits);
+    assert_eq!(
+        texts[&project.directory.uri("a.md")],
+        "[changed](target.md#fifth) [other](target.md#other)"
+    );
+
+    let edits = project.heading(&uri, at(2, 4), "Another").unwrap();
+    let texts = project.texts(edits);
+    assert_eq!(
+        texts[&project.directory.uri("a.md")],
+        "[changed](target.md#old) [other](target.md#another)"
+    );
+}
+
+#[test]
+fn event_refactors_refresh_changed_sources_before_producing_new_edits() {
+    let mut project = Project::new();
+    project.revision = Some(1);
+    project.validate_disk = false;
+    Arc::make_mut(&mut project.catalog.events).record(1, None);
+    let uri = project.open("target.md", "# Old");
+    project.disk("source.md", "[go](target.md#old)");
+    for (revision, source, name) in [
+        (1, "[go](target.md#old)", "First"),
+        (2, "\n\n[changed](target.md#old)", "Second"),
+        (3, "[unrelated](target.md#missing)", "Third"),
+    ] {
+        if revision != 1 {
+            project.disk("source.md", source);
+            project.revision = Some(revision);
+            Arc::make_mut(&mut project.catalog.events).record(
+                revision,
+                Some(&[crate::protocol::FileEvent {
+                    uri: project.directory.uri("source.md"),
+                    kind: 2,
+                }]),
+            );
+        }
+        let edits = project.heading(&uri, at(0, 3), name).unwrap();
+        let texts = project.texts(edits);
+        assert_eq!(texts[&uri], format!("# {name}"));
+        if revision == 3 {
+            assert_eq!(texts.len(), 1);
+        } else {
+            assert_eq!(
+                texts[&project.directory.uri("source.md")],
+                source.replace("#old", &format!("#{}", name.to_lowercase()))
+            );
+        }
+    }
 }
 
 #[test]

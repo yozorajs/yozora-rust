@@ -3,11 +3,10 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::{mpsc, Arc};
 use std::thread;
 
-use serde_json::Value;
 use yozora_parser::YozoraParser;
 
 use crate::cancellation::Cancellation;
-use crate::protocol::ResponseError;
+use crate::protocol::{Json, ResponseError};
 use crate::query::{Dependencies, Request, State};
 use crate::workspace_index::Index;
 
@@ -41,7 +40,7 @@ pub struct Finished {
     pub worker: usize,
     pub state: State,
     pub dependencies: Dependencies,
-    pub result: Result<Value, ResponseError>,
+    pub result: Result<Json, ResponseError>,
     panicked: bool,
 }
 
@@ -60,10 +59,10 @@ pub fn execute(
             &task.cancellation,
             &mut dependencies,
         ),
-        Work::Diagnostics(uri) => {
-            task.state
-                .diagnostics(&uri, parser, &task.cancellation, &mut dependencies)
-        }
+        Work::Diagnostics(uri) => task
+            .state
+            .diagnostics(&uri, parser, &task.cancellation, &mut dependencies)
+            .map(Json::from),
     }));
     let panicked = result.is_err();
     Finished {

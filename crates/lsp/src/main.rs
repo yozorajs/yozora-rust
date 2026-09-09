@@ -4,12 +4,14 @@ mod completion;
 mod diagnostics;
 mod document;
 mod files;
+mod heading_index;
 mod heading_references;
 mod link_diagnostics;
 mod links;
 mod protocol;
 mod query;
 mod refactor;
+mod reference_index;
 mod rename;
 mod resource_completion;
 mod resource_edit;
@@ -42,7 +44,10 @@ fn main() -> ExitCode {
         }
     }
 
-    match server::run(io::BufReader::new(io::stdin()), io::stdout().lock()) {
+    match server::run(
+        io::BufReader::new(io::stdin()),
+        io::BufWriter::with_capacity(64 * 1024, io::stdout().lock()),
+    ) {
         Ok(status) => status,
         Err(error) => {
             eprintln!("yozora-lsp: {error}");

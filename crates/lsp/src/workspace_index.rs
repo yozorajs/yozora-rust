@@ -1,5 +1,6 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use yozora_ast::Root;
 use yozora_core_parser::ParseOptions;
@@ -40,30 +41,56 @@ impl Default for Limits {
 
 struct Heading {
     name: String,
+    folded: String,
     range: Range,
     // Indices avoid duplicating a long parent name for every child in the cache.
     parent: Option<usize>,
 }
 
 struct CachedFile {
+    uri: String,
     text: Box<str>,
     headings: Box<[Heading]>,
     summary_bytes: usize,
 }
 
-impl CachedFile {
-    fn owned_bytes(&self, path: &PathBuf) -> usize {
-        std::mem::size_of::<Self>() + path.capacity() + self.text.len() + self.summary_bytes
+struct CachedBuffer {
+    text: Arc<String>,
+    headings: Box<[Heading]>,
+    summary_bytes: usize,
+}
+
+impl CachedBuffer {
+    fn owned_bytes(&self, uri: &String) -> usize {
+        std::mem::size_of::<Self>() + uri.capacity() + self.text.capacity() + self.summary_bytes
     }
 }
 
-/// Each worker owns a bounded cache of disk text and heading summaries, never
-/// disk ASTs. Every query rediscovers files and compares their current contents;
-/// no cached entry is a source of truth for existence, scope, or buffer identity.
+impl CachedFile {
+    fn owned_bytes(&self, path: &PathBuf) -> usize {
+        std::mem::size_of::<Self>()
+            + path.capacity()
+            + self.uri.capacity()
+            + self.text.len()
+            + self.summary_bytes
+    }
+}
+
+/// Each worker owns bounded semantic caches, never closed ASTs. Confirmed file
+/// events validate unchanged sources; strict clients compare current disk bytes.
+/// Catalog generations and open text identities delimit each provider's reuse.
 #[derive(Default)]
 pub struct Index {
-    cache: BTreeMap<PathBuf, CachedFile>,
+    pub references: crate::reference_index::Index,
+    pub refactors: crate::refactor::Index,
+    pub targets: crate::heading_index::Index,
+    pub catalog: files::Catalog,
+    symbol_revision: Option<u64>,
+    symbol_catalog: u64,
+    cache: HashMap<PathBuf, CachedFile>,
     cache_bytes: usize,
+    buffers: HashMap<String, CachedBuffer>,
+    buffer_bytes: usize,
     limits: Limits,
 }
 
@@ -75,6 +102,7 @@ struct Budget {
 }
 
 impl Index {
+    #[allow(clippy::too_many_arguments)]
     pub fn symbols(
         &mut self,
         query: &str,
@@ -83,24 +111,42 @@ impl Index {
         parser: &YozoraParser,
         cancellation: &Cancellation,
         used_buffers: &mut HashSet<String>,
+        revision: Option<u64>,
     ) -> Result<Vec<SymbolInformation>, ResponseError> {
         cancellation.check()?;
         let scope = workspace.index_scope(cancellation, self.limits.roots)?;
-        let sources = scope.sources(
+        let (sources, reused) = self.catalog.sources(
+            &scope,
             documents.keys().map(String::as_str),
             cancellation,
             self.limits.entries,
             self.limits.files,
+            revision,
         )?;
+        let generation = self.catalog.generation();
+        let previous_revision = self.symbol_revision;
+        let reuse_contents = reused
+            && revision.is_some()
+            && previous_revision.is_some()
+            && self.symbol_catalog == generation;
+        self.symbol_revision = None;
         let paths = sources.files;
         let buffers = sources.buffers.into_iter().map(|buffer| buffer.uri);
-        let retained: BTreeSet<_> = paths.iter().collect();
-        self.cache.retain(|path, _| retained.contains(path));
-        self.cache_bytes = self
-            .cache
+        self.buffers.retain(|uri, _| documents.contains_key(uri));
+        self.buffer_bytes = self
+            .buffers
             .iter()
-            .map(|(path, entry)| entry.owned_bytes(path))
+            .map(|(uri, entry)| entry.owned_bytes(uri))
             .sum();
+        if !reuse_contents {
+            let retained: HashSet<_> = paths.iter().collect();
+            self.cache.retain(|path, _| retained.contains(path));
+            self.cache_bytes = self
+                .cache
+                .iter()
+                .map(|(path, entry)| entry.owned_bytes(path))
+                .sum();
+        }
 
         let query = query.trim().to_lowercase();
         let mut budget = Budget::default();
@@ -109,9 +155,32 @@ impl Index {
             cancellation.check()?;
             used_buffers.insert(uri.clone());
             let document = documents.get_mut(&uri).expect("selected buffer is open");
-            budget.text_bytes += document.text()?.len();
+            let text = document.shared_text()?;
+            budget.text_bytes += text.len();
             self.check_text_budget(&budget)?;
             cancellation.check()?;
+            if let Some(entry) = self
+                .buffers
+                .get(&uri)
+                .filter(|entry| Arc::ptr_eq(&entry.text, &text))
+            {
+                budget.summary_bytes += entry.summary_bytes;
+                if budget.summary_bytes > self.limits.summary_bytes {
+                    return Err(index_limit("heading summary byte"));
+                }
+                self.collect(
+                    &entry.headings,
+                    &uri,
+                    &query,
+                    &mut budget,
+                    &mut result,
+                    cancellation,
+                )?;
+                continue;
+            }
+            if let Some((key, entry)) = self.buffers.remove_entry(&uri) {
+                self.buffer_bytes -= entry.owned_bytes(&key);
+            }
             let root = document.ast(parser)?;
             let (headings, bytes) = summarize(
                 root,
@@ -119,17 +188,57 @@ impl Index {
                 cancellation,
             )?;
             budget.summary_bytes += bytes;
-            self.collect(
+            let collected = self.collect(
                 &headings,
                 &uri,
                 &query,
                 &mut budget,
                 &mut result,
                 cancellation,
-            )?;
+            );
+            let entry = CachedBuffer {
+                text,
+                headings,
+                summary_bytes: bytes,
+            };
+            let bytes = entry.owned_bytes(&uri);
+            if bytes <= self.limits.cache_bytes {
+                if self.cache_bytes + self.buffer_bytes + bytes > self.limits.cache_bytes {
+                    self.cache.clear();
+                    self.cache_bytes = 0;
+                    self.buffers.clear();
+                    self.buffer_bytes = 0;
+                }
+                self.buffer_bytes += bytes;
+                self.buffers.insert(uri, entry);
+            }
+            collected?;
         }
         for path in paths {
             cancellation.check()?;
+            if reuse_contents
+                && self
+                    .catalog
+                    .contents_unchanged(&path, previous_revision, revision)
+            {
+                if let Some(entry) = self.cache.get(&path) {
+                    budget.text_bytes += entry.text.len();
+                    self.check_text_budget(&budget)?;
+                    budget.summary_bytes += entry.summary_bytes;
+                    if budget.summary_bytes > self.limits.summary_bytes {
+                        return Err(index_limit("heading summary byte"));
+                    }
+                    self.collect(
+                        &entry.headings,
+                        &entry.uri,
+                        &query,
+                        &mut budget,
+                        &mut result,
+                        cancellation,
+                    )?;
+                    continue;
+                }
+            }
             let cached = self.cache.remove_entry(&path).map(|(key, entry)| {
                 self.cache_bytes -= entry.owned_bytes(&key);
                 entry
@@ -163,6 +272,7 @@ impl Index {
                         cancellation,
                     )?;
                     CachedFile {
+                        uri: files::path_uri(&path).expect("scoped file paths have valid URIs"),
                         text: text.into_boxed_str(),
                         headings,
                         summary_bytes,
@@ -173,10 +283,9 @@ impl Index {
             if budget.summary_bytes > self.limits.summary_bytes {
                 return Err(index_limit("heading summary byte"));
             }
-            let uri = files::path_uri(&path).expect("scoped file paths have valid URIs");
             let collected = self.collect(
                 &entry.headings,
-                &uri,
+                &entry.uri,
                 &query,
                 &mut budget,
                 &mut result,
@@ -193,6 +302,8 @@ impl Index {
                 .then_with(|| left.location.range.start.cmp(&right.location.range.start))
                 .then_with(|| left.name.cmp(&right.name))
         });
+        self.symbol_revision = revision;
+        self.symbol_catalog = generation;
         Ok(result)
     }
 
@@ -209,11 +320,13 @@ impl Index {
         if bytes > self.limits.cache_bytes {
             return;
         }
-        if self.cache_bytes + bytes > self.limits.cache_bytes {
+        if self.cache_bytes + self.buffer_bytes + bytes > self.limits.cache_bytes {
             // Old, not-yet-visited contents may be larger than their replacements.
             // Dropping the cache only affects reuse; results always use this scan.
             self.cache.clear();
             self.cache_bytes = 0;
+            self.buffers.clear();
+            self.buffer_bytes = 0;
         }
         self.cache_bytes += bytes;
         self.cache.insert(path, entry);
@@ -230,7 +343,7 @@ impl Index {
     ) -> Result<(), ResponseError> {
         for heading in headings {
             cancellation.check()?;
-            if !heading.name.to_lowercase().contains(query) {
+            if !heading.folded.contains(query) {
                 continue;
             }
             let parent = heading.parent.map(|index| headings[index].name.as_str());
@@ -275,13 +388,15 @@ fn summarize(
     let mut bytes = 0;
     while let Some((symbol, parent)) = stack.pop() {
         cancellation.check()?;
-        bytes += std::mem::size_of::<Heading>() + symbol.name.capacity();
+        let folded = symbol.name.to_lowercase();
+        bytes += std::mem::size_of::<Heading>() + symbol.name.capacity() + folded.capacity();
         if bytes > max_bytes {
             return Err(index_limit("heading summary byte"));
         }
         let index = headings.len();
         headings.push(Heading {
             name: symbol.name,
+            folded,
             range: symbol.selection_range,
             parent,
         });

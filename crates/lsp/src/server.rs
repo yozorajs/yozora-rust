@@ -1,7 +1,10 @@
 use std::collections::{HashMap, VecDeque};
 use std::io::{self, BufRead, Write};
 use std::process::ExitCode;
-use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::{
+    mpsc::{self, RecvTimeoutError},
+    Arc,
+};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
@@ -13,16 +16,17 @@ use crate::document::{open_document, Document};
 use crate::files::Workspace;
 use crate::protocol::{
     parse_params, DidChangeParams, DidChangeWatchedFilesParams, DidChangeWorkspaceFoldersParams,
-    DidOpenParams, InitializeParams, RenameFilesParams, ResponseError, TextDocumentParams,
+    DidOpenParams, FileEvent, InitializeParams, Json, RenameFilesParams, ResponseError,
+    TextDocumentParams,
 };
 use crate::query::{format_diagnostics, Dependencies, Request};
-use crate::transport::{read_messages, write_message};
+use crate::transport::{read_messages, write_encoded, write_message};
 use crate::worker::{self, Work, Workers, WORKER_COUNT};
 #[cfg(test)]
 use crate::{protocol::Position, query::document_start};
 
 const DIAGNOSTICS_DELAY: Duration = Duration::from_millis(150);
-const QUERY_DELAY: Duration = Duration::from_millis(5);
+const QUERY_DELAY: Duration = Duration::ZERO;
 const MAX_PENDING_QUERIES: usize = 128;
 const MAX_PENDING_QUERY_BYTES: usize = 1024 * 1024;
 
@@ -70,6 +74,12 @@ struct RunningWork {
     cancellation: Cancellation,
 }
 
+struct WatchRequest {
+    id: String,
+    registration: String,
+    generation: u64,
+}
+
 impl Drop for RunningWork {
     fn drop(&mut self) {
         // EOF, exit and I/O errors also stop the remaining stages of live work.
@@ -91,9 +101,15 @@ struct Server {
     pending_query_bytes: usize,
     running: [Option<RunningWork>; WORKER_COUNT],
     scope_epoch: u64,
+    watches_supported: bool,
+    watch_initialized: bool,
+    watch_generation: u64,
+    watch_serial: u64,
+    pending_watch: Option<WatchRequest>,
+    active_watch: Option<String>,
     // Notifications can invalidate queries and retract diagnostics together.
     // Drain these messages even when the notification returns an error.
-    outgoing: Vec<Value>,
+    outgoing: Vec<Json>,
 }
 
 pub fn run(reader: impl BufRead + Send + 'static, writer: impl Write) -> io::Result<ExitCode> {
@@ -134,8 +150,9 @@ fn run_with_workers(
         }
         // Check timers after every message as well as on idle timeouts, so
         // traffic for one document cannot starve diagnostics for another.
+        server.complete_cached_queries(Instant::now());
         for message in server.outgoing.drain(..) {
-            write_message(&mut writer, &message)?;
+            write_encoded(&mut writer, message.as_bytes())?;
         }
         while let Some((worker, task)) = server.start_work(Instant::now()) {
             workers.submit(worker, task)?;
@@ -161,6 +178,14 @@ impl Server {
             }
         };
         let id = message.get("id").cloned();
+        if message.get("method").is_none()
+            && message.get("jsonrpc").and_then(Value::as_str) == Some("2.0")
+            && id.is_some()
+            && (message.get("result").is_some() || message.get("error").is_some())
+        {
+            self.watch_response(&message);
+            return Ok(None);
+        }
         let valid_id = id
             .as_ref()
             .is_none_or(|id| id.is_string() || id.as_i64().is_some());
@@ -201,7 +226,7 @@ impl Server {
             None
         };
         for message in self.outgoing.drain(..) {
-            write_message(writer, &message)?;
+            write_encoded(writer, message.as_bytes())?;
         }
         if let Some(response) = response {
             write_message(writer, &response)?;
@@ -214,6 +239,79 @@ impl Server {
             ExitCode::SUCCESS
         } else {
             ExitCode::FAILURE
+        }
+    }
+
+    fn advance_file_revision(&mut self, changes: Option<&[FileEvent]>) {
+        self.scope_epoch = self.scope_epoch.wrapping_add(1);
+        Arc::make_mut(&mut self.query.file_events).record(self.scope_epoch, changes);
+        if self.query.file_revision.is_some() {
+            self.query.file_revision = Some(self.scope_epoch);
+        }
+    }
+
+    fn request_file_watches(&mut self) {
+        if !self.watch_initialized || !self.watches_supported || self.pending_watch.is_some() {
+            return;
+        }
+        self.query.file_revision = None;
+        if let Some(registration) = self.active_watch.take() {
+            self.watch_serial += 1;
+            self.outgoing.push(json!({
+                "jsonrpc": "2.0", "id": format!("yozora.unwatch.{}", self.watch_serial),
+                "method": "client/unregisterCapability",
+                "params": {"unregisterations": [{"id": registration, "method": "workspace/didChangeWatchedFiles"}]}
+            }).into());
+        }
+        let roots = self.query.workspace.watch_roots();
+        if roots.is_empty() || roots.len() > crate::files::MAX_WORKSPACE_ROOTS {
+            return;
+        }
+        self.watch_serial += 1;
+        let id = format!("yozora.watch.{}", self.watch_serial);
+        let registration = id.clone();
+        let watchers: Vec<_> = roots
+            .into_iter()
+            .map(|root| {
+                json!({
+                    "globPattern": {"baseUri": root, "pattern": "**/*"}, "kind": 7
+                })
+            })
+            .collect();
+        self.outgoing.push(json!({
+            "jsonrpc": "2.0", "id": id,
+            "method": "client/registerCapability",
+            "params": {"registrations": [{"id": registration, "method": "workspace/didChangeWatchedFiles", "registerOptions": {"watchers": watchers}}]}
+        }).into());
+        self.pending_watch = Some(WatchRequest {
+            id,
+            registration,
+            generation: self.watch_generation,
+        });
+    }
+
+    fn watch_response(&mut self, response: &Value) {
+        if self.state != State::Running
+            || self
+                .pending_watch
+                .as_ref()
+                .is_none_or(|pending| response["id"].as_str() != Some(&pending.id))
+        {
+            return;
+        }
+        let pending = self.pending_watch.take().expect("matched watch request");
+        if response.get("error").is_some() || response.get("result") != Some(&Value::Null) {
+            // A client may advertise registration but reject a pattern. Its
+            // acknowledgment, not its capability bit, enables event caching.
+            self.query.file_revision = None;
+            self.watches_supported = false;
+            return;
+        }
+        self.active_watch = Some(pending.registration);
+        if pending.generation == self.watch_generation {
+            self.query.file_revision = Some(self.scope_epoch);
+        } else {
+            self.request_file_watches();
         }
     }
 
@@ -261,7 +359,7 @@ impl Server {
                 &query.id,
             ) {
                 *pending_bytes -= query.retained_bytes();
-                outgoing.push(error.response(query.id.clone()));
+                outgoing.push(error.response(query.id.clone()).into());
                 false
             } else {
                 true
@@ -270,7 +368,7 @@ impl Server {
         for work in self.running.iter_mut().flatten() {
             if let Some(Reply::Query(id)) = &work.reply {
                 if reject(work.uri.as_deref(), work.workspace, id) {
-                    outgoing.push(error.response(id.clone()));
+                    outgoing.push(error.response(id.clone()).into());
                     work.reply = None;
                     work.cancellation.cancel();
                 }
@@ -415,6 +513,29 @@ impl Server {
         ))
     }
 
+    fn complete_cached_queries(&mut self, now: Instant) {
+        let state = &self.query;
+        let pending_bytes = &mut self.pending_query_bytes;
+        let outgoing = &mut self.outgoing;
+        let mut bytes = 0;
+        let mut count = 0;
+        // Bound work on the input thread even when a client pipelines many
+        // large outlines. Cache misses retain normal worker/deadline ordering.
+        self.pending_queries.retain(|query| {
+            if query.deadline > now || count == 8 || bytes >= 1024 * 1024 {
+                return true;
+            }
+            let Some(result) = state.cached_request(&query.request) else {
+                return true;
+            };
+            *pending_bytes -= query.retained_bytes();
+            bytes += result.as_bytes().len();
+            count += 1;
+            outgoing.push(Json::response(&query.id, &result));
+            false
+        });
+    }
+
     fn finish_work(&mut self, mut finished: worker::Finished) {
         let Some(mut work) = self.running[finished.worker].take() else {
             return;
@@ -451,8 +572,8 @@ impl Server {
                     ))
                 };
                 self.outgoing.push(match result {
-                    Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
-                    Err(error) => error.response(id),
+                    Ok(result) => Json::response(&id, &result),
+                    Err(error) => error.response(id).into(),
                 });
             }
             Some(Reply::Diagnostics) if current => {
@@ -471,12 +592,15 @@ impl Server {
                             .as_ref()
                             .expect("diagnostics have a source document");
                         let version = self.query.documents[uri].version();
-                        self.outgoing.push(format_diagnostics(
-                            uri,
-                            self.query.diagnostic_version.then_some(version),
-                            Vec::new(),
-                            false,
-                        ));
+                        self.outgoing.push(
+                            format_diagnostics(
+                                uri,
+                                self.query.diagnostic_version.then_some(version),
+                                Vec::new(),
+                                false,
+                            )
+                            .into(),
+                        );
                     }
                 }
             }
@@ -506,7 +630,7 @@ impl Server {
         let before = self.outgoing.len();
         let finished = worker::execute(worker, task, &self.parser, &mut self.index);
         self.finish_work(finished);
-        Ok((self.outgoing.len() > before).then(|| self.outgoing.pop().unwrap()))
+        Ok((self.outgoing.len() > before).then(|| self.outgoing.pop().unwrap().into_value()))
     }
 
     fn request(&mut self, method: &str, params: Value) -> Result<Value, ResponseError> {
@@ -527,16 +651,25 @@ impl Server {
             for uri in &folders {
                 validate_uri(uri)?;
             }
-            let prefix = initialization
-                .initialization_options
-                .unwrap_or_default()
-                .heading_id_prefix;
+            let options = initialization.initialization_options.unwrap_or_default();
+            let use_file_events = options.file_event_cache.unwrap_or(true);
+            let prefix = options.heading_id_prefix;
             if prefix.len() > 256 || prefix.chars().any(char::is_control) {
                 return Err(ResponseError::invalid_params(
                     "headingIdPrefix must be at most 256 UTF-8 bytes without control characters",
                 ));
             }
             self.query.workspace = Workspace::new(folders);
+            self.query.refactor_file_event_cache = options.refactor_file_event_cache;
+            self.watches_supported = use_file_events
+                && params
+                    .pointer("/capabilities/workspace/didChangeWatchedFiles/dynamicRegistration")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+                && params
+                    .pointer("/capabilities/workspace/didChangeWatchedFiles/relativePatternSupport")
+                    .and_then(Value::as_bool)
+                    == Some(true);
             self.query.heading_id_prefix = prefix;
             self.query.hierarchical_symbols = params
                 .pointer(
@@ -628,13 +761,16 @@ impl Server {
                 Ok(Value::Null)
             }
             #[cfg(test)]
-            method if is_query(method) => self.query.request(
-                Request::parse(method, params)?,
-                &self.parser,
-                &mut self.index,
-                &Cancellation::default(),
-                &mut crate::query::Dependencies::default(),
-            ),
+            method if is_query(method) => self
+                .query
+                .request(
+                    Request::parse(method, params)?,
+                    &self.parser,
+                    &mut self.index,
+                    &Cancellation::default(),
+                    &mut crate::query::Dependencies::default(),
+                )
+                .map(Json::into_value),
             _ => Err(ResponseError::new(-32601, "Method not found")),
         }
     }
@@ -662,6 +798,12 @@ impl Server {
         now: Instant,
     ) -> Result<(), ResponseError> {
         match method {
+            "initialized" => {
+                if !self.watch_initialized {
+                    self.watch_initialized = true;
+                    self.request_file_watches();
+                }
+            }
             "workspace/didRenameFiles" => {
                 let params: RenameFilesParams = parse_params(params)?;
                 for file in &params.files {
@@ -671,7 +813,7 @@ impl Server {
                 if !params.files.is_empty() {
                     // File notifications invalidate snapshots; didClose/didOpen
                     // remain the authority for renamed buffer text and versions.
-                    self.scope_epoch = self.scope_epoch.wrapping_add(1);
+                    self.advance_file_revision(None);
                     self.invalidate_workspace_queries();
                     self.refresh_link_diagnostics(None, now);
                 }
@@ -694,7 +836,10 @@ impl Server {
                     validate_uri(uri)?;
                 }
                 self.query.workspace.change(&removed, added);
-                self.scope_epoch = self.scope_epoch.wrapping_add(1);
+                self.advance_file_revision(None);
+                self.query.file_revision = None;
+                self.watch_generation += 1;
+                self.request_file_watches();
                 self.invalidate_workspace_queries();
                 self.refresh_link_diagnostics(None, now);
             }
@@ -709,7 +854,7 @@ impl Server {
                 if !params.changes.is_empty() {
                     // Queries revalidate disk without a watcher. Diagnostics
                     // also refresh when a client supplies file notifications.
-                    self.scope_epoch = self.scope_epoch.wrapping_add(1);
+                    self.advance_file_revision(Some(&params.changes));
                     self.invalidate_workspace_queries();
                     self.refresh_link_diagnostics(None, now);
                 }
@@ -723,7 +868,7 @@ impl Server {
                 self.diagnostics_due
                     .insert(item.uri.clone(), now + DIAGNOSTICS_DELAY);
                 self.query.documents.insert(item.uri, document);
-                self.scope_epoch = self.scope_epoch.wrapping_add(1);
+                self.advance_file_revision(None);
                 self.refresh_link_diagnostics(None, now);
             }
             "textDocument/didChange" => {
@@ -746,12 +891,15 @@ impl Server {
                     } else {
                         // Text is now out of sync; retract the previous snapshot.
                         self.diagnostics_due.remove(&uri);
-                        self.outgoing.push(format_diagnostics(
-                            &uri,
-                            self.query.diagnostic_version.then_some(version),
-                            Vec::new(),
-                            false,
-                        ));
+                        self.outgoing.push(
+                            format_diagnostics(
+                                &uri,
+                                self.query.diagnostic_version.then_some(version),
+                                Vec::new(),
+                                false,
+                            )
+                            .into(),
+                        );
                     }
                     self.refresh_link_diagnostics(Some(&uri), now);
                 }
@@ -761,13 +909,13 @@ impl Server {
                 let params: TextDocumentParams = parse_params(params)?;
                 let uri = params.text_document.uri;
                 if self.query.documents.remove(&uri).is_some() {
-                    self.scope_epoch = self.scope_epoch.wrapping_add(1);
+                    self.advance_file_revision(None);
                     self.invalidate_queries(&uri);
                     self.diagnostics_due.remove(&uri);
                     self.diagnostic_dependencies.remove(&uri);
                     self.refresh_link_diagnostics(None, now);
                     self.outgoing
-                        .push(format_diagnostics(&uri, None, Vec::new(), false));
+                        .push(format_diagnostics(&uri, None, Vec::new(), false).into());
                 }
             }
             "$/cancelRequest" => {
@@ -916,6 +1064,133 @@ mod tests {
                 now,
             )
             .unwrap();
+    }
+
+    #[test]
+    fn file_event_caches_require_acknowledged_watches_and_allow_strict_validation() {
+        let directory = crate::files::tests::TestDir::new();
+        for (enabled, accepted) in [(true, true), (true, false), (false, true)] {
+            let mut server = Server::default();
+            server.request("initialize", json!({
+                "rootUri": directory.uri(""),
+                "initializationOptions": {"fileEventCache": enabled},
+                "capabilities": {"workspace": {"didChangeWatchedFiles": {"dynamicRegistration": true, "relativePatternSupport": true}}}
+            })).unwrap();
+            server
+                .notification("initialized", json!({}), Instant::now())
+                .unwrap();
+            assert!(server.query.file_revision.is_none());
+            if !enabled {
+                assert!(server.outgoing.is_empty());
+                continue;
+            }
+            let registration = server.outgoing.pop().unwrap();
+            assert_eq!(registration["method"], "client/registerCapability");
+            let response = if accepted {
+                json!({"jsonrpc": "2.0", "id": registration["id"], "result": null})
+            } else {
+                json!({"jsonrpc": "2.0", "id": registration["id"], "error": {"code": -32601, "message": "unsupported"}})
+            };
+            server
+                .handle_message(&serde_json::to_vec(&response).unwrap(), &mut Vec::new())
+                .unwrap();
+            assert_eq!(
+                server.query.file_revision,
+                accepted.then_some(server.scope_epoch)
+            );
+            server
+                .notification(
+                    "workspace/didChangeWatchedFiles",
+                    json!({"changes": [{"uri": directory.uri("guide.md"), "type": 2}]}),
+                    Instant::now(),
+                )
+                .unwrap();
+            assert_eq!(server.query.file_revision, accepted.then_some(1));
+        }
+    }
+
+    #[test]
+    fn obsolete_watch_acknowledgments_cannot_enable_an_old_workspace_view() {
+        let first = crate::files::tests::TestDir::new();
+        let second = crate::files::tests::TestDir::new();
+        let mut server = Server::default();
+        server.request("initialize", json!({
+            "rootUri": first.uri(""),
+            "capabilities": {"workspace": {"didChangeWatchedFiles": {"dynamicRegistration": true, "relativePatternSupport": true}}}
+        })).unwrap();
+        let now = Instant::now();
+        server.notification("initialized", json!({}), now).unwrap();
+        let original = server.outgoing.pop().unwrap();
+        server
+            .notification(
+                "workspace/didChangeWorkspaceFolders",
+                json!({"event": {
+                    "removed": [{"uri": first.uri(""), "name": "first"}],
+                    "added": [{"uri": second.uri(""), "name": "second"}]
+                }}),
+                now,
+            )
+            .unwrap();
+        server.watch_response(&json!({"id": original["id"], "result": null}));
+        assert!(server.query.file_revision.is_none());
+        assert_eq!(server.outgoing[0]["method"], "client/unregisterCapability");
+        let current = server.outgoing.pop().unwrap();
+        assert_eq!(
+            current["params"]["registrations"][0]["registerOptions"]["watchers"][0]["globPattern"]
+                ["baseUri"],
+            second.uri("")
+        );
+        server.watch_response(&json!({"id": current["id"], "result": null}));
+        assert_eq!(server.query.file_revision, Some(server.scope_epoch));
+    }
+
+    #[test]
+    fn cached_outlines_release_queue_capacity_and_obey_cancellation_and_revisions() {
+        let mut server = server();
+        server.query.hierarchical_symbols = true;
+        let now = Instant::now();
+        let uri = "untitled:cached-outline";
+        open(&mut server, uri, "# Before", now);
+        queue(&mut server, json!(0), uri, now);
+        assert_eq!(
+            server.take_due_work(now).unwrap().unwrap()["result"][0]["name"],
+            "Before"
+        );
+
+        for id in 1..=16 {
+            queue(&mut server, json!(id), uri, now);
+        }
+        let queued_bytes = server.pending_query_bytes;
+        server.complete_cached_queries(now);
+        assert_eq!(server.outgoing.len(), 8);
+        assert_eq!(server.pending_queries.len(), 8);
+        assert!(server.pending_query_bytes < queued_bytes);
+        assert!(server.running.iter().all(Option::is_none));
+        server.complete_cached_queries(now);
+        assert!(server.pending_queries.is_empty());
+        assert_eq!(server.pending_query_bytes, 0);
+        for (index, response) in server.outgoing.drain(..).enumerate() {
+            assert_eq!(response["id"], index + 1);
+            assert_eq!(response["result"][0]["name"], "Before");
+        }
+
+        queue(&mut server, json!(17), uri, now);
+        server
+            .notification("$/cancelRequest", json!({"id": 17}), now)
+            .unwrap();
+        server.complete_cached_queries(now);
+        assert_eq!(server.outgoing.pop().unwrap()["error"]["code"], -32800);
+        queue(&mut server, json!(18), uri, now);
+        replace(&mut server, uri, 2, "# After", now).unwrap();
+        server.complete_cached_queries(now);
+        assert_eq!(server.outgoing.pop().unwrap()["error"]["code"], -32801);
+        queue(&mut server, json!(19), uri, now);
+        server.complete_cached_queries(now);
+        assert!(server.outgoing.is_empty());
+        assert_eq!(
+            server.take_due_work(now).unwrap().unwrap()["result"][0]["name"],
+            "After"
+        );
     }
 
     #[test]
@@ -2089,10 +2364,8 @@ mod tests {
         open(&mut server, uri, "# Current", now);
         queue(&mut server, json!(1), uri, now);
         queue(&mut server, json!("1"), uri, now);
-        assert!(server
-            .take_due_work(now + Duration::from_millis(4))
-            .unwrap()
-            .is_none());
+        assert_eq!(server.next_deadline(), Some(now));
+        assert_eq!(server.pending_queries.len(), 2);
         server
             .notification("$/cancelRequest", json!({ "id": 1 }), now)
             .unwrap();
@@ -2185,9 +2458,20 @@ mod tests {
             "untitled:queries",
             now + Duration::from_millis(149),
         );
+        let immediate = server
+            .take_due_work(now + Duration::from_millis(149))
+            .unwrap()
+            .unwrap();
+        assert_eq!(immediate["id"], 1);
+        queue(
+            &mut server,
+            json!(2),
+            "untitled:queries",
+            now + Duration::from_millis(151),
+        );
         assert_eq!(server.next_deadline(), Some(now + DIAGNOSTICS_DELAY));
         let diagnostic = server
-            .take_due_work(now + DIAGNOSTICS_DELAY)
+            .take_due_work(now + Duration::from_millis(151))
             .unwrap()
             .unwrap();
         assert_eq!(diagnostic["params"]["uri"], "untitled:diagnostics");
@@ -2195,7 +2479,7 @@ mod tests {
             .take_due_work(now + Duration::from_millis(154))
             .unwrap()
             .unwrap();
-        assert_eq!(query["id"], 1);
+        assert_eq!(query["id"], 2);
         assert_eq!(query["result"][0]["name"], "Query");
         assert_eq!(
             server.next_deadline(),

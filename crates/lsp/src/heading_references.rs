@@ -11,7 +11,9 @@ use crate::files::{self, FileScope, Target, Workspace};
 use crate::links;
 use crate::protocol::{Location, Position, Range, ResponseError};
 
-const MAX_URL_BYTES: usize = 8 * 1024 * 1024;
+use crate::reference_index::{
+    Index, Key, Resolved as CachedResolution, ResolvedResource, MAX_RESOURCES, MAX_URL_BYTES,
+};
 
 pub struct Context<'a> {
     pub workspace: &'a Workspace,
@@ -20,17 +22,14 @@ pub struct Context<'a> {
     pub cancellation: &'a Cancellation,
     pub used_buffers: &'a mut HashSet<String>,
     pub heading_id_prefix: &'a str,
+    pub index: &'a mut Index,
+    pub catalog: &'a mut files::Catalog,
+    pub revision: Option<u64>,
 }
 
 enum Selection {
     Heading { identifier: String, range: Range },
     Destination(String),
-}
-
-#[derive(Eq, PartialEq)]
-enum Key {
-    Buffer(String),
-    File(PathBuf),
 }
 
 struct Subject {
@@ -57,7 +56,7 @@ impl Default for Budget {
     fn default() -> Self {
         Self {
             text_bytes: files::MAX_WORKSPACE_BYTES,
-            resources: 20_000,
+            resources: MAX_RESOURCES,
             url_bytes: MAX_URL_BYTES,
             locations: 10_000,
             location_bytes: 4 * 1024 * 1024,
@@ -136,13 +135,19 @@ impl Context<'_> {
         let local = matches!(&subject.key, Key::Buffer(uri) if !open_uris.values().flatten().any(|open| open == uri));
         let mut buffers = BTreeSet::new();
         let mut paths = BTreeSet::new();
+        let mut reuse_contents = false;
+        let mut previous_revision = None;
         if !local {
-            let sources = scope.sources(
+            let (sources, reused) = self.catalog.sources(
+                &scope,
                 self.documents.keys().map(String::as_str),
                 self.cancellation,
                 files::MAX_WORKSPACE_ENTRIES,
                 files::MAX_WORKSPACE_FILES,
+                self.revision,
             )?;
+            previous_revision = self.index.revision(self.catalog.generation());
+            reuse_contents = reused && previous_revision.is_some() && self.revision.is_some();
             buffers.extend(sources.buffers.into_iter().map(|buffer| buffer.uri));
             // Distinct open aliases may have different unsaved contents. Scan
             // each client URI, while disk files remain overlaid and deduplicated.
@@ -163,9 +168,13 @@ impl Context<'_> {
         if buffers.len() + paths.len() > files::MAX_WORKSPACE_FILES {
             return Err(limit("file/buffer count"));
         }
+        if !reuse_contents {
+            self.index.retain(&paths);
+        }
+        self.index.finish_revision(None, self.catalog.generation());
         let mut search = Search {
             subject: &subject,
-            scope: &scope,
+            resolver: files::Resolver::new(&scope),
             open_uris: &open_uris,
             cancellation: self.cancellation,
             budget,
@@ -182,36 +191,95 @@ impl Context<'_> {
                 .ok_or_else(|| limit("source byte"))?;
             let root = document.ast(self.parser)?;
             self.cancellation.check()?;
-            search.collect(&uri, root)?;
+            search.collect(&uri, root, None)?;
         }
         for path in paths {
             self.cancellation.check()?;
+            if reuse_contents
+                && subject.key != Key::File(path.clone())
+                && self
+                    .catalog
+                    .contents_unchanged(&path, previous_revision, self.revision)
+            {
+                if let Some((bytes, uri, resolved)) =
+                    self.index
+                        .resolved(&path, self.revision.unwrap(), self.catalog)
+                {
+                    search.budget.text_bytes = search
+                        .budget
+                        .text_bytes
+                        .checked_sub(bytes)
+                        .ok_or_else(|| limit("source byte"))?;
+                    search.collect_resolved(uri, resolved)?;
+                    continue;
+                }
+                if let Some((bytes, resources)) = self.index.cached(&path) {
+                    search.budget.text_bytes = search
+                        .budget
+                        .text_bytes
+                        .checked_sub(bytes)
+                        .ok_or_else(|| limit("source byte"))?;
+                    let uri = files::path_uri(&path).expect("scoped paths form local file URIs");
+                    let resolved = search.collect_resources(
+                        &uri,
+                        Some(&path),
+                        resources
+                            .iter()
+                            .map(|resource| (resource.range, resource.url.as_ref())),
+                        true,
+                    )?;
+                    if let Some(resolved) = resolved {
+                        self.index.cache_resolved(
+                            &path,
+                            self.revision.unwrap(),
+                            self.catalog.generation(),
+                            resolved,
+                        );
+                    }
+                    continue;
+                }
+            }
             if scope.resolve(&path).as_ref() != Some(&path) {
                 return Err(modified());
             }
-            let mut document = if subject.key == Key::File(path.clone()) {
-                disk.take().expect("a closed target has a parsed snapshot")
+            let uri = files::path_uri(&path).expect("scoped paths form local file URIs");
+            if subject.key == Key::File(path.clone()) {
+                let mut document = disk.take().expect("a closed target has a parsed snapshot");
+                let root = document.ast(self.parser)?;
+                self.cancellation.check()?;
+                search.collect(&uri, root, Some(&path))?;
             } else {
                 let Some(text) =
                     files::read_markdown_budgeted(&path, &mut search.budget.text_bytes)?
                 else {
+                    self.index.remove(&path);
                     continue;
                 };
-                Document::new(0, text)?
-            };
-            self.cancellation.check()?;
-            let root = document.ast(self.parser)?;
-            self.cancellation.check()?;
-            let uri = files::path_uri(&path).expect("scoped paths form local file URIs");
-            search.collect(&uri, root)?;
+                let resources =
+                    self.index
+                        .resources(&path, text, self.parser, self.cancellation)?;
+                let resolved = search.collect_resources(
+                    &uri,
+                    Some(&path),
+                    resources
+                        .iter()
+                        .map(|resource| (resource.range, resource.url.as_ref())),
+                    self.revision.is_some(),
+                )?;
+                if let (Some(revision), Some(resolved)) = (self.revision, resolved) {
+                    self.index
+                        .cache_resolved(&path, revision, self.catalog.generation(), resolved);
+                }
+            }
         }
         if include_declaration {
             search.push(&subject.declaration.uri, subject.declaration.range)?;
         }
-        if scope
-            != self
-                .workspace
-                .index_scope(self.cancellation, files::MAX_WORKSPACE_ROOTS)?
+        if !search.resolver.unchanged(self.cancellation)?
+            || scope
+                != self
+                    .workspace
+                    .index_scope(self.cancellation, files::MAX_WORKSPACE_ROOTS)?
         {
             return Err(modified());
         }
@@ -225,6 +293,8 @@ impl Context<'_> {
         search
             .locations
             .dedup_by(|left, right| left.uri == right.uri && left.range == right.range);
+        self.index
+            .finish_revision(self.revision, self.catalog.generation());
         Ok(search.locations)
     }
 
@@ -295,7 +365,7 @@ impl Context<'_> {
 
 struct Search<'a> {
     subject: &'a Subject,
-    scope: &'a FileScope,
+    resolver: files::Resolver<'a>,
     open_uris: &'a HashMap<PathBuf, Vec<String>>,
     cancellation: &'a Cancellation,
     budget: Budget,
@@ -303,9 +373,55 @@ struct Search<'a> {
 }
 
 impl Search<'_> {
-    fn collect(&mut self, uri: &str, root: &Root) -> Result<(), ResponseError> {
+    fn collect(
+        &mut self,
+        uri: &str,
+        root: &Root,
+        path: Option<&std::path::Path>,
+    ) -> Result<(), ResponseError> {
+        self.collect_resources(uri, path, links::resources(root), false)
+            .map(|_| ())
+    }
+
+    fn collect_resolved(
+        &mut self,
+        uri: &str,
+        resolved: &CachedResolution,
+    ) -> Result<(), ResponseError> {
+        self.budget.resources = self
+            .budget
+            .resources
+            .checked_sub(resolved.resources)
+            .ok_or_else(|| limit("resource count"))?;
+        self.budget.url_bytes = self
+            .budget
+            .url_bytes
+            .checked_sub(resolved.url_bytes)
+            .ok_or_else(|| limit("destination byte"))?;
+        for entry in &resolved.entries {
+            self.cancellation.check()?;
+            if entry.fragment.as_ref() == self.subject.identifier
+                && entry.target == self.subject.key
+            {
+                self.push(uri, entry.range)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn collect_resources<'a>(
+        &mut self,
+        uri: &str,
+        source_path: Option<&std::path::Path>,
+        resources: impl Iterator<Item = (Range, &'a str)>,
+        cache: bool,
+    ) -> Result<Option<CachedResolution>, ResponseError> {
         self.cancellation.check()?;
-        for (range, url) in links::resources(root) {
+        let mut cached = cache.then(Vec::new);
+        let mut cache_bytes = 0;
+        let before_resources = self.budget.resources;
+        let before_urls = self.budget.url_bytes;
+        for (range, url) in resources {
             self.cancellation.check()?;
             self.budget.resources = self
                 .budget
@@ -321,32 +437,51 @@ impl Search<'_> {
                 file,
                 fragment: Some(fragment),
                 ..
-            }) = files::resolve(uri, url, self.scope)
+            }) = self.resolver.resolve(uri, url)
             else {
                 continue;
             };
-            if fragment != self.subject.identifier {
-                continue;
-            }
-            let matches = match file {
-                Some(file) => match files::open_file_uri(self.open_uris, &file, uri) {
-                    Some(target) => {
-                        matches!(&self.subject.key, Key::Buffer(expected) if expected == target)
-                    }
-                    None => {
-                        matches!(&self.subject.key, Key::File(expected) if expected == &file.path)
-                    }
+            let (buffer, path) = match &file {
+                Some(file) => match files::open_file_uri(self.open_uris, file, uri) {
+                    Some(target) => (Some(target), None),
+                    None => (None, Some(file.path.as_path())),
                 },
-                None => {
-                    matches!(&self.subject.key, Key::Buffer(expected) if expected == uri)
-                        || matches!(&self.subject.key, Key::File(_) if self.subject.declaration.uri == uri)
-                }
+                None => match source_path {
+                    Some(path) => (None, Some(path)),
+                    None => (Some(uri), None),
+                },
             };
-            if matches {
+            let matches = match (&self.subject.key, buffer, path) {
+                (Key::Buffer(expected), Some(actual), _) => expected == actual,
+                (Key::File(expected), _, Some(actual)) => expected == actual,
+                _ => false,
+            };
+            let bytes = std::mem::size_of::<ResolvedResource>()
+                + fragment.len()
+                + buffer.map_or_else(|| path.unwrap().as_os_str().len(), str::len);
+            if bytes > MAX_URL_BYTES - cache_bytes {
+                cached = None;
+            }
+            if let Some(cached) = &mut cached {
+                cache_bytes += bytes;
+                cached.push(ResolvedResource {
+                    range,
+                    target: buffer.map_or_else(
+                        || Key::File(path.unwrap().to_path_buf()),
+                        |uri| Key::Buffer(uri.to_string()),
+                    ),
+                    fragment: fragment.clone().into_boxed_str(),
+                });
+            }
+            if matches && fragment == self.subject.identifier {
                 self.push(uri, range)?;
             }
         }
-        Ok(())
+        Ok(cached.map(|entries| CachedResolution {
+            resources: before_resources - self.budget.resources,
+            url_bytes: before_urls - self.budget.url_bytes,
+            entries: entries.into_boxed_slice(),
+        }))
     }
 
     fn push(&mut self, uri: &str, range: Range) -> Result<(), ResponseError> {

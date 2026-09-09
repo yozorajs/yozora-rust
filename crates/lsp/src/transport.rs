@@ -84,8 +84,12 @@ pub fn read_message(reader: &mut impl BufRead) -> io::Result<Option<Vec<u8>>> {
 
 pub fn write_message(writer: &mut impl Write, message: &Value) -> io::Result<()> {
     let body = serde_json::to_vec(message)?;
+    write_encoded(writer, &body)
+}
+
+pub fn write_encoded(writer: &mut impl Write, body: &[u8]) -> io::Result<()> {
     write!(writer, "Content-Length: {}\r\n\r\n", body.len())?;
-    writer.write_all(&body)?;
+    writer.write_all(body)?;
     writer.flush()
 }
 
@@ -100,6 +104,27 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn shared_encoded_results_keep_each_response_id_and_unicode_framing() {
+        let expected = json!({"name": "中文😀", "nested": {"result": [1, true, null]}});
+        let payload = crate::protocol::Json::encode(&expected);
+        let mut bytes = Vec::new();
+        let ids = [json!(7), json!("query\"😀")];
+        for id in &ids {
+            let response = crate::protocol::Json::response(id, &payload);
+            write_encoded(&mut bytes, response.as_bytes()).unwrap();
+        }
+        let mut input = BufReader::with_capacity(3, Cursor::new(bytes));
+        for id in ids {
+            let body = read_message(&mut input).unwrap().unwrap();
+            assert_eq!(
+                serde_json::from_slice::<Value>(&body).unwrap(),
+                json!({"jsonrpc": "2.0", "id": id, "result": expected})
+            );
+        }
+        assert!(read_message(&mut input).unwrap().is_none());
+    }
 
     #[test]
     fn reads_back_to_back_unicode_messages_through_small_buffers() {

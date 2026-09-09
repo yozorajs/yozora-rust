@@ -19,12 +19,20 @@ Running without arguments also selects stdio. The binary supports `--help` and
 For example, with Neovim 0.11 or later:
 
 ```lua
+vim.filetype.add({ extension = { yozora = 'markdown' } })
 vim.lsp.config('yozora', {
   cmd = { '/absolute/path/to/yozora-lsp', '--stdio' },
   filetypes = { 'markdown', 'yozora' },
+  root_markers = { '.git' },
 })
 vim.lsp.enable('yozora')
 ```
+
+The filetype mapping gives `.yozora` files Neovim's Markdown support and lets the
+client attach automatically. The root marker supplies a workspace root, so links
+such as `docs/page.md` to `../guide.md` can resolve within the project. For projects
+without Git, set suitable `root_markers` or an explicit `root_dir`; without a root,
+local navigation is limited to the source file's directory.
 
 ## Capabilities
 
@@ -290,6 +298,20 @@ cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
+
+An optional acceptance test runs Neovim's native LSP client in headless mode.
+It requires Neovim 0.11 or later in `PATH` and is ignored by default:
+
+```sh
+cargo test -p yozora-lsp --test neovim -- --ignored
+```
+
+The test uses factory defaults and a temporary workspace with spaces and Unicode
+in its path. It covers `.yozora` attachment, workspace roots, unsaved target
+navigation, UTF-16 completion edits, native rename and incremental synchronization,
+diagnostic updates, a 2,001-edit rename, deep documents, cancellation, close/reopen,
+and graceful shutdown. It exercises native client APIs and edit application;
+interactive UI rendering and user plugin configurations are outside its coverage.
 
 The integration tests launch the binary and communicate over pipes, exercising
 framing, lifecycle, client capabilities, Unicode edits, and live document queries.

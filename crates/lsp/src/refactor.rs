@@ -172,6 +172,19 @@ impl Plan {
         url: &str,
         resolver: &mut files::Resolver<'_>,
     ) -> Result<Option<String>, ResponseError> {
+        if let Self::Heading(plan) = self {
+            let Some((_, fragment)) = url.split_once('#') else {
+                return Ok(None);
+            };
+            // Unescaped fragments already have their final spelling. Resolving
+            // an unrelated destination cannot contribute to this heading plan.
+            if !fragment.contains('%')
+                && !plan.identifiers.contains_key(fragment)
+                && !plan.activated.contains(fragment)
+            {
+                return Ok(None);
+            }
+        }
         let Some(files::Target::Local { file, fragment, .. }) = resolver.resolve(&source.uri, url)
         else {
             return Ok(None);
@@ -621,15 +634,7 @@ impl Context<'_> {
                 return Err(modified());
             }
         }
-        let mut remaining = files::MAX_WORKSPACE_BYTES;
-        for (path, expected) in snapshots {
-            self.cancellation.check()?;
-            if files::read_scoped_markdown_budgeted(&path, &scope, &mut remaining)?.as_deref()
-                != Some(expected.as_str())
-            {
-                return Err(modified());
-            }
-        }
+        validate_sources(&snapshots, &scope, self.cancellation)?;
         if let Plan::Files(moves) = &plan {
             for item in moves {
                 if !files::is_file(&item.old)
@@ -651,6 +656,61 @@ impl Context<'_> {
         self.index.catalog = generation;
         Ok(result)
     }
+}
+
+fn validate_sources(
+    snapshots: &[(PathBuf, Arc<String>)],
+    scope: &FileScope,
+    cancellation: &Cancellation,
+) -> Result<(), ResponseError> {
+    cancellation.check()?;
+    let validate = |sources: &[(PathBuf, Arc<String>)]| {
+        // Each partition spends only its share of the original source bytes.
+        // Growth beyond that share necessarily means the snapshot changed.
+        let mut remaining = sources.iter().map(|(_, text)| text.len()).sum();
+        for (path, expected) in sources {
+            cancellation.check()?;
+            let actual = files::read_scoped_markdown_budgeted(path, scope, &mut remaining)
+                .map_err(|_| modified())?;
+            if actual.as_deref() != Some(expected.as_str()) {
+                return Err(modified());
+            }
+        }
+        Ok(())
+    };
+    let workers = if snapshots.len() >= 128 {
+        std::thread::available_parallelism().map_or(1, |count| count.get().min(4))
+    } else {
+        1
+    };
+    if workers == 1 {
+        return validate(snapshots);
+    }
+    // Parsing remains on the owning worker. These bounded, short-lived readers
+    // start after every edit is planned and all finish before publication.
+    std::thread::scope(|threads| {
+        let mut chunks = snapshots.chunks(snapshots.len().div_ceil(workers));
+        let first = chunks.next().unwrap();
+        let mut pending = Vec::new();
+        let mut result = Ok(());
+        for chunk in chunks {
+            match std::thread::Builder::new()
+                .name("yozora-lsp-file-check".into())
+                .spawn_scoped(threads, move || validate(chunk))
+            {
+                Ok(reader) => pending.push(reader),
+                Err(_) => result = result.and(validate(chunk)),
+            }
+        }
+        result = result.and(validate(first));
+        for reader in pending {
+            let checked = reader
+                .join()
+                .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+            result = result.and(checked);
+        }
+        result
+    })
 }
 
 struct Operation<'a> {

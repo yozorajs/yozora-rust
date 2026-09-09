@@ -397,7 +397,12 @@ and the file-event epoch before publishing. By default, they also reread every
 closed source at the end, detecting changed text with `ContentModified` even when
 its file event has not arrived. On Linux, these reads check the opened file's
 canonical descriptor path before reading; other platforms retain path-based
-validation. Inventory follows the `fileEventCache` mode above.
+validation. Checks of at least 128 closed sources use up to four readers,
+including the owning query worker and at most three short-lived filesystem
+threads, limited by available CPU parallelism. Every edit is planned before these
+checks start, and all readers finish before publication. Their byte budgets
+partition the original source size; changed or cancelled reads yield no edits.
+Inventory follows the `fileEventCache` mode above.
 
 `initializationOptions.refactorFileEventCache: true` also lets refactors trust
 the acknowledged file-event revision for closed source text, matching the usual

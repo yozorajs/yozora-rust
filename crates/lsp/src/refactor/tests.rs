@@ -505,6 +505,41 @@ fn event_refactors_refresh_changed_sources_before_producing_new_edits() {
 }
 
 #[test]
+fn large_final_validation_checks_all_partitions_and_cancellation() {
+    let project = Project::new();
+    let expected = Arc::new("# 原文 😀\n".to_string());
+    let snapshots: Vec<_> = (0..132)
+        .map(|index| {
+            let name = format!("source-{index:03}.md");
+            project.disk(&name, &expected);
+            (project.directory.0.join(name), Arc::clone(&expected))
+        })
+        .collect();
+    let scope = project
+        .workspace
+        .index_scope(&project.cancellation, files::MAX_WORKSPACE_ROOTS)
+        .unwrap();
+    validate_sources(&snapshots, &scope, &project.cancellation).unwrap();
+    for index in [0, 33, 66, 99, 131] {
+        fs::write(&snapshots[index].0, "externally modified").unwrap();
+        assert_eq!(
+            validate_sources(&snapshots, &scope, &project.cancellation)
+                .unwrap_err()
+                .code,
+            -32801
+        );
+        fs::write(&snapshots[index].0, expected.as_str()).unwrap();
+    }
+    project.cancellation.cancel();
+    assert_eq!(
+        validate_sources(&snapshots, &scope, &project.cancellation)
+            .unwrap_err()
+            .code,
+        -32800
+    );
+}
+
+#[test]
 fn deeply_nested_referrers_are_rewritten_and_validated_iteratively() {
     let mut project = Project::new();
     let uri = "untitled:deep";

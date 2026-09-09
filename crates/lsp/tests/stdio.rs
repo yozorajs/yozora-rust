@@ -1593,6 +1593,134 @@ fn exits_with_failure_without_a_shutdown_request() {
 }
 
 #[test]
+fn heading_references_follow_workspace_lifecycles_and_keep_label_queries_local() {
+    let directory = TestDirectory::new();
+    let target = directory.uri("target.md");
+    let referrer = directory.uri("referrer.md");
+    let labels = directory.uri("labels.md");
+    let text = "# Intro 😀\n[self](#intro-%F0%9F%98%80)\n## Intro 😀";
+    fs::write(directory.0.join("target.md"), "# Disk").unwrap();
+    fs::write(
+        directory.0.join("referrer.md"),
+        "😀 [first](target.md#intro-%F0%9F%98%80)\n[second](target.md#intro-%F0%9F%98%80-2)",
+    )
+    .unwrap();
+    let mut client = Client::start();
+    assert!(client
+        .request(
+            "initialize",
+            json!({ "capabilities": {}, "rootUri": directory.uri("") })
+        )
+        .get("error")
+        .is_none());
+    client.notify("initialized", json!({}));
+    client.open(&target, text);
+    client.open(
+        &labels,
+        "# [intro][ref]\n\n[ref]: target.md#intro-%F0%9F%98%80\n[REF]: target.md#missing",
+    );
+    let references = |client: &mut Client, uri: &str, line: u32, character: u32, include: bool| {
+        let response = client.request("textDocument/references", json!({
+            "textDocument": { "uri": uri }, "position": { "line": line, "character": character },
+            "context": { "includeDeclaration": include }
+        }));
+        assert!(response.get("error").is_none(), "{response}");
+        response["result"].clone()
+    };
+    let initial = references(&mut client, &target, 0, 3, false);
+    assert_eq!(initial.as_array().unwrap().len(), 4);
+    assert_eq!(initial[2]["uri"], referrer);
+    assert_eq!(initial[2]["range"]["start"]["character"], 3);
+    assert_eq!(
+        references(&mut client, &target, 0, 3, true)
+            .as_array()
+            .unwrap()
+            .len(),
+        5
+    );
+    let local = references(&mut client, &labels, 0, 11, true);
+    assert_eq!(local.as_array().unwrap().len(), 2);
+    assert!(local
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|location| location["uri"] == labels));
+    assert_eq!(references(&mut client, &labels, 3, 2, true), json!([]));
+
+    client.open(
+        &referrer,
+        &fs::read_to_string(directory.0.join("referrer.md")).unwrap(),
+    );
+    assert_eq!(references(&mut client, &referrer, 0, 5, false), initial);
+    client.notify(
+        "textDocument/didChange",
+        json!({
+            "textDocument": { "uri": referrer, "version": 2 },
+            "contentChanges": [{ "text": "[second](target.md#intro-%F0%9F%98%80-2)" }]
+        }),
+    );
+    assert_eq!(
+        references(&mut client, &target, 0, 3, false)
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+    let second = references(&mut client, &target, 2, 4, false);
+    assert_eq!(second.as_array().unwrap().len(), 1);
+    assert_eq!(second[0]["uri"], referrer);
+    assert_eq!(second[0]["range"]["start"]["line"], 0);
+    fs::write(
+        directory.0.join("created.md"),
+        "[new](target.md#intro-%F0%9F%98%80)",
+    )
+    .unwrap();
+    assert_eq!(
+        references(&mut client, &target, 0, 3, false)
+            .as_array()
+            .unwrap()
+            .len(),
+        4
+    );
+    fs::remove_file(directory.0.join("created.md")).unwrap();
+    assert_eq!(
+        references(&mut client, &target, 0, 3, false)
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+
+    client.notify(
+        "textDocument/didChange",
+        json!({
+            "textDocument": { "uri": target, "version": 2 }, "contentChanges": null
+        }),
+    );
+    let unavailable = client.request(
+        "textDocument/references",
+        json!({
+            "textDocument": { "uri": referrer }, "position": { "line": 0, "character": 2 },
+            "context": { "includeDeclaration": true }
+        }),
+    );
+    assert_eq!(unavailable["error"]["code"], -32801);
+    assert_eq!(references(&mut client, &labels, 0, 11, true), local);
+    client.notify(
+        "textDocument/didChange",
+        json!({
+            "textDocument": { "uri": target, "version": 3 }, "contentChanges": [{ "text": text }]
+        }),
+    );
+    assert_eq!(references(&mut client, &referrer, 0, 2, false), second);
+    client.notify("textDocument/didClose", document(&target));
+    assert_eq!(references(&mut client, &referrer, 0, 2, false), json!([]));
+    client.open(&target, text);
+    assert_eq!(references(&mut client, &referrer, 0, 2, false), second);
+    client.shutdown();
+}
+
+#[test]
 fn hover_and_references_follow_edits_and_stay_within_the_requested_document() {
     let mut client = Client::start();
     client.initialize(json!({}));

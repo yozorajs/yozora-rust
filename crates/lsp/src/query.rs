@@ -15,8 +15,8 @@ use crate::protocol::{
 };
 use crate::workspace_index::Index;
 use crate::{
-    analysis, completion, diagnostics, link_diagnostics, links, refactor, rename,
-    resource_completion,
+    analysis, completion, diagnostics, heading_references, link_diagnostics, links, refactor,
+    rename, resource_completion,
 };
 
 /// The server owns live text and versions. Clones share immutable document data
@@ -150,15 +150,15 @@ impl Request {
         }
     }
 
-    /// A rename may need workspace reads after its subject is resolved by a
-    /// worker. Reserve its scope before dispatch, including pending renames.
+    /// Rename and references may need workspace reads after a worker resolves
+    /// their subject. Reserve this scope before dispatch.
     pub fn uses_workspace(&self) -> bool {
         matches!(
             self,
             Self::WorkspaceSymbols(_)
                 | Self::RenameFiles(_)
                 | Self::Document(DocumentRequest {
-                    kind: RequestKind::Rename { .. },
+                    kind: RequestKind::Rename { .. } | RequestKind::References { .. },
                     ..
                 })
         )
@@ -250,7 +250,7 @@ impl State {
             RequestKind::DocumentLink => {
                 dependencies.files = true;
                 let scope = self.workspace.scope(&uri);
-                let open_uris = self.open_file_uris(&scope, &uri, cancellation)?;
+                let open_uris = self.open_file_uris(&scope, cancellation)?;
                 let document = open_document(&mut self.documents, &uri)?;
                 let root = document_ast(document, parser, cancellation)?;
                 let links = links::document_links(root, |destination| {
@@ -266,7 +266,7 @@ impl State {
                         } => {
                             let target_uri = match file {
                                 None => uri.clone(),
-                                Some(file) => match files::open_file_uri(&open_uris, &file) {
+                                Some(file) => match files::open_file_uri(&open_uris, &file, &uri) {
                                     Some(uri) => uri.to_string(),
                                     None if files::is_file(&file.path) => {
                                         files::path_uri(&file.path)?
@@ -296,6 +296,21 @@ impl State {
                 let document = open_document(&mut self.documents, &uri)?;
                 document.validate_position(position)?;
                 let root = document_ast(document, parser, cancellation)?;
+                if !analysis::resource_or_symbol_at(root, position)
+                    .is_some_and(|node| analysis::symbol_key(node).is_some())
+                {
+                    dependencies.files = true;
+                    return heading_references::Context {
+                        workspace: &self.workspace,
+                        documents: &mut self.documents,
+                        parser,
+                        cancellation,
+                        used_buffers: &mut dependencies.targets,
+                        heading_id_prefix: &self.heading_id_prefix,
+                    }
+                    .find(&uri, position, include_declaration)
+                    .map(|locations| json!(locations));
+                }
                 let locations: Vec<_> = analysis::references(root, position, include_declaration)
                     .into_iter()
                     .map(|range| json!({ "uri": uri, "range": range }))
@@ -416,7 +431,7 @@ impl State {
         let mut disk_document;
         let document = if let Some(file) = file {
             if let Some(open_uri) =
-                files::open_file_uri(&self.open_file_uris(&scope, uri, cancellation)?, &file)
+                files::open_file_uri(&self.open_file_uris(&scope, cancellation)?, &file, uri)
             {
                 target_uri = open_uri.to_string();
                 dependencies.targets.insert(target_uri.clone());
@@ -481,7 +496,7 @@ impl State {
         cancellation.check()?;
         dependencies.files = true;
         let scope = self.workspace.scope(uri);
-        let open_uris = self.open_file_uris(&scope, uri, cancellation)?;
+        let open_uris = self.open_file_uris(&scope, cancellation)?;
         let candidates = match context.target() {
             Some(resource_completion::Target::Path(prefix)) => context.paths(
                 files::path_candidates(uri, prefix, &scope, open_uris.keys().map(PathBuf::as_path)),
@@ -496,7 +511,7 @@ impl State {
                     Some(Target::Local {
                         file: Some(file), ..
                     }) => {
-                        if let Some(uri) = files::open_file_uri(&open_uris, &file) {
+                        if let Some(uri) = files::open_file_uri(&open_uris, &file, uri) {
                             dependencies.targets.insert(uri.to_string());
                             let document = open_document(&mut self.documents, uri)?;
                             let root = document_ast(document, parser, cancellation)?;
@@ -521,14 +536,9 @@ impl State {
     fn open_file_uris(
         &self,
         scope: &FileScope,
-        source_uri: &str,
         cancellation: &Cancellation,
     ) -> Result<HashMap<PathBuf, Vec<String>>, ResponseError> {
-        scope.open_file_uris(
-            self.documents.keys().map(String::as_str),
-            source_uri,
-            cancellation,
-        )
+        scope.open_file_uris(self.documents.keys().map(String::as_str), cancellation)
     }
 }
 

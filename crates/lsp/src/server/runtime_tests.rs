@@ -172,6 +172,104 @@ impl Drop for Session {
 }
 
 #[test]
+fn heading_reference_scans_remain_responsive_and_retire_on_cancel_edits_and_shutdown() {
+    let directory = crate::files::tests::TestDir::new();
+    let target = directory.uri("target.md");
+    let source = directory.uri("source.md");
+    std::fs::write(directory.0.join("slow.md"), "[gate](blocked)").unwrap();
+    let (entered, started) = mpsc::channel();
+    let (release, gate) = mpsc::channel();
+    let gate = Arc::new(Mutex::new(gate));
+    let armed = Arc::new(AtomicBool::new(false));
+    let arm = Arc::clone(&armed);
+    let mut session = Session::start(move || {
+        let entered = entered.clone();
+        let gate = Arc::clone(&gate);
+        let armed = Arc::clone(&armed);
+        YozoraParser::new(DefaultParserProps {
+            default_parse_options: Some(ParseOptions {
+                format_url: Some(Arc::new(move |url| {
+                    if url == "blocked" && armed.swap(false, Ordering::Relaxed) {
+                        entered.send(()).unwrap();
+                        let _ = gate.lock().unwrap().recv();
+                    }
+                    url.to_string()
+                })),
+                ..ParseOptions::default()
+            }),
+            ..DefaultParserProps::default()
+        })
+    });
+    session.send(
+        Some("initialize"),
+        "initialize",
+        json!({ "capabilities": {}, "rootUri": directory.uri("") }),
+    );
+    assert_eq!(session.response()["id"], "initialize");
+    session.open(&target, "# Intro");
+    session.open(&source, "[go](target.md#intro)");
+    let params = json!({
+        "textDocument": { "uri": target }, "position": { "line": 0, "character": 3 },
+        "context": { "includeDeclaration": false }
+    });
+    for action in ["cancel", "edit", "shutdown"] {
+        arm.store(true, Ordering::Relaxed);
+        let id = format!("scan-{action}");
+        session.send(Some(&id), "textDocument/references", params.clone());
+        started.recv_timeout(Duration::from_secs(5)).unwrap();
+        let responsive = format!("responsive-{action}");
+        session.send(
+            Some(&responsive),
+            "textDocument/documentSymbol",
+            json!({ "textDocument": { "uri": source } }),
+        );
+        assert_eq!(session.response()["id"], responsive);
+        let queued = format!("queued-{action}");
+        session.send(Some(&queued), "textDocument/references", params.clone());
+        match action {
+            "cancel" => {
+                session.send(None, "$/cancelRequest", json!({ "id": id }));
+                session.send(None, "$/cancelRequest", json!({ "id": queued }));
+            }
+            "edit" => session.send(None, "textDocument/didChange", json!({
+                "textDocument": { "uri": source, "version": 2 }, "contentChanges": [{ "text": "# Changed referrer" }]
+            })),
+            "shutdown" => session.send(Some("shutdown"), "shutdown", Value::Null),
+            _ => unreachable!(),
+        }
+        for _ in 0..2 {
+            let response = session.response();
+            assert!(
+                response["id"] == id || response["id"] == queued,
+                "{response}"
+            );
+            assert_eq!(
+                response["error"]["code"],
+                if action == "edit" { -32801 } else { -32800 }
+            );
+        }
+        if action == "shutdown" {
+            assert_eq!(session.response()["id"], "shutdown");
+            session.exit();
+            release.send(()).unwrap();
+            break;
+        }
+        release.send(()).unwrap();
+        session.send(
+            Some(&format!("fresh-{action}")),
+            "textDocument/references",
+            params.clone(),
+        );
+        let response = session.response();
+        let references = response["result"].as_array().unwrap();
+        assert_eq!(references.len(), usize::from(action == "cancel"));
+        if action == "cancel" {
+            assert_eq!(references[0]["uri"], source);
+        }
+    }
+}
+
+#[test]
 fn target_edits_during_initial_diagnostics_discard_stale_results_and_refresh_referrers() {
     let directory = crate::files::tests::TestDir::new();
     let source = directory.uri("source.md");

@@ -53,7 +53,7 @@ fn workspace_queries_share_one_scope_and_leave_a_worker_for_document_queries() {
 }
 
 #[test]
-fn renames_share_workspace_scheduling_and_retire_when_another_buffer_changes() {
+fn renames_and_references_share_workspace_scheduling_and_retire_when_another_buffer_changes() {
     let mut server = server();
     let now = Instant::now();
     open(&mut server, "untitled:heading", "# Old", now);
@@ -73,13 +73,17 @@ fn renames_share_workspace_scheduling_and_retire_when_another_buffer_changes() {
             now,
         )
         .unwrap();
+    server.queue_query(json!(4), "textDocument/references", json!({
+        "textDocument": { "uri": "untitled:other" }, "position": { "line": 0, "character": 3 },
+        "context": { "includeDeclaration": true }
+    }), now).unwrap();
     assert!(server.start_work(now + QUERY_DELAY).is_none());
     replace(&mut server, "untitled:other", 2, "# Changed", now).unwrap();
     assert!(task.cancellation.is_cancelled());
     assert!(server.pending_queries.is_empty());
     let finished = worker::execute(worker, task, &server.parser, &mut server.index);
     server.finish_work(finished);
-    assert_eq!(server.outgoing.len(), 3);
+    assert_eq!(server.outgoing.len(), 4);
     assert!(server
         .outgoing
         .iter()

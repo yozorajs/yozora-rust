@@ -4,6 +4,7 @@ mod completion;
 mod diagnostics;
 mod document;
 mod files;
+mod heading_references;
 mod link_diagnostics;
 mod links;
 mod protocol;

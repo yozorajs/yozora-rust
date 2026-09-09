@@ -95,6 +95,15 @@ local navigation is limited to the source file's directory.
   source position and honor `context.includeDeclaration`. Links and images share
   a label namespace; footnotes have a separate namespace. An inactive duplicate
   definition has no bound references. Locations use the parser's node ranges.
+  At a top-level heading or a direct link/image pointing to one, the same request
+  finds heading references across the workspace. It includes direct links,
+  images, written link definitions, and bound reference occurrences, including
+  those in admonition titles and footnotes. `includeDeclaration` adds only the
+  heading's selection range; a link definition is a use of that heading.
+  Results are deduplicated and ordered by URI and source position. IDs, duplicate
+  suffixes, prefixes, and fragment decoding match navigation. Label occurrences
+  and definitions retain their document-local reference semantics; an inner
+  direct resource takes precedence over an enclosing declaration.
 - `textDocument/completion`: complete document-local labels in `[text][label]`,
   `![alt][label]`, and `[^label]`, including unclosed labels. Matching follows the
   parser's case folding and ASCII whitespace normalization. An existing label is
@@ -173,9 +182,9 @@ local navigation is limited to the source file's directory.
 
 Document queries start from open buffers, including unsaved documents. Target buffers use
 their unsaved text; closed Markdown files are read on demand for anchor navigation.
-Formatting, semantic tokens, code actions, and cross-document heading-reference
-queries are outside the current capabilities. Unresolved reference labels remain
-ordinary text, following the parser's fallback behavior.
+Formatting, semantic tokens, and code actions are outside the current capabilities.
+Unresolved reference labels remain ordinary text, following the parser's fallback
+behavior.
 
 ## Implementation contracts
 
@@ -218,9 +227,10 @@ The message loop checks deadlines after each input or completed analysis and
 while idle. Two bounded workers execute queries and diagnostics, including their
 parsing and filesystem access. Each worker owns its parser. One task per source
 document prevents repeated requests for one slow buffer from occupying both
-workers. Workspace symbol searches and all rename requests share a separate scope
-with at most one active operation, so other document queries can use the second
-worker. A rename reserves this scope before its subject is resolved by a worker.
+workers. Workspace symbol searches, rename, and references requests share a
+separate scope with at most one active operation, so other document queries can
+use the second worker. Rename and references reserve this scope before a worker
+resolves whether their subject needs workspace access, including label queries.
 Queries and diagnostics share deadline order among eligible tasks. Editing a
 buffer resets its own diagnostic deadline and those of its known link referrers.
 
@@ -374,6 +384,26 @@ budget rejects the whole operation. Link diagnostics separately inspect at most
 source analysis. Each target is parsed at most once per analysis; targets with
 more than 20,000 top-level headings are unknown for anchor validation.
 
+Heading-reference searches use explicit local workspace roots and the index's
+directory exclusions. Without local roots, or for a heading outside their access
+scope, only same-buffer anchors are searched. Open buffers override disk text.
+Every scoped open URI alias participates with its own unsaved contents, and each
+link selects its target by the same exact-URI, lexical-path, and canonical-alias
+precedence as navigation. A closed target is parsed once and reused while scanning
+its self references; other closed ASTs are released after each file. Queries read
+current disk content without requiring watched-file notifications. Filesystem
+contents are sampled during the request, and later queries revalidate them.
+
+A heading-reference query permits 128 roots, 20,000 directory entries, 2,000
+candidate files/buffers, 32 MiB of source/target reads, and 20,000 resource
+occurrences with 8 MiB of destination input. Results are limited to 10,000
+locations and a conservative 4 MiB output budget. Targets with more than 20,000
+top-level headings or exceeded scan/result budgets return `-32000` without a
+partial result. An out-of-sync participating buffer returns `ContentModified`.
+Unreadable, oversized, and invalid UTF-8 closed candidates are omitted; an absent
+or unreadable closed target, missing ID, or unaddressable heading returns an empty
+list. Code, HTML, external destinations, and disallowed paths are not references.
+
 Versions must increase within an open session. Stale changes are ignored. An
 invalid newer edit leaves the previous text intact but suspends queries with
 `ContentModified` until a full replacement or reopening restores synchronization.
@@ -419,7 +449,8 @@ The test uses factory defaults and a temporary workspace with spaces and Unicode
 in its path. It covers `.yozora` attachment, workspace roots, unsaved target
 navigation, native workspace symbol lists and disk refresh, UTF-16 completion
 edits, label and heading rename, file-operation edits followed by a native file
-move, and incremental synchronization. It also checks link diagnostic refresh
+move, native heading-reference lists with unopened referrers, and incremental
+synchronization. It also checks link diagnostic refresh
 after unsaved target edits and watched file creation/edit/deletion, a 2,001-edit
 rename, deep documents, cancellation, close/reopen,
 and graceful shutdown. It exercises native client APIs and edit application;
@@ -461,3 +492,9 @@ written definitions, uncertainty, target-buffer lifecycle, and watched files. A
 framed-message test changes a target while the first source analysis is blocked,
 verifying that stale warnings are discarded and diagnostics recover without a
 source edit.
+Heading-reference tests cover declaration inclusion, reference-label precedence,
+Unicode and duplicate IDs, exact aliases with different unsaved content, closed
+target parse reuse, open/close/resynchronization, disk refresh, and result budgets.
+A framed-message test blocks a reference scan while other document queries,
+cancellation, referrer edits, and shutdown/exit continue; retired requests receive
+exactly one response and fresh queries use the changed referrer.

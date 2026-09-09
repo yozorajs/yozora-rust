@@ -90,12 +90,11 @@ impl FileScope {
     pub fn open_file_uris<'a>(
         &self,
         uris: impl Iterator<Item = &'a str>,
-        source_uri: &str,
         cancellation: &Cancellation,
     ) -> Result<HashMap<PathBuf, Vec<String>>, ResponseError> {
         cancellation.check()?;
         let mut uris: Vec<_> = uris.collect();
-        uris.sort_by_key(|uri| (*uri != source_uri, *uri));
+        uris.sort_unstable();
         let mut result: HashMap<PathBuf, Vec<String>> = HashMap::new();
         for uri in uris {
             cancellation.check()?;
@@ -301,20 +300,23 @@ pub struct LocalFile {
 pub fn open_file_uri<'a>(
     open_uris: &'a HashMap<PathBuf, Vec<String>>,
     file: &LocalFile,
+    source_uri: &str,
 ) -> Option<&'a str> {
     let aliases = open_uris.get(&file.path)?;
     // Buffer identity is the requested URI, then its normalized lexical path.
-    // Canonical aliases are a fallback, never an override of a matching buffer.
+    // Source preference belongs to the lookup, so a workspace scan can reuse
+    // the same alias map for resources in different source buffers.
+    let lexical = file_uri_path(&file.uri);
     aliases
         .iter()
-        .find(|uri| *uri == &file.uri)
-        .or_else(|| {
-            let lexical = file_uri_path(&file.uri)?;
-            aliases
-                .iter()
-                .find(|uri| file_uri_path(uri).as_ref() == Some(&lexical))
+        .min_by_key(|uri| {
+            (
+                *uri != &file.uri,
+                lexical.is_none() || file_uri_path(uri) != lexical,
+                uri.as_str() != source_uri,
+                uri.as_str(),
+            )
         })
-        .or_else(|| aliases.first())
         .map(String::as_str)
 }
 

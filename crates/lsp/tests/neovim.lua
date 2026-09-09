@@ -274,6 +274,30 @@ local function run()
   equal(moved_target.range.start.line, 0, "moved heading keeps its anchor")
   passed("native file operations apply incoming and outgoing edits before moving the file")
 
+  local closed_referrer = vim.fs.joinpath(workspace, "refactor/other.md")
+  vim.fn.writefile({ "😀 [outside](moved/topic%20%E4%B8%AD%E6%96%87.md#" .. fragment .. ")" }, closed_referrer)
+  at(topic, 1, "Native")
+  local heading_references
+  vim.lsp.buf.references({ includeDeclaration = true }, {
+    on_list = function(options)
+      heading_references = options.items
+    end,
+  })
+  wait_for("native heading references", function()
+    return heading_references ~= nil
+  end)
+  equal(#heading_references, 4, "heading declaration plus incoming and self references")
+  local closed_reference
+  for _, item in ipairs(heading_references) do
+    if item.filename == closed_referrer then
+      closed_reference = item
+    end
+  end
+  assert(closed_reference, "unopened referrer is missing from native references")
+  equal(closed_reference.lnum, 1, "closed reference line")
+  equal(closed_reference.col, 6, "native reference column follows the Unicode prefix")
+  passed("native heading references include unopened referrers after heading and file rename")
+
   local labels = open_buffer("docs/labels.md", { "😀 [shown][ol]", "", "[old]: /one", "[older]: /two" })
   accept_completion(labels, "ol", 2, "old", "😀 [shown][old]")
   local definition = request("textDocument/definition", at(labels, 1, "old"), labels)

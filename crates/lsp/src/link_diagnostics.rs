@@ -92,11 +92,10 @@ impl Context<'_> {
                 if open_uris.is_none() {
                     open_uris = Some(self.scope.open_file_uris(
                         self.documents.keys().map(String::as_str),
-                        self.source_uri,
                         self.cancellation,
                     )?);
                 }
-                match files::open_file_uri(open_uris.as_ref().unwrap(), &file) {
+                match files::open_file_uri(open_uris.as_ref().unwrap(), &file, self.source_uri) {
                     Some(uri) => Key::Buffer(uri.to_string()),
                     None => Key::File(file.path),
                 }

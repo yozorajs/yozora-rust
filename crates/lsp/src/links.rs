@@ -45,32 +45,35 @@ pub fn destination_at(root: &Root, position: Position) -> Option<&str> {
     resource_or_symbol_at(root, position).and_then(direct_destination)
 }
 
-pub fn document_links(
-    root: &Root,
-    mut resolve: impl FnMut(&str) -> Option<String>,
-) -> Vec<DocumentLink> {
+/// Written destinations and bound reference occurrences share the parser's
+/// definition scope and first-definition-wins rule.
+pub fn resources(root: &Root) -> impl Iterator<Item = (Range, &str)> {
     let definitions: HashMap<_, _> = collect_definitions(root)
         .into_iter()
         .map(|definition| (definition.identifier.as_str(), definition.url.as_str()))
         .collect();
-    let resources = nodes(&root.children)
-        .filter_map(|node| {
-            let destination = direct_destination(node).or_else(|| match node {
-                Node::LinkReference(reference) => {
-                    definitions.get(reference.identifier.as_str()).copied()
-                }
-                Node::ImageReference(reference) => {
-                    definitions.get(reference.identifier.as_str()).copied()
-                }
-                _ => None,
-            })?;
-            Some((node.position().map(Range::from)?, destination))
-        })
-        // Bound filesystem probes as well as output, even if many links fail.
-        .take(MAX_DOCUMENT_LINKS);
+    nodes(&root.children).filter_map(move |node| {
+        let destination = direct_destination(node).or_else(|| match node {
+            Node::LinkReference(reference) => {
+                definitions.get(reference.identifier.as_str()).copied()
+            }
+            Node::ImageReference(reference) => {
+                definitions.get(reference.identifier.as_str()).copied()
+            }
+            _ => None,
+        })?;
+        Some((node.position().map(Range::from)?, destination))
+    })
+}
+
+pub fn document_links(
+    root: &Root,
+    mut resolve: impl FnMut(&str) -> Option<String>,
+) -> Vec<DocumentLink> {
     let mut budget = MAX_DOCUMENT_LINK_BYTES;
     let mut links = Vec::new();
-    for (range, destination) in resources {
+    // Bound filesystem probes as well as output, even if many links fail.
+    for (range, destination) in resources(root).take(MAX_DOCUMENT_LINKS) {
         // A single long definition can be repeated by thousands of references.
         // Bound both resolver input and URI output, not just the link count.
         if budget == 0 || destination.len() > budget {

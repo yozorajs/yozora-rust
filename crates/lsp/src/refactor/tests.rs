@@ -545,6 +545,50 @@ fn cached_refactors_accept_different_names_and_recheck_closed_source_text() {
         texts[&project.directory.uri("a.md")],
         "[changed](target.md#old) [other](target.md#another)"
     );
+
+    let path = project.directory.0.join("a.md");
+    let modified = fs::metadata(&path).unwrap().modified().unwrap();
+    project.disk("a.md", "[mutated](target.md#old) [other](target.md#other)");
+    fs::File::open(&path)
+        .unwrap()
+        .set_times(fs::FileTimes::new().set_modified(modified))
+        .unwrap();
+    assert_eq!(
+        project
+            .heading(&uri, at(2, 4), "Another")
+            .err()
+            .unwrap()
+            .code,
+        -32801
+    );
+    // A failed final comparison invalidates reuse even before an event arrives.
+    let edits = project.heading(&uri, at(2, 4), "Another").unwrap();
+    assert_eq!(
+        project.texts(edits)[&project.directory.uri("a.md")],
+        "[mutated](target.md#old) [other](target.md#another)"
+    );
+}
+
+#[test]
+fn cached_nonliteral_referrers_preserve_payloads_when_names_change() {
+    let mut project = Project::new();
+    project.revision = Some(1);
+    let uri = project.open("target.md", "# Old");
+    let source = "[**go**](target.md\\#old \"Title\")\n\n[ref]: target.md\\#old\n[use][ref]";
+    project.disk("source.md", source);
+    for name in ["First", "Second", "中文"] {
+        let edits = project.heading(&uri, at(0, 3), name).unwrap();
+        assert_eq!(
+            project.texts(edits)[&project.directory.uri("source.md")],
+            source.replace(
+                "target.md\\#old",
+                &format!(
+                    "target.md#{}",
+                    files::encode_component(&name.to_lowercase())
+                )
+            )
+        );
+    }
 }
 
 #[test]

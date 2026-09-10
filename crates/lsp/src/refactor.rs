@@ -192,7 +192,8 @@ impl Plan {
 
     fn destination(
         &self,
-        source: &SourceBuffer,
+        source_uri: &str,
+        source_path: Option<&Path>,
         url: &str,
         resolver: &mut files::Resolver<'_>,
     ) -> Result<Option<String>, ResponseError> {
@@ -210,9 +211,9 @@ impl Plan {
             }
         }
         let resolved = if matches!(self, Self::Files(_)) {
-            resolver.resolve_operation(&source.uri, url)
+            resolver.resolve_operation(source_uri, url)
         } else {
-            resolver.resolve(&source.uri, url)
+            resolver.resolve(source_uri, url)
         };
         let Some(files::Target::Local { file, fragment, .. }) = resolved else {
             return Ok(None);
@@ -222,7 +223,8 @@ impl Plan {
                 let points_here = match file {
                     Some(file) => plan.path.as_ref() == Some(&file.path),
                     None => {
-                        plan.uri == source.uri || (plan.path.is_some() && plan.path == source.path)
+                        plan.uri == source_uri
+                            || (plan.path.is_some() && plan.path.as_deref() == source_path)
                     }
                 };
                 let Some(fragment) = fragment.filter(|fragment| !fragment.is_empty()) else {
@@ -248,10 +250,10 @@ impl Plan {
                 let Some(file) = file else { return Ok(None) };
                 let target = moves.iter().find_map(|item| item.target(&file.path));
                 let target = target.as_ref().unwrap_or(&file.path);
-                let new_source = files::file_uri_path(&source.uri)
+                let new_source = files::file_uri_path(source_uri)
                     .and_then(|path| moves.iter().find_map(|item| item.target(&path)))
                     .and_then(|path| files::path_uri(&path));
-                let new_source_uri = new_source.as_deref().unwrap_or(&source.uri);
+                let new_source_uri = new_source.as_deref().unwrap_or(source_uri);
                 if matches!(resolver.resolve_operation(new_source_uri, url), Some(files::Target::Local { file: Some(file), .. }) if &file.path == target)
                 {
                     return Ok(None);
@@ -390,16 +392,11 @@ impl Context<'_> {
         if !changed || path.is_none() {
             let scope =
                 Workspace::default().index_scope(self.cancellation, files::MAX_WORKSPACE_ROOTS)?;
-            let source = SourceBuffer {
-                uri: uri.to_string(),
-                path: None,
-                ambiguous: false,
-            };
             let mut resolver = files::Resolver::new(&scope);
             let edits = resource_edit::rewrite(
                 &snapshot,
                 plan.heading(uri),
-                |url| plan.destination(&source, url, &mut resolver),
+                |url| plan.destination(uri, None, url, &mut resolver),
                 self.parser,
                 self.cancellation,
                 &mut budget,
@@ -525,11 +522,10 @@ impl Context<'_> {
                 "close duplicate URI aliases before a workspace rename",
             ));
         }
-        let initial_files: BTreeSet<_> = sources.files.iter().cloned().collect();
         if !reuse_contents {
             self.index
                 .entries
-                .retain(|path, _| initial_files.contains(path));
+                .retain(|path, _| sources.files.binary_search(path).is_ok());
             self.index.bytes = self
                 .index
                 .entries
@@ -578,61 +574,76 @@ impl Context<'_> {
                 });
             }
         }
-        for path in sources.files {
+        for path in &sources.files {
             self.cancellation.check()?;
-            let cached = self.index.take(&path);
-            let text = if let Some(cached) = cached.as_ref().filter(|_| {
+            let cached = self.index.entries.get(path);
+            let current = if let Some(cached) = cached.filter(|_| {
                 reuse_contents
                     && self
                         .catalog
-                        .contents_unchanged(&path, previous_revision, self.revision)
+                        .contents_unchanged(path, previous_revision, self.revision)
             }) {
-                let text = Arc::clone(&cached.text);
                 remaining = remaining
-                    .checked_sub(text.len())
+                    .checked_sub(cached.text.len())
                     .ok_or_else(|| failed("workspace rename exceeds the source byte limit"))?;
-                text
+                None
             } else {
-                if scope.resolve(&path).as_ref() != Some(&path) {
+                if scope.resolve(path).as_ref() != Some(path) {
                     return Err(modified());
                 }
-                Arc::new(
-                    files::read_markdown_budgeted(&path, &mut remaining)?.ok_or_else(|| {
+                Some(Arc::new(
+                    files::read_markdown_budgeted(path, &mut remaining)?.ok_or_else(|| {
                         failed("cannot read every Markdown file required for this rename")
                     })?,
-                )
+                ))
             };
-            let cached = cached.filter(|source| source.text.as_str() == text.as_str());
-            let uri = cached.as_ref().map_or_else(
-                || files::path_uri(&path).expect("scoped paths form file URIs"),
-                |source| source.uri.clone(),
-            );
-            let source = SourceBuffer {
-                uri: uri.clone(),
-                path: Some(path.clone()),
-                ambiguous: false,
+            let cached = cached.filter(|source| {
+                current
+                    .as_ref()
+                    .is_none_or(|text| source.text.as_str() == text.as_str())
+            });
+            // Warm summaries stay borrowed in the index. Acknowledged events
+            // permit planning from them; default final reads still validate every
+            // closed source before any edit can be published.
+            let text = cached
+                .map(|source| &source.text)
+                .or(current.as_ref())
+                .expect("a source is either cached or freshly read");
+            let new_uri;
+            let uri = if let Some(cached) = cached {
+                &cached.uri
+            } else {
+                new_uri = files::path_uri(path).expect("scoped paths form file URIs");
+                &new_uri
             };
             operation.budget.parse(text.len())?;
-            let mut summary = cached.map(|source| source.summary);
             let mut document = None;
-            if summary.is_none() {
+            let new_summary = if cached.is_none() {
                 let mut parsed = Document::new(0, text.as_ref().clone())?;
-                summary = resource_edit::Summary::new(
+                let summary = resource_edit::Summary::new(
                     &parsed.snapshot(self.parser, Position::default())?,
                     self.cancellation,
                 )?;
                 document = Some(parsed);
-            }
+                summary
+            } else {
+                None
+            };
+            let summary = cached
+                .map(|source| &source.summary)
+                .or(new_summary.as_ref());
             let edits = match summary
-                .as_ref()
                 .map(|summary| {
                     summary.rewrite(
-                        &text,
+                        text,
                         None,
                         |url| {
-                            operation
-                                .plan
-                                .destination(&source, url, &mut operation.resolver)
+                            operation.plan.destination(
+                                uri,
+                                Some(path),
+                                url,
+                                &mut operation.resolver,
+                            )
                         },
                         self.cancellation,
                         operation.budget,
@@ -647,11 +658,11 @@ impl Context<'_> {
                         Some(document) => document,
                         None => document.insert(Document::new(0, text.as_ref().clone())?),
                     };
-                    operation.rewrite(document, &source)?
+                    operation.rewrite(document, uri, Some(path))?
                 }
             };
             if !edits.is_empty() {
-                operation.budget.document(&uri)?;
+                operation.budget.document(uri)?;
                 result.push(DocumentEdits {
                     uri: uri.clone(),
                     version: None,
@@ -659,10 +670,18 @@ impl Context<'_> {
                 });
             }
             if validate_disk {
-                snapshots.push((path.clone(), Arc::clone(&text)));
+                snapshots.push((path.clone(), Arc::clone(text)));
             }
-            if let Some(summary) = summary {
-                self.index.insert(path, CachedSource { uri, text, summary });
+            if cached.is_none() {
+                let refreshed = new_summary.map(|summary| CachedSource {
+                    uri: uri.clone(),
+                    text: Arc::clone(text),
+                    summary,
+                });
+                self.index.take(path);
+                if let Some(source) = refreshed {
+                    self.index.insert(path.clone(), source);
+                }
             }
         }
         // Inventory follows the acknowledged watch contract. By default, closed
@@ -682,9 +701,7 @@ impl Context<'_> {
                 files::MAX_WORKSPACE_ENTRIES,
                 files::MAX_WORKSPACE_FILES,
             )?;
-            if current.files.into_iter().collect::<BTreeSet<_>>() != initial_files
-                || current.buffers != sources.buffers
-            {
+            if current.files != sources.files || current.buffers != sources.buffers {
                 return Err(modified());
             }
         }
@@ -786,27 +803,38 @@ impl Operation<'_> {
             if let Some(edits) = summary.rewrite(
                 snapshot.text,
                 self.plan.heading(&source.uri),
-                |url| self.plan.destination(source, url, &mut self.resolver),
+                |url| {
+                    self.plan.destination(
+                        &source.uri,
+                        source.path.as_deref(),
+                        url,
+                        &mut self.resolver,
+                    )
+                },
                 self.cancellation,
                 self.budget,
             )? {
                 return Ok(edits);
             }
         }
-        self.rewrite(document, source)
+        self.rewrite(document, &source.uri, source.path.as_deref())
     }
 
     fn rewrite(
         &mut self,
         document: &mut Document,
-        source: &SourceBuffer,
+        source_uri: &str,
+        source_path: Option<&Path>,
     ) -> Result<Vec<TextEdit>, ResponseError> {
         let snapshot = document.snapshot(self.parser, Position::default())?;
         self.cancellation.check()?;
         resource_edit::rewrite(
             &snapshot,
-            self.plan.heading(&source.uri),
-            |url| self.plan.destination(source, url, &mut self.resolver),
+            self.plan.heading(source_uri),
+            |url| {
+                self.plan
+                    .destination(source_uri, source_path, url, &mut self.resolver)
+            },
             self.parser,
             self.cancellation,
             self.budget,

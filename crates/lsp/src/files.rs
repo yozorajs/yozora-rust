@@ -24,6 +24,7 @@ pub struct SourceBuffer {
 
 #[derive(Clone)]
 pub struct Sources {
+    /// Canonical, unique disk paths in sorted order, excluding open buffers.
     pub files: Vec<PathBuf>,
     pub buffers: Vec<SourceBuffer>,
 }
@@ -1160,7 +1161,7 @@ fn canonical_path(path: &Path) -> Option<PathBuf> {
 }
 
 fn blocked_path(path: &Path) -> bool {
-    let mut previous = String::new();
+    let mut local_parent = false;
     for component in path.components() {
         let Some(value) = component.as_os_str().to_str() else {
             return true;
@@ -1172,18 +1173,36 @@ fn blocked_path(path: &Path) -> bool {
         {
             return true;
         }
-        let value = value.to_ascii_lowercase();
-        if matches!(
-            value.as_str(),
-            ".ssh" | ".git" | ".git-credentials" | ".gnupg" | ".aws" | ".kube"
-        ) || value.starts_with(".env")
-            || value.ends_with(".http_request")
-            || value.ends_with(".http_response")
-            || (previous == "local" && value.starts_with("env."))
+        let starts_with = |prefix: &str| {
+            value
+                .as_bytes()
+                .get(..prefix.len())
+                .is_some_and(|start| start.eq_ignore_ascii_case(prefix.as_bytes()))
+        };
+        let ends_with = |suffix: &str| {
+            value
+                .as_bytes()
+                .get(value.len().saturating_sub(suffix.len())..)
+                .is_some_and(|end| end.eq_ignore_ascii_case(suffix.as_bytes()))
+        };
+        if [
+            ".ssh",
+            ".git",
+            ".git-credentials",
+            ".gnupg",
+            ".aws",
+            ".kube",
+        ]
+        .iter()
+        .any(|name| value.eq_ignore_ascii_case(name))
+            || starts_with(".env")
+            || ends_with(".http_request")
+            || ends_with(".http_response")
+            || (local_parent && starts_with("env."))
         {
             return true;
         }
-        previous = value;
+        local_parent = value.eq_ignore_ascii_case("local");
     }
     false
 }
@@ -1744,6 +1763,15 @@ pub(super) mod tests {
             "capture.http_request",
             "capture.http_response",
             ".aws/guide.md",
+            ".sSh/guide.md",
+            ".GiT/guide.md",
+            ".Git-Credentials",
+            ".GnUpG/guide.md",
+            ".KUbe/guide.md",
+            ".EnV.local.md",
+            "LoCaL/EnV.production.md",
+            "nested/中文.HTTP_REQUEST",
+            "nested/中文.HTTP_RESPONSE",
         ] {
             let path = root.join(relative);
             assert!(blocked_path(&path));
@@ -1752,6 +1780,16 @@ pub(super) mod tests {
                 file_uri_path(&path_uri(&path).unwrap()).is_none(),
                 "{relative}"
             );
+        }
+        for relative in [
+            "中文/指南.md",
+            ".ssh-guide.md",
+            "a.env",
+            "capture.http_request.md",
+            "local/sub/env.production.md",
+            ".ｅnv.md",
+        ] {
+            assert!(!blocked_path(&root.join(relative)), "{relative}");
         }
     }
 

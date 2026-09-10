@@ -243,7 +243,12 @@ per buffer. The server attaches each request's ID after freshness checks and
 writes the encoded response without rebuilding its JSON tree. Large outlines
 remain available when they exceed the cache limit; only their reuse is skipped.
 The line index keeps sparse UTF-16 checkpoints on long lines, bounding coordinate
-scans for dense reference edits. Rename constructs the proposed source in one pass
+scans for dense reference edits. A single change validates its range and size
+before reusing unshared text storage; shared worker and index snapshots keep their
+original bytes. Changes inside one line that introduce no line break only rebuild
+that line's checkpoints and shift later byte offsets. Changes to line boundaries,
+including deleting the gap between a CR and LF, rebuild the complete index.
+Rename constructs the proposed source in one pass
 before validating its semantics. Descending `didChange` edits with strictly
 separated ranges also build the text in one pass and rebuild the index once.
 Other batches retain sequential coordinates, including touching ranges, clamped

@@ -78,18 +78,23 @@ impl Document {
     pub fn change(
         &mut self,
         version: i32,
-        changes: Vec<ContentChange>,
+        mut changes: Vec<ContentChange>,
     ) -> Result<(), ResponseError> {
         self.check_version(version)?;
 
-        let result = self.apply_changes(changes);
+        let result = if changes.len() == 1 && (self.synchronized || changes[0].range.is_none()) {
+            self.apply_single_change(changes.pop().unwrap())
+        } else {
+            self.apply_changes(changes).map(|(text, lines)| {
+                self.text = Arc::new(text);
+                self.lines = Arc::new(lines);
+            })
+        };
         self.version = version;
         self.ast = None;
         self.symbols = None;
         match result {
-            Ok((text, lines)) => {
-                self.text = Arc::new(text);
-                self.lines = Arc::new(lines);
+            Ok(()) => {
                 self.synchronized = true;
                 Ok(())
             }
@@ -98,6 +103,40 @@ impl Document {
                 Err(error)
             }
         }
+    }
+
+    fn apply_single_change(&mut self, change: ContentChange) -> Result<(), ResponseError> {
+        let Some(range) = change.range else {
+            check_size(change.text.len())?;
+            self.lines = Arc::new(LineIndex::new(&change.text));
+            self.text = Arc::new(change.text);
+            return Ok(());
+        };
+        if range.start > range.end {
+            return Err(ResponseError::invalid_params("reversed edit range"));
+        }
+        let start = self.lines.byte_offset(&self.text, range.start)?;
+        let end = self.lines.byte_offset(&self.text, range.end)?;
+        check_size(self.text.len() - (end - start) + change.text.len())?;
+        // Removing a whole line's content can join the previous CR and the
+        // following LF, changing the line count without deleting either byte.
+        let joins_crlf = change.text.is_empty()
+            && start != 0
+            && self.text.as_bytes()[start - 1] == b'\r'
+            && self.text.as_bytes().get(end) == Some(&b'\n');
+
+        // Validate everything fallible before touching live text. Copy-on-write
+        // preserves worker and index snapshots while reusing unshared buffers.
+        let text = Arc::make_mut(&mut self.text);
+        text.replace_range(start..end, &change.text);
+        if range.start.line == range.end.line && !change.text.contains(['\r', '\n']) && !joins_crlf
+        {
+            let growth = change.text.len() as isize - (end - start) as isize;
+            Arc::make_mut(&mut self.lines).edit_line(text, range.start.line, growth);
+        } else {
+            self.lines = Arc::new(LineIndex::new(text));
+        }
+        Ok(())
     }
 
     /// A malformed batch with a known newer version also makes the text unknown.
@@ -352,6 +391,56 @@ impl LineIndex {
         }
     }
 
+    /// The edit stays inside one line and neither splits nor joins a line ending.
+    /// Other lines keep their UTF-16 positions; only their byte offsets move.
+    fn edit_line(&mut self, text: &str, line: u32, growth: isize) {
+        let first = self
+            .checkpoints
+            .partition_point(|checkpoint| checkpoint.position.line < line);
+        let after = self
+            .checkpoints
+            .partition_point(|checkpoint| checkpoint.position.line <= line);
+        if growth != 0 {
+            for offset in &mut self.starts[line as usize + 1..] {
+                *offset = offset
+                    .checked_add_signed(growth)
+                    .expect("validated edits keep line offsets inside the document");
+            }
+            for checkpoint in &mut self.checkpoints[after..] {
+                checkpoint.byte_offset = checkpoint
+                    .byte_offset
+                    .checked_add_signed(growth)
+                    .expect("validated edits keep checkpoints inside the document");
+            }
+        }
+        let start = self.starts[line as usize];
+        let end = self
+            .starts
+            .get(line as usize + 1)
+            .copied()
+            .unwrap_or(text.len());
+        let mut updated = Vec::new();
+        if end - start > LINE_CHECKPOINT_BYTES {
+            let mut character = 0;
+            let mut checkpoint_offset = start;
+            for (offset, current) in text[start..end].char_indices() {
+                if matches!(current, '\r' | '\n') {
+                    break;
+                }
+                let offset = start + offset;
+                if offset - checkpoint_offset >= LINE_CHECKPOINT_BYTES {
+                    updated.push(LineCheckpoint {
+                        byte_offset: offset,
+                        position: Position { line, character },
+                    });
+                    checkpoint_offset = offset;
+                }
+                character += current.len_utf16() as u32;
+            }
+        }
+        self.checkpoints.splice(first..after, updated);
+    }
+
     pub fn byte_offset(&self, text: &str, position: Position) -> Result<usize, ResponseError> {
         let line = position.line as usize;
         let start = *self
@@ -572,6 +661,158 @@ mod tests {
         assert_eq!(document.ast(&parser).unwrap().children.len(), 3);
         assert!(document.change(2, Vec::new()).is_err());
         assert!(document.ast.is_some());
+    }
+
+    #[test]
+    fn repeated_single_edits_match_complete_reindexing_with_shared_and_unshared_text() {
+        fn next(seed: &mut u64, limit: usize) -> usize {
+            *seed ^= *seed << 13;
+            *seed ^= *seed >> 7;
+            *seed ^= *seed << 17;
+            *seed as usize % limit
+        }
+        let sources = [
+            format!(
+                "start\r\n{}\r{}\nend\r\n",
+                "a中😀".repeat(90),
+                "𐀀q".repeat(120)
+            ),
+            "\r\n\n\r".into(),
+            format!("{}😀", "a".repeat(511)),
+        ];
+        let replacements = [
+            String::new(),
+            "x".into(),
+            "😀".into(),
+            "中\t𐀀".repeat(40),
+            "z".repeat(130),
+            "\r".into(),
+            "\n".into(),
+            "\r\n".into(),
+        ];
+        let mut seed = 0x41ae_3949_d7e5_620b;
+        for source in sources {
+            let mut document = Document::new(0, source).unwrap();
+            for version in 1..=1_000 {
+                let line = next(&mut seed, document.lines.starts.len());
+                let start = document.lines.starts[line];
+                let end = document
+                    .lines
+                    .starts
+                    .get(line + 1)
+                    .copied()
+                    .unwrap_or(document.text.len());
+                let mut columns = vec![0];
+                let mut units = 0;
+                for character in document.text[start..end]
+                    .trim_end_matches(['\r', '\n'])
+                    .chars()
+                {
+                    units += character.len_utf16() as u32;
+                    columns.push(units);
+                }
+                columns.push(u32::MAX);
+                let left = columns[next(&mut seed, columns.len())];
+                let right = columns[next(&mut seed, columns.len())];
+                let replacement = &replacements[next(&mut seed, replacements.len())];
+                let edit = change(
+                    position(line as u32, left.min(right)),
+                    position(line as u32, left.max(right)),
+                    replacement,
+                );
+                let (expected, expected_lines) = document
+                    .apply_sequential_changes(vec![edit.clone()])
+                    .unwrap();
+                let snapshot = (version % 3 == 0).then(|| document.clone());
+                let original = snapshot.as_ref().map(|snapshot| snapshot.text.to_string());
+                document.change(version, vec![edit.clone()]).unwrap();
+                assert_eq!(document.text.as_str(), expected);
+                assert!(
+                    document.lines.starts == expected_lines.starts,
+                    "line index differs at version {version}, edit={edit:?}"
+                );
+                let checkpoints = |lines: &LineIndex| {
+                    lines
+                        .checkpoints
+                        .iter()
+                        .map(|checkpoint| (checkpoint.byte_offset, checkpoint.position))
+                        .collect::<Vec<_>>()
+                };
+                assert_eq!(checkpoints(&document.lines), checkpoints(&expected_lines));
+                if let Some(snapshot) = snapshot {
+                    let original = original.unwrap();
+                    assert_eq!(snapshot.text.as_str(), original);
+                    let original_lines = LineIndex::new(&original);
+                    assert_eq!(snapshot.lines.starts, original_lines.starts);
+                    assert_eq!(checkpoints(&snapshot.lines), checkpoints(&original_lines));
+                    assert!(!document.matches(&snapshot));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn an_inline_deletion_that_joins_crlf_rebuilds_line_boundaries() {
+        for source in ["\rx\n", "\r😀\n"] {
+            let mut document = Document::new(1, source.into()).unwrap();
+            document
+                .change(2, vec![change(position(1, 0), position(1, u32::MAX), "")])
+                .unwrap();
+            assert_eq!(document.text.as_str(), "\r\n");
+            assert_eq!(document.lines.starts, [0, 2]);
+            document
+                .change(3, vec![change(position(1, 0), position(1, 0), "Y")])
+                .unwrap();
+            assert_eq!(document.text.as_str(), "\r\nY");
+            assert_eq!(document.lines.starts, [0, 2]);
+        }
+    }
+
+    #[test]
+    fn single_edits_preserve_index_snapshots_and_reject_invalid_ranges_before_mutation() {
+        let source = "# Before\nbody😀\r\n";
+        let mut document = Document::new(1, source.into()).unwrap();
+        let indexed_text = document.shared_text().unwrap();
+        document
+            .change(2, vec![change(position(0, 2), position(0, 8), "New")])
+            .unwrap();
+        assert_eq!(indexed_text.as_str(), source);
+        assert_eq!(document.text().unwrap(), "# New\nbody😀\r\n");
+        assert_eq!(
+            document
+                .lines
+                .byte_offset(&document.text, position(1, 4))
+                .unwrap(),
+            10
+        );
+        let current = document.text.to_string();
+        assert_eq!(
+            document
+                .change(3, vec![change(position(1, 5), position(1, 6), "x")])
+                .unwrap_err()
+                .code,
+            -32602
+        );
+        assert_eq!(document.text.as_str(), current);
+        assert_eq!(document.version(), 3);
+        assert!(!document.synchronized);
+        document
+            .change(
+                4,
+                vec![ContentChange {
+                    range: None,
+                    text: "# Recovered\r\n😀".into(),
+                }],
+            )
+            .unwrap();
+        assert_eq!(document.text().unwrap(), "# Recovered\r\n😀");
+        assert_eq!(
+            document
+                .lines
+                .byte_offset(&document.text, position(1, 2))
+                .unwrap(),
+            document.text.len()
+        );
     }
 
     #[test]

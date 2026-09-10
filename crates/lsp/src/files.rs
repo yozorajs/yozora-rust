@@ -289,6 +289,12 @@ impl RootIdentity {
 }
 
 impl FileScope {
+    pub fn contains_root(&self, directory: &Path) -> bool {
+        self.roots
+            .iter()
+            .any(|(_, root)| root.starts_with(directory))
+    }
+
     pub fn open_file_uris<'a>(
         &self,
         uris: impl Iterator<Item = &'a str>,
@@ -536,7 +542,11 @@ pub enum Target {
 }
 
 pub fn resolve(source_uri: &str, destination: &str, scope: &FileScope) -> Option<Target> {
-    resolve_with(source_uri, destination, |path| scope.resolve(path))
+    resolve_with(source_uri, destination, false, |path| scope.resolve(path))
+}
+
+pub fn resolve_operation(source_uri: &str, destination: &str, scope: &FileScope) -> Option<Target> {
+    resolve_with(source_uri, destination, true, |path| scope.resolve(path))
 }
 
 /// Repeated references often resolve the same target. This memo is query-local
@@ -555,7 +565,20 @@ impl<'a> Resolver<'a> {
     }
 
     pub fn resolve(&mut self, source_uri: &str, destination: &str) -> Option<Target> {
-        resolve_with(source_uri, destination, |path| {
+        self.resolve_paths(source_uri, destination, false)
+    }
+
+    pub fn resolve_operation(&mut self, source_uri: &str, destination: &str) -> Option<Target> {
+        self.resolve_paths(source_uri, destination, true)
+    }
+
+    fn resolve_paths(
+        &mut self,
+        source_uri: &str,
+        destination: &str,
+        directories: bool,
+    ) -> Option<Target> {
+        resolve_with(source_uri, destination, directories, |path| {
             if let Some(resolved) = self.paths.get(path) {
                 return resolved.clone();
             }
@@ -579,6 +602,7 @@ impl<'a> Resolver<'a> {
 fn resolve_with(
     source_uri: &str,
     destination: &str,
+    directories: bool,
     mut resolve_path: impl FnMut(&Path) -> Option<PathBuf>,
 ) -> Option<Target> {
     if destination.chars().any(char::is_control) || destination.contains('\\') {
@@ -621,15 +645,18 @@ fn resolve_with(
         let decoded = percent_decode(resource)?;
         // A trailing slash or dot segment denotes a directory. Normalizing it
         // away would incorrectly turn `guide.md/` into a file destination.
-        if decoded
+        let directory = decoded
             .rsplit('/')
             .next()
-            .is_some_and(|part| matches!(part, "" | "." | ".."))
-        {
+            .is_some_and(|part| matches!(part, "" | "." | ".."));
+        if directory && !directories {
             return None;
         }
         let lexical = normalize_path(&local_path(source_uri, resource)?)?;
         let path = resolve_path(&lexical)?;
+        if directory && path.metadata().is_ok_and(|metadata| !metadata.is_dir()) {
+            return None;
+        }
         let uri = if resource
             .split_once(':')
             .is_some_and(|(scheme, _)| valid_scheme(scheme))

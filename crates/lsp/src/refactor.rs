@@ -150,7 +150,31 @@ struct HeadingPlan {
 struct FileMove {
     old: PathBuf,
     new: PathBuf,
-    new_uri: String,
+    directory: bool,
+}
+
+impl FileMove {
+    fn target(&self, path: &Path) -> Option<PathBuf> {
+        if path == self.old {
+            Some(self.new.clone())
+        } else if self.directory {
+            path.strip_prefix(&self.old)
+                .ok()
+                .map(|suffix| self.new.join(suffix))
+        } else {
+            None
+        }
+    }
+
+    fn source_exists(&self) -> bool {
+        std::fs::symlink_metadata(&self.old).is_ok_and(|metadata| {
+            if self.directory {
+                metadata.is_dir()
+            } else {
+                metadata.is_file()
+            }
+        })
+    }
 }
 
 enum Plan {
@@ -185,8 +209,12 @@ impl Plan {
                 return Ok(None);
             }
         }
-        let Some(files::Target::Local { file, fragment, .. }) = resolver.resolve(&source.uri, url)
-        else {
+        let resolved = if matches!(self, Self::Files(_)) {
+            resolver.resolve_operation(&source.uri, url)
+        } else {
+            resolver.resolve(&source.uri, url)
+        };
+        let Some(files::Target::Local { file, fragment, .. }) = resolved else {
             return Ok(None);
         };
         match self {
@@ -218,22 +246,19 @@ impl Plan {
             }
             Self::Files(moves) => {
                 let Some(file) = file else { return Ok(None) };
-                let target = moves
-                    .iter()
-                    .find(|item| item.old == file.path)
-                    .map_or(&file.path, |item| &item.new);
-                let new_source = moves
-                    .iter()
-                    .find(|item| source.path.as_ref() == Some(&item.old));
-                let new_source_uri =
-                    new_source.map_or(source.uri.as_str(), |item| item.new_uri.as_str());
-                if matches!(resolver.resolve(new_source_uri, url), Some(files::Target::Local { file: Some(file), .. }) if &file.path == target)
+                let target = moves.iter().find_map(|item| item.target(&file.path));
+                let target = target.as_ref().unwrap_or(&file.path);
+                let new_source = files::file_uri_path(&source.uri)
+                    .and_then(|path| moves.iter().find_map(|item| item.target(&path)))
+                    .and_then(|path| files::path_uri(&path));
+                let new_source_uri = new_source.as_deref().unwrap_or(&source.uri);
+                if matches!(resolver.resolve_operation(new_source_uri, url), Some(files::Target::Local { file: Some(file), .. }) if &file.path == target)
                 {
                     return Ok(None);
                 }
                 let end = url.find(['?', '#']).unwrap_or(url.len());
                 let resource = &url[..end];
-                let path = if resource
+                let mut path = if resource
                     .split_once(':')
                     .is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case("file"))
                 {
@@ -253,6 +278,9 @@ impl Plan {
                         target,
                     )?
                 };
+                if resource.ends_with('/') && !path.ends_with('/') {
+                    path.push('/');
+                }
                 Ok(Some(format!("{path}{}", &url[end..])))
             }
         }
@@ -419,14 +447,40 @@ impl Context<'_> {
                     "file rename sources and destinations must be unique",
                 ));
             }
-            if !files::is_file(&old) {
-                return Err(failed("file rename requires an existing regular file"));
+            let metadata = std::fs::symlink_metadata(&old)
+                .map_err(|_| failed("rename requires an existing regular file or directory"))?;
+            if !metadata.is_file() && !metadata.is_dir() {
+                return Err(failed(
+                    "rename requires an existing regular file or directory",
+                ));
+            }
+            if metadata.is_dir() && (scope.contains_root(&old) || new.starts_with(&old)) {
+                return Err(failed(
+                    "cannot move a workspace root or move a directory inside itself",
+                ));
             }
             moves.push(FileMove {
                 old,
                 new,
-                new_uri: file.new_uri.clone(),
+                directory: metadata.is_dir(),
             });
+        }
+        // A batch is one simultaneous mapping. Prefix-overlapping operations
+        // cannot unambiguously describe which directory owns a moved child.
+        for (index, left) in moves.iter().enumerate() {
+            for right in &moves[index + 1..] {
+                let overlaps =
+                    |left: &Path, right: &Path| left.starts_with(right) || right.starts_with(left);
+                if overlaps(&left.old, &right.old)
+                    || overlaps(&left.new, &right.new)
+                    || (left.new != right.old && overlaps(&left.new, &right.old))
+                    || (right.new != left.old && overlaps(&right.new, &left.old))
+                {
+                    return Err(failed(
+                        "directory rename operations cannot overlap; exact swaps are supported",
+                    ));
+                }
+            }
         }
         for item in &moves {
             if item
@@ -637,7 +691,7 @@ impl Context<'_> {
         validate_sources(&snapshots, &scope, self.cancellation)?;
         if let Plan::Files(moves) = &plan {
             for item in moves {
-                if !files::is_file(&item.old)
+                if !item.source_exists()
                     || scope.resolve(&item.old).as_ref() != Some(&item.old)
                     || scope.resolve(&item.new).as_ref() != Some(&item.new)
                     || (item.new.try_exists().map_err(|_| modified())?
@@ -770,7 +824,7 @@ fn operation_path(scope: &FileScope, uri: &str) -> Result<PathBuf, ResponseError
     }
     let Some(files::Target::Local {
         file: Some(file), ..
-    }) = files::resolve(uri, uri, scope)
+    }) = files::resolve_operation(uri, uri, scope)
     else {
         return Err(failed(
             "file rename paths must be local files inside workspace roots",

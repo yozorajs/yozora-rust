@@ -704,6 +704,9 @@ impl Server {
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
             self.state = State::Running;
+            self.query.code_action_literals = params
+                .pointer("/capabilities/textDocument/codeAction/codeActionLiteralSupport")
+                .is_some_and(Value::is_object);
             return Ok(json!({
                 "capabilities": {
                     "positionEncoding": "utf-16",
@@ -711,13 +714,17 @@ impl Server {
                     "documentSymbolProvider": true,
                     "workspaceSymbolProvider": true,
                     "foldingRangeProvider": true,
+                    "selectionRangeProvider": true,
+                    "codeActionProvider": if self.query.code_action_literals {
+                        json!({ "codeActionKinds": [crate::code_actions::ORGANIZE, crate::code_actions::EXTRACT], "resolveProvider": false })
+                    } else { Value::Bool(false) },
                     "definitionProvider": true,
                     "documentLinkProvider": { "resolveProvider": false },
                     "workspace": {
                         "workspaceFolders": { "supported": true, "changeNotifications": true },
                         "fileOperations": {
-                            "willRename": { "filters": [{ "scheme": "file", "pattern": { "glob": "**/*", "matches": "file" } }] },
-                            "didRename": { "filters": [{ "scheme": "file", "pattern": { "glob": "**/*", "matches": "file" } }] },
+                            "willRename": { "filters": [{ "scheme": "file", "pattern": { "glob": "**/*" } }] },
+                            "didRename": { "filters": [{ "scheme": "file", "pattern": { "glob": "**/*" } }] },
                         },
                     },
                     "hoverProvider": true,
@@ -966,6 +973,8 @@ fn is_query(method: &str) -> bool {
             | "workspace/willRenameFiles"
             | "textDocument/documentSymbol"
             | "textDocument/foldingRange"
+            | "textDocument/selectionRange"
+            | "textDocument/codeAction"
             | "textDocument/definition"
             | "textDocument/documentLink"
             | "textDocument/hover"

@@ -11,14 +11,14 @@ use crate::cancellation::Cancellation;
 use crate::document::{open_document, Document, Snapshot};
 use crate::files::{self, FileScope, Target, Workspace};
 use crate::protocol::{
-    parse_params, DocumentSymbol, FileRename, Json, Location, Position, Range, ReferencesParams,
-    RenameFilesParams, RenameParams, ResponseError, TextDocumentParams, TextDocumentPositionParams,
-    TextEdit, WorkspaceSymbolParams,
+    parse_params, CodeActionParams, DocumentSymbol, FileRename, Json, Location, Position, Range,
+    ReferencesParams, RenameFilesParams, RenameParams, ResponseError, SelectionRangeParams,
+    TextDocumentParams, TextDocumentPositionParams, TextEdit, WorkspaceSymbolParams,
 };
 use crate::workspace_index::Index;
 use crate::{
-    analysis, completion, diagnostics, heading_references, link_diagnostics, links, refactor,
-    rename, resource_completion,
+    analysis, code_actions, completion, diagnostics, heading_references, link_diagnostics, links,
+    refactor, rename, resource_completion, selection,
 };
 
 /// The server owns live text and versions. Clones share immutable document data
@@ -37,6 +37,7 @@ pub struct State {
     pub folding_range_limit: Option<usize>,
     pub hover_markdown: bool,
     pub versioned_edits: bool,
+    pub code_action_literals: bool,
     pub diagnostic_related_information: bool,
     pub diagnostic_version: bool,
 }
@@ -63,6 +64,11 @@ pub struct DocumentRequest {
 enum RequestKind {
     DocumentSymbol,
     FoldingRange,
+    SelectionRange(Vec<Position>),
+    CodeAction {
+        range: Range,
+        only: Option<Vec<String>>,
+    },
     Definition(Position),
     DocumentLink,
     Hover(Position),
@@ -94,6 +100,38 @@ impl Request {
             return Ok(Self::RenameFiles(params.files));
         }
         let (uri, kind) = match method {
+            "textDocument/codeAction" => {
+                let params: CodeActionParams = parse_params(params)?;
+                if params.range.start > params.range.end {
+                    return Err(ResponseError::invalid_params("reversed code action range"));
+                }
+                if params.context.only.as_ref().is_some_and(|kinds| {
+                    kinds.len() > 32 || kinds.iter().any(|kind| kind.len() > 256)
+                }) {
+                    return Err(ResponseError::invalid_params(
+                        "code actions permit at most 32 kinds of at most 256 bytes",
+                    ));
+                }
+                (
+                    params.text_document.uri,
+                    RequestKind::CodeAction {
+                        range: params.range,
+                        only: params.context.only,
+                    },
+                )
+            }
+            "textDocument/selectionRange" => {
+                let params: SelectionRangeParams = parse_params(params)?;
+                if params.positions.len() > 128 {
+                    return Err(ResponseError::invalid_params(
+                        "selection ranges permit at most 128 positions",
+                    ));
+                }
+                (
+                    params.text_document.uri,
+                    RequestKind::SelectionRange(params.positions),
+                )
+            }
             "textDocument/documentSymbol"
             | "textDocument/foldingRange"
             | "textDocument/documentLink" => {
@@ -185,6 +223,15 @@ impl Request {
                 request.uri.capacity()
                     + match &request.kind {
                         RequestKind::Rename { new_name, .. } => new_name.capacity(),
+                        RequestKind::SelectionRange(positions) => {
+                            positions.capacity() * std::mem::size_of::<Position>()
+                        }
+                        RequestKind::CodeAction {
+                            only: Some(kinds), ..
+                        } => {
+                            kinds.capacity() * std::mem::size_of::<String>()
+                                + kinds.iter().map(String::capacity).sum::<usize>()
+                        }
                         _ => 0,
                     }
             }
@@ -267,6 +314,30 @@ impl State {
             }
         };
         match kind {
+            RequestKind::CodeAction { range, only } => {
+                let document = open_document(&mut self.documents, &uri)?;
+                document.validate_position(range.end)?;
+                let snapshot = document_snapshot(document, parser, range.start, cancellation)?;
+                if !self.code_action_literals {
+                    return Ok(Json::encode(&Vec::<Value>::new()));
+                }
+                let actions =
+                    code_actions::actions(&snapshot, range, only.as_deref(), parser, cancellation)?;
+                let actions: Vec<_> = actions.into_iter().map(|action| {
+                    json!({ "title": action.title, "kind": action.kind, "edit": workspace_edit(
+                        vec![refactor::DocumentEdits { uri: uri.clone(), version: Some(snapshot.version), edits: action.edits }],
+                        self.versioned_edits,
+                    ) })
+                }).collect();
+                Ok(Json::encode(&actions))
+            }
+            RequestKind::SelectionRange(positions) => {
+                let document = open_document(&mut self.documents, &uri)?;
+                let snapshot =
+                    document_snapshot(document, parser, Position::default(), cancellation)?;
+                selection::ranges(&snapshot, &positions, cancellation)
+                    .map(|ranges| Json::encode(&ranges))
+            }
             RequestKind::DocumentSymbol => {
                 let document = open_document(&mut self.documents, &uri)?;
                 let root = document_ast(document, parser, cancellation)?;

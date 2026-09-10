@@ -298,6 +298,57 @@ local function run()
   equal(closed_reference.col, 6, "native reference column follows the Unicode prefix")
   passed("native heading references include unopened referrers after heading and file rename")
 
+  local actions = open_buffer("actions.md", {
+    "# Action 😀", "", '[shown](https://example.org "title") [z] [a]', "",
+    "[z]: /z", "[a]: /a",
+  })
+  at(actions, 1, "Action", 2)
+  assert(client.server_capabilities.selectionRangeProvider, "selection range capability missing")
+  vim.lsp.buf.selection_range(1, 8000)
+  equal(vim.fn.mode(), "v", "native selection enters Visual mode")
+  equal(vim.fn.getpos("v")[3], 3, "selection starts after the heading marker")
+  equal(vim.api.nvim_win_get_cursor(0)[2], 7, "selection ends at the word boundary")
+  vim.api.nvim_feedkeys(vim.keycode("<Esc>"), "nx", false)
+  passed("native smart selection expands a heading word using UTF-16 ranges")
+
+  at(actions, 3, "shown")
+  vim.lsp.buf.code_action({ context = { only = { "source.organizeLinkDefinitions" } }, apply = true })
+  wait_for("native organize definitions", function()
+    return vim.api.nvim_buf_get_lines(actions, -3, -1, true)[1] == "[a]: /a"
+  end)
+  request("textDocument/documentSymbol", { textDocument = { uri = vim.uri_from_bufnr(actions) } }, actions)
+  at(actions, 3, "shown")
+  vim.lsp.buf.code_action({ context = { only = { "refactor.extract.linkDefinition" } }, apply = true })
+  wait_for("native extract definition", function()
+    return vim.api.nvim_buf_get_lines(actions, 2, 3, true)[1] == "[shown][link] [z] [a]"
+  end)
+  local extracted = request("textDocument/definition", at(actions, 3, "shown"), actions)
+  local definition_line = vim.api.nvim_buf_get_lines(actions, extracted.range.start.line, extracted.range.start.line + 1, true)[1]
+  equal(definition_line, '[link]: https://example.org "title"', "extracted reference resolves to its definition")
+  passed("native code actions organize definitions and extract links with client-applied edits")
+
+  local directory_source = open_buffer("directory-old/nested/page.md", {
+    "# Directory title", "[outside](../../guide.md#intro)",
+  })
+  local directory_referrer = open_buffer("directory-referrer.md", {
+    "[page](directory-old/nested/page.md#directory-title)",
+  })
+  local directory_old = vim.fs.joinpath(workspace, "directory-old")
+  local directory_new = vim.fs.joinpath(workspace, "archive/directory 新")
+  local directory_params = {
+    files = { { oldUri = vim.uri_from_fname(directory_old), newUri = vim.uri_from_fname(directory_new) } },
+  }
+  local directory_edits = request("workspace/willRenameFiles", directory_params, directory_source)
+  vim.lsp.util.apply_workspace_edit(directory_edits, client.offset_encoding)
+  vim.lsp.util.rename(directory_old, directory_new)
+  assert(client:notify("workspace/didRenameFiles", directory_params))
+  equal(vim.api.nvim_buf_get_name(directory_source), vim.fs.joinpath(directory_new, "nested/page.md"), "directory move updates buffer identity")
+  equal(vim.api.nvim_buf_get_lines(directory_source, 1, 2, true)[1], "[outside](../../../guide.md#intro)", "directory move rebases outgoing links")
+  request("textDocument/documentSymbol", { textDocument = { uri = vim.uri_from_bufnr(directory_source) } }, directory_source)
+  local directory_target = request("textDocument/definition", at(directory_referrer, 1, "page"), directory_referrer)
+  equal(directory_target.uri, vim.uri_from_bufnr(directory_source), "incoming link follows the moved directory")
+  passed("native directory moves preserve navigation and update descendant buffers")
+
   local labels = open_buffer("docs/labels.md", { "😀 [shown][ol]", "", "[old]: /one", "[older]: /two" })
   accept_completion(labels, "ol", 2, "old", "😀 [shown][old]")
   local definition = request("textDocument/definition", at(labels, 1, "old"), labels)

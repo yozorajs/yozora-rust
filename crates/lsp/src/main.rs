@@ -1,5 +1,6 @@
 mod analysis;
 mod cancellation;
+mod code_actions;
 mod completion;
 mod diagnostics;
 mod document;
@@ -15,6 +16,7 @@ mod reference_index;
 mod rename;
 mod resource_completion;
 mod resource_edit;
+mod selection;
 mod server;
 mod transport;
 mod worker;

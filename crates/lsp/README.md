@@ -61,6 +61,12 @@ local navigation is limited to the source file's directory.
   end at the next heading of equal or lower depth in the same block container,
   or at that container's end. Ranges use inclusive line numbers and respect the
   client's range limit.
+- `textDocument/selectionRange`: expand selections from words and inline nodes to
+  containing blocks, heading sections, and the document. Positions use UTF-16;
+  empty lines and EOF remain selectable. Each request accepts up to 128 positions
+  and returns one chain per input position, in input order. Each parent strictly
+  contains its child; chains retain at most 32 ranges, including the document,
+  to bound memory and JSON nesting for deeply nested input.
 - `textDocument/definition`: document-local reference links, reference images,
   and footnotes, including references in admonition titles. Identifier matching
   and duplicate definitions follow the parser's rules. Direct links, images, and
@@ -153,12 +159,37 @@ local navigation is limited to the source file's directory.
   renaming the first `Intro` heading to `Other` changes IDs
   `intro, intro-2, other` to `other, intro, other-2`; links continue to identify
   the same headings. References within heading text retain label-rename priority.
-- `workspace/willRenameFiles`: update links when regular files move within
-  explicit local workspace roots, including Markdown files and linked assets.
+- `textDocument/codeAction`: clients advertising `codeActionLiteralSupport`
+  receive complete, versioned workspace edits when they also support
+  `workspaceEdit.documentChanges`; other literal-capable clients receive `changes`.
+  The server advertises two kinds and honors hierarchical `context.only` filters:
+  - `source.organizeLinkDefinitions`: collect top-level link definitions at the
+    end of the document, sorted by normalized identifier. Original definition
+    spellings, titles, unused entries, and duplicate order are preserved. Nested
+    definitions remain in their containers; an action that would change binding
+    priority or other Markdown structure is omitted. Already organized documents
+    produce no action.
+  - `refactor.extract.linkDefinition`: extract a selected inline link, image, or
+    autolink to a fresh `link`, `link2`, ... definition. Matching inline occurrences
+    with the same destination **and title** share the definition. Display text,
+    image alt text, other titles, and existing references retain their semantics.
+    The generated label must not activate unrelated plain-text references.
+  Both actions validate the complete preview before offering edits; the client
+  applies them. Code, existing references, and unsafe extraction contexts do not
+  produce extract actions. A request permits 32 filter kinds of 256 bytes each,
+  10,000 edits per action, a conservative 4 MiB edit budget per action, and 128 MiB
+  of total preview parse input. Extraction attempts at most eight safe-label
+  previews. Formatting and unused-definition removal are separate concerns.
+- `workspace/willRenameFiles`: update links when regular files or directories move
+  within explicit local workspace roots, including Markdown files and linked assets.
   Incoming links and moved documents' relative outgoing links are rewritten;
-  query strings and fragments are preserved. Up to 128 files can move in one
-  request, including swaps. Directory moves are not supported, and the advertised
-  file-operation filter matches files only.
+  query strings, fragments, and trailing directory slashes are preserved.
+  Directory moves rebase descendant buffers and links without enumerating assets
+  into individual operations. Up to 128 file/directory paths can move in one
+  request, including exact swaps. Overlapping source/destination subtrees, moving
+  a workspace root, and moving a directory into itself are rejected. The
+  file-operation filter accepts files and directories; existing source-scan,
+  byte, edit, canonical-path, and destination-collision limits still apply.
   `workspace/didRenameFiles` invalidates workspace analysis and refreshes link
   diagnostics; buffer identities still follow `didClose`/`didOpen`.
 - `textDocument/publishDiagnostics`: warnings for duplicate link and footnote
@@ -183,7 +214,7 @@ local navigation is limited to the source file's directory.
 
 Document queries start from open buffers, including unsaved documents. Target buffers use
 their unsaved text; closed Markdown files are read on demand for anchor navigation.
-Formatting, semantic tokens, and code actions are outside the current capabilities.
+Formatting and semantic tokens are outside the current capabilities.
 Unresolved reference labels remain ordinary text, following the parser's fallback
 behavior.
 
@@ -496,7 +527,9 @@ in its path. It covers `.yozora` attachment, workspace roots, unsaved target
 navigation, native workspace symbol lists and disk refresh, UTF-16 completion
 edits, label and heading rename, file-operation edits followed by a native file
 move, native heading-reference lists with unopened referrers, and incremental
-synchronization. It also checks link diagnostic refresh
+synchronization. Smart selection and both code actions run through native editor
+APIs; directory moves apply edits and rename descendant buffers before checking
+navigation. It also checks link diagnostic refresh
 after unsaved target edits and watched file creation/edit/deletion, a 2,001-edit
 rename, deep documents, cancellation, close/reopen,
 and graceful shutdown. It exercises native client APIs and edit application;

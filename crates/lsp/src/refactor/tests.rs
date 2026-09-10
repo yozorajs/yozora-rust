@@ -342,10 +342,7 @@ fn collisions_out_of_sync_buffers_and_unreadable_markdown_abort_the_whole_rename
         -32803
     );
     fs::create_dir(project.directory.0.join("folder")).unwrap();
-    assert_eq!(
-        project.moves(&[("folder", "moved")]).err().unwrap().code,
-        -32803
-    );
+    assert!(project.moves(&[("folder", "moved")]).unwrap().is_empty());
     let uri = project.open("a.md", "# A");
     let other = project.open("b.md", "[a](a.md#a)");
     project
@@ -365,6 +362,90 @@ fn collisions_out_of_sync_buffers_and_unreadable_markdown_abort_the_whole_rename
         -32803
     );
     assert_eq!(project.documents[&uri].text().unwrap(), "# A");
+}
+
+#[test]
+fn directory_moves_update_incoming_and_outgoing_links_and_unsaved_descendants() {
+    let mut project = Project::new();
+    project.disk(
+        "old/guide.md",
+        "# Guide\n[asset](asset.png) [shared](../shared.md#s)",
+    );
+    project.disk("old/asset.png", "asset");
+    project.disk(
+        "old/sub/peer.md",
+        "[guide](../guide.md#guide) [outside](../../shared.md)",
+    );
+    project.disk("shared.md", "# S");
+    project.disk(
+        "index.md",
+        "[guide](old/guide.md?raw#guide) [folder](old/) ![asset](old/asset.png)",
+    );
+    let draft = project.open(
+        "old/draft.md",
+        "[shared](../shared.md) [guide](guide.md#guide)",
+    );
+    let edits = project.moves(&[("old", "archive/deep")]).unwrap();
+    assert_eq!(
+        edits.iter().find(|edit| edit.uri == draft).unwrap().version,
+        Some(1)
+    );
+    let changed = project.texts(edits);
+    assert_eq!(changed[&project.directory.uri("index.md")], "[guide](archive/deep/guide.md?raw#guide) [folder](archive/deep/) ![asset](archive/deep/asset.png)");
+    assert_eq!(
+        changed[&project.directory.uri("old/guide.md")],
+        "# Guide\n[asset](asset.png) [shared](../../shared.md#s)"
+    );
+    assert_eq!(
+        changed[&project.directory.uri("old/sub/peer.md")],
+        "[guide](../guide.md#guide) [outside](../../../shared.md)"
+    );
+    assert_eq!(
+        changed[&draft],
+        "[shared](../../shared.md) [guide](guide.md#guide)"
+    );
+    assert!(project.directory.0.join("old/guide.md").is_file());
+    assert!(!project.directory.0.join("archive").exists());
+}
+
+#[test]
+fn directory_swaps_are_simultaneous_and_path_prefixes_respect_component_boundaries() {
+    let mut project = Project::new();
+    project.disk("a/page.md", "# A\n[self](page.md#a)");
+    project.disk("b/page.md", "# B\n[self](page.md#b)");
+    project.disk("ab/page.md", "# Unrelated");
+    project.disk(
+        "index.md",
+        "[a](a/page.md#a) [b](b/page.md#b) [ab](ab/page.md)",
+    );
+    let edits = project.moves(&[("a", "b"), ("b", "a")]).unwrap();
+    let changed = project.texts(edits);
+    assert_eq!(changed.len(), 1);
+    assert_eq!(
+        changed[&project.directory.uri("index.md")],
+        "[a](b/page.md#a) [b](a/page.md#b) [ab](ab/page.md)"
+    );
+}
+
+#[test]
+fn directory_moves_reject_overlapping_batches_roots_and_existing_destinations() {
+    let mut project = Project::new();
+    project.disk("a/page.md", "# A");
+    project.disk("b/page.md", "# B");
+    for moves in [
+        vec![("a", "a/sub")],
+        vec![("a", "b")],
+        vec![("", "moved")],
+        vec![("a", "x"), ("a/page.md", "other.md")],
+        vec![("a", "x"), ("b", "x/sub")],
+        vec![("a", "b/sub"), ("b", "x")],
+    ] {
+        assert_eq!(
+            project.moves(&moves).err().unwrap().code,
+            -32803,
+            "{moves:?}"
+        );
+    }
 }
 
 #[cfg(unix)]

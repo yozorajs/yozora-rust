@@ -470,7 +470,7 @@ fn heading_and_file_renames_round_trip_through_both_workspace_edit_formats() {
         assert_eq!(
             initialized["result"]["capabilities"]["workspace"]["fileOperations"]["willRename"]
                 ["filters"][0]["pattern"]["matches"],
-            "file"
+            Value::Null
         );
         client.notify("initialized", json!({}));
         client.open(&uri, &target_text);
@@ -1510,6 +1510,160 @@ fn respects_flat_symbol_clients_and_folding_range_limits() {
     assert_eq!(symbols["result"][2]["name"], "Two");
     let folds = client.request("textDocument/foldingRange", document(uri));
     assert_eq!(folds["result"], json!([{ "startLine": 0, "endLine": 5 }]));
+    client.shutdown();
+}
+
+#[test]
+fn selection_ranges_and_code_actions_round_trip_with_unicode_and_versioned_edits() {
+    for versioned in [false, true] {
+        let mut client = Client::start();
+        let initialized = client.initialize(json!({
+            "textDocument": { "codeAction": { "codeActionLiteralSupport": { "codeActionKind": { "valueSet": ["source", "refactor"] } } } },
+            "workspace": { "workspaceEdit": { "documentChanges": versioned } }
+        }));
+        assert_eq!(initialized["capabilities"]["selectionRangeProvider"], true);
+        assert_eq!(
+            initialized["capabilities"]["codeActionProvider"]["codeActionKinds"],
+            json!([
+                "source.organizeLinkDefinitions",
+                "refactor.extract.linkDefinition"
+            ])
+        );
+        let uri = "untitled:actions";
+        let mut text =
+            "# Title😀\n\n[shown](https://example.org \"title\") [z] [a]\n\n[z]: /z\n[a]: /a\n"
+                .to_string();
+        client.open(uri, &text);
+        let selected = client.request("textDocument/selectionRange", json!({ "textDocument": { "uri": uri }, "positions": [{ "line": 0, "character": 3 }, { "line": 2, "character": 3 }] }));
+        assert_eq!(selected["result"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            selected["result"][0]["range"],
+            json!({ "start": { "line": 0, "character": 2 }, "end": { "line": 0, "character": 7 } })
+        );
+        assert!(selected["result"][1]["parent"].is_object());
+        for positions in [
+            json!([{ "line": 0, "character": 8 }]),
+            json!(vec![json!({ "line": 0, "character": 0 }); 129]),
+        ] {
+            assert_eq!(
+                client.request(
+                    "textDocument/selectionRange",
+                    json!({ "textDocument": { "uri": uri }, "positions": positions })
+                )["error"]["code"],
+                -32602
+            );
+        }
+        for (version, kind) in [
+            (1, "source.organizeLinkDefinitions"),
+            (2, "refactor.extract.linkDefinition"),
+        ] {
+            let response = client.request("textDocument/codeAction", json!({
+                "textDocument": { "uri": uri }, "range": { "start": { "line": 2, "character": 3 }, "end": { "line": 2, "character": 3 } },
+                "context": { "diagnostics": [], "only": [kind] }
+            }));
+            let actions = response["result"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{response}"));
+            assert_eq!(actions.len(), 1);
+            assert_eq!(actions[0]["kind"], kind);
+            let changes = workspace_changes(&actions[0]["edit"]);
+            assert_eq!(changes.len(), 1);
+            assert_eq!(changes[0].0, uri);
+            assert_eq!(changes[0].1, versioned.then_some(version));
+            text = edit_text(&text, changes[0].2);
+            client.notify("textDocument/didChange", json!({ "textDocument": { "uri": uri, "version": version + 1 }, "contentChanges": [{ "text": text }] }));
+        }
+        assert!(text.contains("[shown][link] [z] [a]"), "{text}");
+        assert!(text.contains("[a]: /a\n[z]: /z"), "{text}");
+        let definition = client.request(
+            "textDocument/definition",
+            json!({ "textDocument": { "uri": uri }, "position": { "line": 2, "character": 3 } }),
+        );
+        let line = definition["result"]["range"]["start"]["line"]
+            .as_u64()
+            .unwrap() as usize;
+        assert!(text
+            .lines()
+            .nth(line)
+            .unwrap()
+            .starts_with("[link]: https://example.org"));
+        client.shutdown();
+    }
+}
+
+#[test]
+fn code_actions_respect_clients_without_literal_support_and_validate_ranges() {
+    let mut client = Client::start();
+    let initialized = client.initialize(json!({}));
+    assert_eq!(initialized["capabilities"]["codeActionProvider"], false);
+    let uri = "untitled:legacy-actions";
+    client.open(uri, "[a](u)");
+    let mut params = json!({ "textDocument": { "uri": uri }, "range": { "start": { "line": 0, "character": 1 }, "end": { "line": 0, "character": 1 } }, "context": { "diagnostics": [] } });
+    assert_eq!(
+        client.request("textDocument/codeAction", params.clone())["result"],
+        json!([])
+    );
+    params["range"]["end"]["character"] = json!(0);
+    assert_eq!(
+        client.request("textDocument/codeAction", params)["error"]["code"],
+        -32602
+    );
+    client.shutdown();
+}
+
+#[test]
+fn directory_rename_preserves_unsaved_buffers_and_navigation_after_the_client_moves_files() {
+    let directory = TestDirectory::new();
+    fs::create_dir_all(directory.0.join("old space/sub")).unwrap();
+    fs::create_dir(directory.0.join("archive")).unwrap();
+    fs::write(
+        directory.0.join("old space/sub/guide.md"),
+        "# Stale disk title",
+    )
+    .unwrap();
+    fs::write(directory.0.join("shared.md"), "# Shared").unwrap();
+    let guide = directory.uri("old space/sub/guide.md");
+    let index = directory.uri("index.md");
+    let guide_text = "# Unsaved\n[out](../../shared.md#shared)";
+    let index_text = "[guide](old%20space/sub/guide.md#unsaved)";
+    fs::write(directory.0.join("index.md"), index_text).unwrap();
+    let mut client = Client::start();
+    client.request("initialize", json!({ "rootUri": directory.uri(""), "capabilities": { "workspace": { "workspaceEdit": { "documentChanges": true } } } }));
+    client.notify("initialized", json!({}));
+    client.open(&guide, guide_text);
+    client.open(&index, index_text);
+    let params = json!({ "files": [{ "oldUri": directory.uri("old space/"), "newUri": directory.uri("archive/新目录/") }] });
+    let response = client.request("workspace/willRenameFiles", params.clone());
+    assert!(response.get("error").is_none(), "{response}");
+    let changes = workspace_changes(&response["result"]);
+    assert_eq!(changes.len(), 2);
+    let mut updated_guide = None;
+    for (uri, version, edits) in changes {
+        assert_eq!(version, Some(1));
+        let text = edit_text(if uri == guide { guide_text } else { index_text }, edits);
+        client.notify("textDocument/didChange", json!({ "textDocument": { "uri": uri, "version": 2 }, "contentChanges": [{ "text": text }] }));
+        if uri == guide {
+            assert!(text.contains("../../../shared.md#shared"));
+            updated_guide = Some(text);
+        } else {
+            assert!(text.contains("archive/%E6%96%B0%E7%9B%AE%E5%BD%95/sub/guide.md#unsaved"));
+        }
+    }
+    fs::rename(
+        directory.0.join("old space"),
+        directory.0.join("archive/新目录"),
+    )
+    .unwrap();
+    client.notify("textDocument/didClose", document(&guide));
+    let moved = directory.uri("archive/新目录/sub/guide.md");
+    client.open(&moved, &updated_guide.unwrap());
+    client.notify("workspace/didRenameFiles", params);
+    let target = client.request(
+        "textDocument/definition",
+        json!({ "textDocument": { "uri": index }, "position": { "line": 0, "character": 3 } }),
+    );
+    assert_eq!(target["result"]["uri"], moved);
+    assert_eq!(target["result"]["range"]["start"]["line"], 0);
     client.shutdown();
 }
 

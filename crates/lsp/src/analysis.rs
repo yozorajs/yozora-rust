@@ -161,11 +161,14 @@ pub(super) fn plain_text(children: &[Node]) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-pub fn folding_ranges(root: &Root) -> Vec<FoldingRange> {
-    let mut ranges: Vec<_> = heading_sections(root)
+pub(super) fn section_ranges(root: &Root) -> impl Iterator<Item = Range> {
+    heading_sections(root)
         .into_iter()
         .map(|section| section.symbol.range)
-        .collect();
+}
+
+pub fn folding_ranges(root: &Root) -> Vec<FoldingRange> {
+    let mut ranges: Vec<_> = section_ranges(root).collect();
     ranges.extend(nodes(&root.children).filter_map(|node| {
         if matches!(
             node,

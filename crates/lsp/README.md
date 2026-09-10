@@ -294,6 +294,8 @@ Built-in inline containers yield child token lists to an explicit parse stack,
 so nested images and references do not consume the worker's call stack. Each
 token list keeps its original parse-hook scope and depth-first callback order.
 Temporary image children and partial ASTs are released iteratively as well.
+Line grouping reuses the parser's character buffer for a single input chunk;
+it preserves chunk boundaries while avoiding a second full per-character allocation.
 
 Definition, hover, and reference queries share identifier resolution and the
 first-definition-wins rule. Analysis only reads the AST; the parser has no
@@ -433,6 +435,10 @@ including the owning query worker and at most three short-lived filesystem
 threads, limited by available CPU parallelism. Every edit is planned before these
 checks start, and all readers finish before publication. Their byte budgets
 partition the original source size; changed or cancelled reads yield no edits.
+Linux readers each reuse a 64 KiB buffer for byte comparison and check EOF after
+the expected contents. Equal file size or timestamps never replace this check;
+opening with `O_NOFOLLOW` and `O_NONBLOCK` rejects replaced symlink leaves and
+prevents a newly substituted FIFO from blocking the reader.
 Inventory follows the `fileEventCache` mode above.
 
 `initializationOptions.refactorFileEventCache: true` also lets refactors trust

@@ -1037,6 +1037,74 @@ fn read_open_markdown(file: File, remaining: &mut usize) -> Result<Option<String
     Ok(String::from_utf8(bytes).ok())
 }
 
+/// Final refactor validation only needs byte equality. Reuse a reader's scratch
+/// buffer and read through EOF; metadata alone never validates an unchanged file.
+pub fn matches_scoped_markdown(
+    path: &Path,
+    scope: &FileScope,
+    expected: &str,
+    scratch: &mut [u8],
+    cancellation: &Cancellation,
+) -> Result<bool, ResponseError> {
+    cancellation.check()?;
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::AsRawFd;
+        use std::os::unix::fs::OpenOptionsExt;
+        if scratch.is_empty()
+            || expected.len() > MAX_DOCUMENT_BYTES
+            || !is_markdown(path)
+            || blocked_path(path)
+            || !scope.roots.iter().any(|(_, root)| path.starts_with(root))
+        {
+            return Ok(false);
+        }
+        // Linux open(2): do not follow a replaced leaf or block on a FIFO that
+        // appeared after discovery. Descriptor metadata rejects special files.
+        const O_NOFOLLOW: i32 = 0o400000;
+        const O_NONBLOCK: i32 = 0o4000;
+        let Ok(mut file) = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(O_NOFOLLOW | O_NONBLOCK)
+            .open(path)
+        else {
+            return Ok(false);
+        };
+        if !file
+            .metadata()
+            .is_ok_and(|metadata| metadata.is_file() && metadata.len() == expected.len() as u64)
+        {
+            return Ok(false);
+        }
+        match fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd())) {
+            Ok(actual) if actual == path => {}
+            Ok(_) => return Ok(false),
+            Err(_) => {
+                let mut remaining = expected.len();
+                return Ok(read_scoped_markdown_budgeted(path, scope, &mut remaining)
+                    .is_ok_and(|actual| actual.as_deref() == Some(expected)));
+            }
+        }
+        for chunk in expected.as_bytes().chunks(scratch.len()) {
+            cancellation.check()?;
+            let buffer = &mut scratch[..chunk.len()];
+            if file.read_exact(buffer).is_err() || buffer != chunk {
+                return Ok(false);
+            }
+        }
+        cancellation.check()?;
+        // Detect growth after fstat, including an empty source becoming nonempty.
+        Ok(file.read(&mut scratch[..1]).is_ok_and(|count| count == 0))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = scratch;
+        let mut remaining = expected.len();
+        Ok(read_scoped_markdown_budgeted(path, scope, &mut remaining)
+            .is_ok_and(|actual| actual.as_deref() == Some(expected)))
+    }
+}
+
 fn normalize_path(path: &Path) -> Option<PathBuf> {
     if !path.is_absolute() {
         return None;
@@ -1227,6 +1295,60 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn final_source_comparison_checks_every_byte_even_with_unchanged_size_and_mtime() {
+        let directory = TestDir::new();
+        let path = directory.0.join("source.md");
+        let expected = "ab😀\n".repeat(10_000);
+        fs::write(&path, &expected).unwrap();
+        let original_time = fs::metadata(&path).unwrap().modified().unwrap();
+        let cancellation = Cancellation::default();
+        let scope = Workspace::new(vec![directory.uri("")])
+            .index_scope(&cancellation, MAX_WORKSPACE_ROOTS)
+            .unwrap();
+        let mut scratch = [0; 31];
+        assert!(
+            matches_scoped_markdown(&path, &scope, &expected, &mut scratch, &cancellation).unwrap()
+        );
+        for offset in [0, 31, expected.len() - 1] {
+            let mut changed = expected.as_bytes().to_vec();
+            changed[offset] = b'x';
+            fs::write(&path, changed).unwrap();
+            File::open(&path)
+                .unwrap()
+                .set_times(fs::FileTimes::new().set_modified(original_time))
+                .unwrap();
+            assert!(!matches_scoped_markdown(
+                &path,
+                &scope,
+                &expected,
+                &mut scratch,
+                &cancellation
+            )
+            .unwrap());
+        }
+        for changed in ["", "different", &(expected.clone() + "extra")] {
+            fs::write(&path, changed).unwrap();
+            assert!(!matches_scoped_markdown(
+                &path,
+                &scope,
+                &expected,
+                &mut scratch,
+                &cancellation
+            )
+            .unwrap());
+        }
+        fs::write(&path, "").unwrap();
+        assert!(matches_scoped_markdown(&path, &scope, "", &mut scratch, &cancellation).unwrap());
+        cancellation.cancel();
+        assert_eq!(
+            matches_scoped_markdown(&path, &scope, "", &mut scratch, &cancellation)
+                .unwrap_err()
+                .code,
+            -32800
+        );
+    }
+
+    #[test]
     fn event_history_is_bounded_and_unknown_changes_force_complete_refresh() {
         let mut events = FileEvents::default();
         let event = |name: &str, kind| FileEvent {
@@ -1304,12 +1426,28 @@ pub(super) mod tests {
             .unwrap()
             .is_none());
         assert_eq!(remaining, 1024);
+        assert!(!matches_scoped_markdown(
+            &path,
+            &scope,
+            "# Original",
+            &mut [0; 64],
+            &Cancellation::default()
+        )
+        .unwrap());
         let leaf = directory.0.join("leaf.md");
         symlink(outside.0.join("moved/source.md"), &leaf).unwrap();
         assert!(read_scoped_markdown_budgeted(&leaf, &scope, &mut remaining)
             .unwrap()
             .is_none());
         assert_eq!(remaining, 1024);
+        assert!(!matches_scoped_markdown(
+            &leaf,
+            &scope,
+            "# Original",
+            &mut [0; 64],
+            &Cancellation::default()
+        )
+        .unwrap());
     }
 
     #[test]

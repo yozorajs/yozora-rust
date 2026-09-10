@@ -719,14 +719,12 @@ fn validate_sources(
 ) -> Result<(), ResponseError> {
     cancellation.check()?;
     let validate = |sources: &[(PathBuf, Arc<String>)]| {
-        // Each partition spends only its share of the original source bytes.
-        // Growth beyond that share necessarily means the snapshot changed.
-        let mut remaining = sources.iter().map(|(_, text)| text.len()).sum();
+        // Each source reads at most its original size plus one EOF probe. A
+        // mismatch retires the query before any later source consumes its budget.
+        let mut scratch = [0; 64 * 1024];
         for (path, expected) in sources {
             cancellation.check()?;
-            let actual = files::read_scoped_markdown_budgeted(path, scope, &mut remaining)
-                .map_err(|_| modified())?;
-            if actual.as_deref() != Some(expected.as_str()) {
+            if !files::matches_scoped_markdown(path, scope, expected, &mut scratch, cancellation)? {
                 return Err(modified());
             }
         }

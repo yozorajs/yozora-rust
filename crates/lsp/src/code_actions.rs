@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use serde_json::{json, Value};
 use yozora_ast::{Definition, Node, Root};
@@ -448,6 +448,17 @@ fn preserves(
     if left_definitions.len() != right_definitions.len() {
         return Ok(false);
     }
+    let root_definitions = |root: &Root| {
+        root.children
+            .iter()
+            .filter_map(|node| match node {
+                Node::Definition(definition) => Some(std::ptr::from_ref(definition)),
+                _ => None,
+            })
+            .collect::<HashSet<_>>()
+    };
+    let left_roots = root_definitions(before);
+    let right_roots = root_definitions(after);
     for (identifier, left) in &left_definitions {
         cancellation.check()?;
         let Some(right) = right_definitions.get(identifier) else {
@@ -455,7 +466,13 @@ fn preserves(
         };
         if left.len() != right.len()
             || left.iter().zip(right).any(|(left, right)| {
-                left.label != right.label || left.url != right.url || left.title != right.title
+                // Identical payloads still have distinct binding locations.
+                // A moved top-level definition must not cross a nested duplicate.
+                left_roots.contains(&std::ptr::from_ref(*left))
+                    != right_roots.contains(&std::ptr::from_ref(*right))
+                    || left.label != right.label
+                    || left.url != right.url
+                    || left.title != right.title
             })
         {
             return Ok(false);
@@ -678,5 +695,7 @@ mod tests {
         assert!(apply(source, ORGANIZE, Position::default()).is_some());
         let source = "[z]: /outer\n\n> [z]: /nested\n\n[z]\n";
         assert!(apply(source, ORGANIZE, Position::default()).is_none());
+        let identical = "[z]: /same\n\n> [z]: /same\n\n[z]\n";
+        assert!(apply(identical, ORGANIZE, Position::default()).is_none());
     }
 }
